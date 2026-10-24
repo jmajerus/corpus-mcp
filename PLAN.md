@@ -133,8 +133,9 @@ with an external-content FTS5 index, and `meta`.
 ## Phases
 
 Status: phases 1 and 2 are implemented and tested (17 tests, and a
-development run over a copy of the libraries). The phase 3 scripts are
-written but have not run, because the LXC does not exist yet.
+development run over a copy of the libraries). Phase 3 was deployed on
+2026-10-24 to `corpus-mcp.localdomain` (Debian 13, 2 GiB RAM,
+20 GB disk), using the interim source access described under *Known issues*.
 
 1. **Core indexer.** Read the Calibre catalogue, choose formats, extract with MuPDF
    (text, outline, page labels), chunk passages, write SQLite, provide the
@@ -152,7 +153,8 @@ written but have not run, because the LXC does not exist yet.
    2. `npm run deploy -- --provision` installs Node 22, rsync, the `corpus`
       service user, and its sync key, and pins CT 115's host key.
    3. `npm run deploy -- --source-setup` adds the restricted `corpus-sync`
-      user on CT 115.
+      user on CT 115. While CT 115's `sudo` is broken, use
+      `--source-setup-user-key` instead (see *Known issues*).
    4. `npm run deploy` builds, tests, uploads a release to
       `/opt/corpus-mcp/releases/<timestamp>`, switches `current`, installs the
       units, and starts the first pull and index. On later deploys it
@@ -169,6 +171,22 @@ written but have not run, because the LXC does not exist yet.
    model, if keyword search falls short in practice. An optional
    `zotero_item_key` lookup by ISBN through zotero-mcp, so results show
    whether a book is already in Zotero.
+
+## Known issues
+
+- **CT 115 ownership.** CT 115 runs as a privileged container, but its root
+  filesystem has unprivileged-style ownership (uid 100000), so `sudo` fails
+  there. Until it is repaired, the corpus LXC's sync key sits in the
+  `authoring` user's `authorized_keys` on CT 115, restricted to
+  `restrict,command="/usr/bin/rrsync -ro /mnt/Calibre/main"`. That key
+  cannot open a shell, write, or reach outside `main`; all three were tested.
+  The LXC's env has `CORPUS_SOURCE=authoring@calibre-web.localdomain` and
+  `CORPUS_REMOTE_PATH=./`. Once CT 115 is fixed, run `--source-setup`, set
+  `CORPUS_SOURCE=corpus-sync@calibre-web.localdomain` and remove
+  `CORPUS_REMOTE_PATH` from `/etc/corpus-mcp/env`, then delete the key line
+  from `~authoring/.ssh/authorized_keys` on CT 115.
+- **Native build.** `better-sqlite3` 13 has no prebuilt binaries, so the LXC
+  needs `build-essential` and `python3`. `provision.sh` installs them.
 
 ## Departures from the draft
 

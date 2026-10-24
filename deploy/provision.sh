@@ -13,7 +13,8 @@ if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split("."
   apt-get update -q
   apt-get install -y -q nodejs
 fi
-apt-get install -y -q rsync openssh-client
+# better-sqlite3 13 ships no prebuilt binaries, so npm ci compiles it.
+apt-get install -y -q rsync openssh-client curl build-essential python3
 
 id corpus >/dev/null 2>&1 || useradd --system --home-dir /var/lib/corpus-mcp --shell /usr/sbin/nologin corpus
 install -d -o corpus -g corpus -m 0750 /var/lib/corpus-mcp /var/lib/corpus-mcp/.ssh

@@ -13,12 +13,16 @@ const CORPUS_HOST = process.env.CORPUS_DEPLOY_HOST ?? "authoring@corpus-mcp.loca
 const SOURCE_HOST = process.env.CORPUS_SOURCE_ADMIN_HOST ?? "authoring@calibre-web.localdomain";
 const ASKPASS = path.join(root, "tools", "askpass.mjs");
 
-const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --skip-tests]
+const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --skip-tests]
 
   (no flag)       build, test, install a new release, restart, health-check, roll back on failure
   --provision     one-time setup of the corpus LXC (Node 22, corpus user, sync key); prints the key
   --source-setup  one-time setup on calibre-web.localdomain: a corpus-sync user limited to
                   read-only rsync of /mnt/Calibre (private denied), keyed to the corpus LXC
+  --source-setup-user-key
+                  the same without root on calibre-web: adds the sync key to authoring's own
+                  authorized_keys, forced to read-only rsync of /mnt/Calibre/main, and points
+                  the corpus LXC's env at it
   --skip-tests    deploy without running the test suite first
 
 Needs AUTHORING_DEPLOY_PASSWORD (npm run deploy loads ../concept-clusters/.env when present).`;
@@ -71,6 +75,41 @@ async function sourceSetup() {
   console.log("\nSource ready. Next: npm run deploy");
 }
 
+/** Runs a command as the login user (no sudo); resolves with its stdout. */
+function runAsUser(host, command) {
+  return new Promise((resolve, reject) => {
+    const ssh = spawn("ssh", [...sshOptions, host, command], { env: sshEnv(), stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    ssh.stdout.on("data", (chunk) => (out += chunk));
+    ssh.on("error", reject);
+    ssh.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`${host}: exited with ${code}`))));
+  });
+}
+
+async function sourceSetupUserKey() {
+  const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
+  const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
+  if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
+  const line = `restrict,command="/usr/bin/rrsync -ro /mnt/Calibre/main" ${pubkey}`;
+  const sourceUser = SOURCE_HOST.split("@")[0];
+  await runAsUser(SOURCE_HOST, [
+    "set -eu",
+    "install -d -m 0700 ~/.ssh",
+    "touch ~/.ssh/authorized_keys && chmod 0600 ~/.ssh/authorized_keys",
+    `grep -qF ${shellQuote(pubkey)} ~/.ssh/authorized_keys || echo ${shellQuote(line)} >> ~/.ssh/authorized_keys`,
+  ].join("\n"));
+  await runAsRoot(CORPUS_HOST, `
+set -euo pipefail
+install -d -m 0755 /etc/corpus-mcp
+[ -f /etc/corpus-mcp/env ] || touch /etc/corpus-mcp/env
+set_env() { grep -q "^$1=" /etc/corpus-mcp/env && sed -i "s|^$1=.*|$1=$2|" /etc/corpus-mcp/env || echo "$1=$2" >> /etc/corpus-mcp/env; }
+set_env CORPUS_SOURCE ${sourceUser}@calibre-web.localdomain
+set_env CORPUS_LIBRARIES main
+set_env CORPUS_REMOTE_PATH ./
+echo "env updated"`);
+  console.log("\nSource key installed. Next: npm run deploy");
+}
+
 async function deploy({ skipTests }) {
   execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
   if (!skipTests) execFileSync("npm", ["test"], { cwd: root, stdio: "inherit" });
@@ -100,6 +139,7 @@ systemctl enable --quiet corpus-mcp.service corpus-refresh.timer
 systemctl start corpus-refresh.timer
 
 . /etc/corpus-mcp/env
+: "\${CORPUS_DB:=/var/lib/corpus-mcp/corpus.db}" "\${CORPUS_PORT:=8000}"
 if [ ! -f "$CORPUS_DB" ]; then
   systemctl start --no-block corpus-refresh.service
   systemctl restart corpus-mcp.service
@@ -127,12 +167,13 @@ ls -1dt /opt/corpus-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
-  const known = new Set(["--provision", "--source-setup", "--skip-tests"]);
+  const known = new Set(["--provision", "--source-setup", "--source-setup-user-key", "--skip-tests"]);
   const unknown = argv.find((a) => !known.has(a));
   if (unknown) throw new Error(`Unknown argument ${unknown}.\n\n${USAGE}`);
   if (!password) throw new Error(`AUTHORING_DEPLOY_PASSWORD is not set.\n\n${USAGE}`);
   if (argv.includes("--provision")) return provision();
   if (argv.includes("--source-setup")) return sourceSetup();
+  if (argv.includes("--source-setup-user-key")) return sourceSetupUserKey();
   return deploy({ skipTests: argv.includes("--skip-tests") });
 }
 
