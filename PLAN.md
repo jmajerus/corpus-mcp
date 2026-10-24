@@ -184,10 +184,11 @@ then a self-hosted Access application in front of that hostname, then a
 Cloudflare MCP Server object whose URL ends in `/mcp`. The setup mirrors
 zotero-mcp's.
 
-- **One connector per server.** Claude connects to corpus-mcp as its own
-  custom connector, through its own Access application. A single Cloudflare
-  MCP portal bundling several servers gave Claude trouble, so the servers
-  are not combined.
+- **One connector per server, for now.** Claude connects to corpus-mcp as
+  its own custom connector, through its own Access application. A single
+  Cloudflare MCP portal bundling several servers can work, but its OAuth
+  logins don't yet sync smoothly across servers. Separate connectors avoid
+  that.
 
 - **Claude's OAuth callback.** Add `https://claude.ai/api/mcp/auth_callback`
   to **Allowed redirect URIs** in the Managed OAuth section of the
