@@ -20,7 +20,9 @@ async function main(argv: string[]): Promise<void> {
       const summary = scanLibraries(config, db, { force: flags.includes("--force"), log: (m) => console.error(m) });
       db.close();
       console.error(`scan finished in ${((Date.now() - started) / 1000).toFixed(1)}s`, summary);
-      if (summary.failed > 0 || summary.unreadableLibraries.length > 0) process.exitCode = 2;
+      // A book that fails extraction is recorded and reported by corpus_status; only an
+      // unreadable library catalogue fails the run.
+      if (summary.unreadableLibraries.length > 0) process.exitCode = 2;
       break;
     }
     case "serve": {

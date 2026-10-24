@@ -136,6 +136,10 @@ Status: phases 1 and 2 are implemented and tested (17 tests, and a
 development run over a copy of the libraries). Phase 3 was deployed on
 2026-10-24 to `corpus-mcp.localdomain` (Debian 13, 2 GiB RAM,
 20 GB disk), using the interim source access described under *Known issues*.
+The first pull (8.3 GB) and index took 36 minutes, with a 1.3 GB memory peak.
+It indexed 507 of 510 books: 237 PDF, 245 EPUB, and 25 MOBI. Two books have no
+readable file, and one EPUB (`main:127`) is a damaged zip. The index is 1.1 GB.
+A refresh with no changes takes 0.3 seconds.
 
 1. **Core indexer.** Read the Calibre catalogue, choose formats, extract with MuPDF
    (text, outline, page labels), chunk passages, write SQLite, provide the
