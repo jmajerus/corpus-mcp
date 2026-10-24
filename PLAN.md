@@ -166,11 +166,15 @@ A refresh with no changes takes 0.3 seconds.
       failure.
 4. **Concept Clusters demonstration.** Register the server with the authoring
    clients. Author one puzzle whose citation comes from a Calibre book, from
-   search through to a validated draft. Required change on the Concept
-   Clusters side: `file_zotero_reference` accepts an ISBN, so a cited book can
-   be filed in the Concept Clusters Zotero collection (its brief already lists
-   ISBN as remaining pilot work). Add a one-line pointer in the authoring
-   guidance.
+   search through to a validated draft. On the Concept Clusters side,
+   `file_zotero_reference` now accepts an `isbn` (concept-clusters 9bbde28,
+   PR #313, open as of 2026-10-24). On this side, `cite_passage` validates the
+   book's ISBN check digit and returns the ready-made
+   `file_zotero_reference({ isbn })` call as `zotero_filing`. All 73 indexed
+   books with an ISBN pass the check. ISBN lookups go through Open Library or
+   Google Books, so compare the metadata Zotero returns with the citation.
+   Books without an ISBN need Calibre's *Download metadata*, or filing by DOI,
+   URL, or item key.
 5. **Quotes.** A store of verified quotations from Calibre books. See
    *Quotes* below.
 6. **Later, if needed.** Semantic search with sqlite-vec and a LAN embedding

@@ -8,7 +8,7 @@ import { type DB, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  ToolError, citePassage, corpusStatus, getBookOutline, listBooks, readBook, renderPage, searchCorpus, toFtsQuery,
+  ToolError, citePassage, corpusStatus, getBookOutline, listBooks, readBook, renderPage, searchCorpus, toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
@@ -41,7 +41,7 @@ let db: DB;
 
 function build(): void {
   makeLibrary(root, "main", [
-    { id: 1, title: "Networks", authors: ["Ann Author", "Bo Second"], publisher: "Free Press", pubdate: "1986-05-01 00:00:00+00:00", isbn: "9780000000001", tags: ["sociology"], files: { pdf, mobi: Buffer.from("ignored") } },
+    { id: 1, title: "Networks", authors: ["Ann Author", "Bo Second"], publisher: "Free Press", pubdate: "1986-05-01 00:00:00+00:00", isbn: "978-0-00-000000-2", tags: ["sociology"], files: { pdf, mobi: Buffer.from("ignored") } },
     { id: 2, title: "Echoes", authors: ["Cy Writer"], files: { epub } },
     { id: 3, title: "Cover Only", authors: ["Nobody"] },
     { id: 4, title: "Diary", authors: ["Me"], tags: ["Private"], files: { epub } },
@@ -67,7 +67,7 @@ describe("calibre catalogue", () => {
     const [networks, echoes] = readCatalogue(path.join(root, "main"));
     expect(networks.metadata).toMatchObject({
       calibreId: 1, title: "Networks", authors: ["Ann Author", "Bo Second"], publisher: "Free Press",
-      year: 1986, language: "eng", isbn: "9780000000001", tags: ["sociology"],
+      year: 1986, language: "eng", isbn: "978-0-00-000000-2", tags: ["sociology"],
     });
     expect(Object.keys(networks.files).sort()).toEqual(["mobi", "pdf"]);
     expect(echoes.metadata.year).toBeNull(); // Calibre's 0101 "undefined" date
@@ -141,6 +141,14 @@ describe("tools", () => {
     scanLibraries(config, db);
   });
 
+  it("validates ISBN check digits", () => {
+    expect(validIsbn("ISBN 978-0-306-40615-7")).toBe("9780306406157");
+    expect(validIsbn("0-306-40615-2")).toBe("0306406152");
+    expect(validIsbn("080442957X")).toBe("080442957X");
+    expect(validIsbn("9780306406158")).toBeNull();
+    expect(validIsbn("not an isbn")).toBeNull();
+  });
+
   it("escapes plain queries for FTS5", () => {
     expect(toFtsQuery('Arendt\'s "banality of evil" polar*')).toBe('"Arendt\'s" "banality of evil" "polar"*');
     expect(() => toFtsQuery("()")).toThrow(ToolError);
@@ -181,11 +189,14 @@ describe("tools", () => {
   it("cites PDFs with printed page ranges and EPUBs without pages", () => {
     const pdfCite = citePassage(db, { book_id: "main:1", page: 3, end_page: 4 });
     expect(pdfCite.citation).toEqual({ title: "Networks", author: "Ann Author and Bo Second", publisher: "Free Press", year: "1986", pages: "1-2" });
-    expect(pdfCite.isbn).toBe("9780000000001");
+    expect(pdfCite.isbn).toBe("978-0-00-000000-2");
+    expect(pdfCite.zotero_filing).toEqual({ tool: "file_zotero_reference", arguments: { isbn: "9780000000002" } });
     const epubCite = citePassage(db, { book_id: "main:2", page: 1 });
     expect(epubCite.citation).toEqual({ title: "Echoes", author: "Cy Writer" });
     expect(epubCite.locator).toMatchObject({ section: "Alpha" });
     expect(epubCite.warnings.join(" ")).toMatch(/not page numbers/);
+    expect(epubCite.zotero_filing).toBeUndefined();
+    expect(epubCite.warnings.join(" ")).toMatch(/no ISBN/);
   });
 
   it("renders PDF pages and refuses reflowable books", () => {

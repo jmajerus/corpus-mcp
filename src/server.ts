@@ -105,7 +105,7 @@ export function createServer(db: DB, config: Config): McpServer {
 
   server.registerTool("cite_passage", {
     title: "Cite a book",
-    description: "A citation object in the Concept Clusters info.citations shape (title, author, publisher, year, pages) for a book and optional page range, plus the locator, ISBN, and warnings about missing metadata. PDF citations use printed page labels; EPUB and MOBI citations have no pages.",
+    description: "A citation object in the Concept Clusters info.citations shape (title, author, publisher, year, pages) for a book and optional page range, plus the locator, ISBN, warnings about missing metadata, and (when the ISBN is valid) the file_zotero_reference call that files the book in Zotero. PDF citations use printed page labels; EPUB and MOBI citations have no pages.",
     inputSchema: {
       book_id: bookId,
       page: page.optional().describe("Page of the cited passage"),

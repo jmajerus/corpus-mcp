@@ -242,6 +242,20 @@ function joinAuthors(authors: string[]): string | undefined {
   return `${authors.slice(0, -1).join(", ")}, and ${authors.at(-1)}`;
 }
 
+/** Strips hyphens, spaces, and an "ISBN" prefix; returns the digits if the ISBN-10 or ISBN-13 check digit holds. */
+export function validIsbn(raw: string): string | null {
+  const isbn = raw.replace(/^isbn(-1[03])?:?/i, "").replace(/[\s-]/g, "").toUpperCase();
+  if (/^\d{9}[\dX]$/.test(isbn)) {
+    const sum = [...isbn].reduce((total, c, i) => total + (c === "X" ? 10 : Number(c)) * (10 - i), 0);
+    return sum % 11 === 0 ? isbn : null;
+  }
+  if (/^\d{13}$/.test(isbn)) {
+    const sum = [...isbn].reduce((total, c, i) => total + Number(c) * (i % 2 ? 3 : 1), 0);
+    return sum % 10 === 0 ? isbn : null;
+  }
+  return null;
+}
+
 export interface CiteArgs { book_id: string; page?: number; end_page?: number }
 
 export function citePassage(db: DB, args: CiteArgs) {
@@ -275,9 +289,20 @@ export function citePassage(db: DB, args: CiteArgs) {
   }
   if (!book.publisher) warnings.push("Calibre has no publisher for this book.");
   if (!book.year) warnings.push("Calibre has no publication year for this book.");
-  if (!book.isbn) warnings.push("Calibre has no ISBN for this book, so it cannot be matched to a Zotero item by ISBN.");
 
-  return { citation, locator, isbn: book.isbn, warnings };
+  // Concept Clusters files a cited book in Zotero with file_zotero_reference({ isbn }).
+  let zoteroFiling: { tool: string; arguments: { isbn: string } } | undefined;
+  const isbn = book.isbn ? validIsbn(book.isbn) : null;
+  if (isbn) {
+    zoteroFiling = { tool: "file_zotero_reference", arguments: { isbn } };
+    warnings.push("Filing by ISBN looks the book up in Open Library or Google Books. Check the citation Zotero returns against this one.");
+  } else if (book.isbn) {
+    warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so file_zotero_reference will reject it. Correct it in Calibre first.`);
+  } else {
+    warnings.push("Calibre has no ISBN for this book. Run Download metadata in Calibre, or file it in Zotero by DOI, URL, or item key.");
+  }
+
+  return { citation, locator, isbn: book.isbn, zotero_filing: zoteroFiling, warnings };
 }
 
 export function corpusStatus(db: DB) {
