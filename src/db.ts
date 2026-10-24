@@ -1,0 +1,102 @@
+import Database from "better-sqlite3";
+import fs from "node:fs";
+import path from "node:path";
+
+export const SCHEMA_VERSION = 1;
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS books (
+  id TEXT PRIMARY KEY,               -- "<library>:<calibre id>"
+  library TEXT NOT NULL,
+  calibre_id INTEGER NOT NULL,
+  uuid TEXT,
+  title TEXT NOT NULL,
+  authors TEXT NOT NULL,             -- JSON array
+  publisher TEXT,
+  year INTEGER,
+  language TEXT,
+  isbn TEXT,
+  tags TEXT NOT NULL,                -- JSON array
+  description TEXT,
+  folder TEXT NOT NULL,              -- relative to the books root
+  format TEXT,                       -- null when the folder has no supported ebook file
+  file_path TEXT,                    -- relative to the books root
+  file_size INTEGER,
+  file_mtime INTEGER,
+  sha256 TEXT,
+  extractor_version INTEGER,
+  reflowable INTEGER,
+  page_count INTEGER,
+  status TEXT NOT NULL,              -- indexed | no_file | failed
+  error TEXT,
+  indexed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS outline (
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  ord INTEGER NOT NULL,
+  level INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  path TEXT NOT NULL,
+  start_page INTEGER,
+  PRIMARY KEY (book_id, ord)
+);
+
+CREATE TABLE IF NOT EXISTS pages (
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  page_index INTEGER NOT NULL,
+  label TEXT,
+  section_path TEXT,
+  text TEXT NOT NULL,
+  PRIMARY KEY (book_id, page_index)
+);
+
+CREATE TABLE IF NOT EXISTS passages (
+  id INTEGER PRIMARY KEY,
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  page_index INTEGER NOT NULL,
+  ord INTEGER NOT NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS passages_book ON passages(book_id, page_index);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(
+  text, content='passages', content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS passages_ai AFTER INSERT ON passages BEGIN
+  INSERT INTO passages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS passages_ad AFTER DELETE ON passages BEGIN
+  INSERT INTO passages_fts(passages_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+`;
+
+export type DB = Database.Database;
+
+export function openDatabase(dbPath: string, { readonly = false } = {}): DB {
+  if (!readonly) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath, { readonly, fileMustExist: readonly });
+  db.pragma("foreign_keys = ON");
+  if (readonly) {
+    const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").pluck().get();
+    if (Number(version) !== SCHEMA_VERSION) {
+      throw new Error(`Index schema is ${version ?? "missing"}, expected ${SCHEMA_VERSION}. Run "corpus-mcp index".`);
+    }
+    return db;
+  }
+  db.pragma("journal_mode = WAL");
+  db.exec(SCHEMA);
+  db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
+  return db;
+}
+
+export function setMeta(db: DB, key: string, value: string): void {
+  db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, value);
+}
+
+export function getMeta(db: DB, key: string): string | null {
+  return (db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(key) as string | undefined) ?? null;
+}

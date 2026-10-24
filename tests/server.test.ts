@@ -1,0 +1,51 @@
+import fs from "node:fs";
+import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { afterAll, beforeAll, expect, it } from "vitest";
+import type { Config } from "../src/config.js";
+import { openDatabase } from "../src/db.js";
+import { scanLibraries } from "../src/indexer.js";
+import { serveHttp } from "../src/server.js";
+import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
+
+let root: string;
+let server: Awaited<ReturnType<typeof serveHttp>>;
+let base: string;
+
+beforeAll(async () => {
+  root = tempDir();
+  makeLibrary(root, "main", [{ id: 1, title: "Networks", authors: ["Ann Author"], files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } }]);
+  const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"), host: "127.0.0.1", port: 0 };
+  const db = openDatabase(config.dbPath);
+  scanLibraries(config, db);
+  db.close();
+  server = await serveHttp(config);
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
+afterAll(() => {
+  server.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+it("answers health checks", async () => {
+  expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, books: 1 });
+});
+
+it("serves the tools over Streamable HTTP", async () => {
+  const client = new Client({ name: "test", version: "0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  const { tools } = await client.listTools();
+  expect(tools.map((t) => t.name).sort()).toEqual([
+    "cite_passage", "corpus_status", "get_book_outline", "list_books", "read_book", "render_page", "search_corpus",
+  ]);
+  const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
+  expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });
+  const missing = await client.callTool({ name: "get_book_outline", arguments: { book_id: "main:99" } });
+  expect(missing.isError).toBe(true);
+  const image = await client.callTool({ name: "render_page", arguments: { book_id: "main:1", page: 1 } });
+  expect((image.content as { type: string }[])[0].type).toBe("image");
+  await client.close();
+});

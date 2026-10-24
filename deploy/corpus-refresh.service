@@ -1,0 +1,19 @@
+[Unit]
+Description=corpus-mcp: pull the Calibre libraries and update the index
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=corpus
+Group=corpus
+EnvironmentFile=/etc/corpus-mcp/env
+WorkingDirectory=/opt/corpus-mcp/current
+# A failed pull (for example, calibre-web.localdomain is down) still indexes whatever is on disk.
+ExecStart=-/opt/corpus-mcp/current/deploy/corpus-sync.sh
+ExecStart=/usr/bin/node /opt/corpus-mcp/current/dist/cli.js index
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/corpus/books /var/lib/corpus-mcp

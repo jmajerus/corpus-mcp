@@ -1,0 +1,20 @@
+[Unit]
+Description=corpus-mcp MCP server (Streamable HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=corpus
+Group=corpus
+EnvironmentFile=/etc/corpus-mcp/env
+WorkingDirectory=/opt/corpus-mcp/current
+ExecStart=/usr/bin/node /opt/corpus-mcp/current/dist/cli.js serve
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=/srv/corpus/books
+ReadWritePaths=/var/lib/corpus-mcp
+
+[Install]
+WantedBy=multi-user.target
