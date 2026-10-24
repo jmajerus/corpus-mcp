@@ -171,10 +171,83 @@ A refresh with no changes takes 0.3 seconds.
    be filed in the Concept Clusters Zotero collection (its brief already lists
    ISBN as remaining pilot work). Add a one-line pointer in the authoring
    guidance.
-5. **Later, if needed.** Semantic search with sqlite-vec and a LAN embedding
+5. **Quotes.** A store of verified quotations from Calibre books. See
+   *Quotes* below.
+6. **Later, if needed.** Semantic search with sqlite-vec and a LAN embedding
    model, if keyword search falls short in practice. An optional
    `zotero_item_key` lookup by ISBN through zotero-mcp, so results show
    whether a book is already in Zotero.
+
+## Quotes (phase 5 design)
+
+A quote store for passages worth keeping, separate from Zotero. It starts
+with Calibre books, where the server can check every quote against the
+source text. The design leaves room for Zotero and web sources later.
+
+**Storage.** A separate `quotes.db` in `/var/lib/corpus-mcp`. The index is
+derived and can be rebuilt; quotes are primary data and are never rebuilt.
+The server keeps opening the index read-only and opens `quotes.db`
+read-write. These are corpus-mcp's first write tools, which is acceptable
+behind Access. A nightly SQLite online backup goes to
+`/var/lib/corpus-mcp/backups`, keeping 14 days, in addition to Proxmox
+backups of the LXC. `export_quotes` returns everything as JSON.
+
+**Verification.** This is the main reason to build it. `save_quote` takes a
+book, a page, and the text the agent wants to quote. It checks that text
+against the extracted page text.
+
+- Matching is on normalized text: Unicode NFKC, curly quotes and dashes
+  folded, soft hyphens and line-break hyphenation removed, whitespace
+  collapsed, case kept.
+- The search order is the given page, then the page after it (for quotes
+  that cross a page break), then two pages either side, then the whole book
+  via FTS on the quote's rarest words.
+- On a match, the server stores the book's exact wording, not the agent's.
+  It returns that wording, its locator, and any corrections it made.
+- On no match, it saves nothing and returns the closest passages.
+- Maximum length: 2,000 characters. Quotes stay quotes, not excerpts.
+
+**Anchor.** Each quote records:
+
+- the Calibre UUID, which survives renumbering (the `library:id` is kept
+  only for display)
+- the file's SHA-256 at save time
+- start and end page, printed labels, and section path
+- character offsets within the page text
+- about 40 characters of text before and after the quote, like a W3C
+  TextQuoteSelector
+
+When the indexer re-extracts a book, it re-anchors that book's quotes by
+exact text, then by prefix and suffix. A quote it cannot place is marked
+`orphaned`; it is never deleted.
+
+**Tags and Concept Clusters.** Tags are free-form. A loose convention links
+quotes to Concept Clusters without changing its schema:
+`cc:puzzle:<puzzle id>`, `cc:category:<slug>`, `cc:subcategory:<slug>`.
+An authoring agent finds a puzzle's quotes with
+`search_quotes({ tag: "cc:puzzle:…" })`.
+
+**Tools.**
+
+| Tool | Purpose |
+|---|---|
+| `save_quote` | Verify and store a quote, with an optional note and tags |
+| `search_quotes` | FTS over quote text, notes, and tags. Filters: book, author, tag, saved date, status. |
+| `get_quote` | One quote with its full anchor and surrounding context |
+| `update_quote` | Change the note or tags. The quoted text is immutable; save a new quote instead. |
+| `delete_quote` | Remove a quote |
+| `cite_quote` | The Concept Clusters citation object plus the verified quote text |
+| `list_quote_tags` | Tags in use, with counts |
+| `export_quotes` | Every quote as JSON |
+
+**Attribution.** When a request comes through Cloudflare Access, the
+`Cf-Access-Authenticated-User-Email` header is recorded as `saved_by`. It is
+informational only, because LAN requests bypass Access.
+
+**Later.** Zotero sources would use the item key and page, verified through
+zotero-mcp's full text where it is available. Web sources would use the URL
+and access date and would be unverified. Both need a `source_kind` column,
+which the schema includes from the start.
 
 ## Remote access (Claude web)
 
