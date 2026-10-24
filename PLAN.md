@@ -175,12 +175,82 @@ A refresh with no changes takes 0.3 seconds.
    Google Books, so compare the metadata Zotero returns with the citation.
    Books without an ISBN need Calibre's *Download metadata*, or filing by DOI,
    URL, or item key.
-5. **Quotes.** A store of verified quotations from Calibre books. See
-   *Quotes* below.
+5. **Durable data: citekeys, then quotes.** corpus-mcp gains `data.db` for
+   data that can't be rebuilt from the books: pinned citekeys (see
+   *Citekeys* below) and verified quotations (see *Quotes* below).
 6. **Later, if needed.** Semantic search with sqlite-vec and a LAN embedding
    model, if keyword search falls short in practice. An optional
    `zotero_item_key` lookup by ISBN through zotero-mcp, so results show
    whether a book is already in Zotero.
+
+## Citekeys (phase 5 design)
+
+Citekeys complement ISBNs rather than replace them. An ISBN is a lookup
+key: Zotero fetches metadata from Open Library or Google Books, which can be
+wrong, and only 73 indexed books have one. A citekey is a name derived from
+the Calibre metadata itself. The stronger filing route is a BibTeX entry
+built from Calibre's metadata, carrying the proposed citekey, with no
+outside lookup.
+
+**Readiness (2026-10-24).** Concept Clusters' rule, applied to the 507
+indexed books with Calibre's sort-form author names:
+
+| Result | Count |
+|---|---|
+| Well-formed key | 245 |
+| Author "Unknown" | 152 |
+| No publication year | 130 |
+| Author sort form has no comma, so it's read as an institution | 54 |
+| Colliding keys | 11 keys, 23 books (mostly duplicate copies) |
+
+Calibre's year is the edition date (Sapir's *Language* becomes
+`sapir2011language`), which is right for citing that edition.
+
+**Rule.** A TypeScript port of Concept Clusters' `modules/citationKeys.js`:
+Better BibTeX's `auth.lower + year + title.skipwords.select(1,1).lower`,
+with its institution, publisher, and author-repeat fallbacks. Persons come
+from Calibre's author sort form ("Gough, James"). A two-word or longer name
+whose sort form lacks a comma, with no institution words, is treated as a
+person whose last word is the surname; the same fix goes to Concept
+Clusters. Drift is caught by a shared list of example keys
+(`tests/citekey-cases.json`), copied from Concept Clusters' tests and kept
+identical in both repos.
+
+**Assignment and pinning.**
+
+1. corpus-mcp computes `proposed_citekey` for every book at index time.
+2. When a book is cited, `cite_passage` returns
+   `zotero_filing: { tool: "file_zotero_reference", arguments: { bibtex } }`.
+   The BibTeX `@book` entry uses the proposed key, title, authors,
+   publisher, year, ISBN when present, and `note = {Calibre UUID: …}`.
+3. Concept Clusters files it. It assigns the final key, adding a/b suffixes
+   via `uniqueCitationKey`, because only it can see the whole collection.
+   It writes the key to the Zotero item, puts the Calibre UUID in Extra, and
+   returns the key.
+4. The agent calls `pin_citekey({ book_id, citekey })`. corpus-mcp stores it
+   in `data.db` keyed by Calibre UUID, so it survives renumbering and
+   re-indexing. A pinned key never changes on its own, even after a
+   metadata edit (the same policy as Better BibTeX).
+5. A `citekey` identifier set by hand in Calibre-Web overrides both and is
+   reported as such.
+
+**Use.** `list_books`, `search_corpus`, and `cite_passage` return
+`citekey` (pinned) or `proposed_citekey`. Every tool that takes a `book_id`
+also accepts a citekey. `corpus_status` reports key readiness: books ready
+for a key, and books blocked by an unknown author, missing year, or
+malformed sort name.
+
+**Needs from Concept Clusters.**
+
+- `file_zotero_reference` accepts `bibtex` (one `@book` entry). It files
+  from the entry's own metadata with no lookup, deduplicates against the
+  collection by ISBN, then title, author, and year, and assigns and returns
+  a unique citekey.
+- The sort-name fix in `authorPart`, plus the shared example list.
+
+**Prerequisite.** Calibre metadata hygiene, the same as for ISBN filing:
+fill unknown authors and years, fix author sort names, and merge duplicate
+books. `corpus_status` lists the books to fix.
 
 ## Quotes (phase 5 design)
 
@@ -188,10 +258,10 @@ A quote store for passages worth keeping, separate from Zotero. It starts
 with Calibre books, where the server can check every quote against the
 source text. The design leaves room for Zotero and web sources later.
 
-**Storage.** A separate `quotes.db` in `/var/lib/corpus-mcp`. The index is
-derived and can be rebuilt; quotes are primary data and are never rebuilt.
-The server keeps opening the index read-only and opens `quotes.db`
-read-write. These are corpus-mcp's first write tools, which is acceptable
+**Storage.** The `quotes` tables in `data.db` (`/var/lib/corpus-mcp`), shared
+with pinned citekeys. The index is derived and can be rebuilt; `data.db`
+holds primary data and is never rebuilt. The server keeps opening the index
+read-only and opens `data.db` read-write. These are corpus-mcp's first write tools, which is acceptable
 behind Access. A nightly SQLite online backup goes to
 `/var/lib/corpus-mcp/backups`, keeping 14 days, in addition to Proxmox
 backups of the LXC. `export_quotes` returns everything as JSON.
