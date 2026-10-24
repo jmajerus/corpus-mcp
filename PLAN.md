@@ -176,6 +176,23 @@ A refresh with no changes takes 0.3 seconds.
    `zotero_item_key` lookup by ISBN through zotero-mcp, so results show
    whether a book is already in Zotero.
 
+## Remote access (Claude web)
+
+Claude web reaches the server through Cloudflare. The path is a Cloudflare
+Tunnel public hostname pointing at `http://corpus-mcp.localdomain:8000`,
+then a self-hosted Access application in front of that hostname, then a
+Cloudflare MCP Server object (URL ending in `/mcp`) added to the MCP portal.
+The setup mirrors zotero-mcp's.
+
+- **Managed OAuth redirect URIs.** The Access application's Managed OAuth
+  section must list the allowed redirect URIs. Without them the OAuth
+  handshake fails, even though the tunnel and origin are healthy.
+- **Origin HTTP behavior.** The server answers CORS preflight (`OPTIONS`,
+  204) and returns 405 for `GET` and `DELETE`, because a stateless server has
+  no stream or session to offer.
+- **Tool list changes.** After a deploy that changes the tool list, run
+  **Sync** on the MCP Server object, then refresh the Claude connector.
+
 ## Known issues
 
 - **CT 115 ownership.** CT 115 runs as a privileged container, but its root
