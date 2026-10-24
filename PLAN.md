@@ -181,20 +181,26 @@ A refresh with no changes takes 0.3 seconds.
 Claude web reaches the server through Cloudflare. The path is a Cloudflare
 Tunnel public hostname pointing at `http://corpus-mcp.localdomain:8000`,
 then a self-hosted Access application in front of that hostname, then a
-Cloudflare MCP Server object (URL ending in `/mcp`) added to the MCP portal.
-The setup mirrors zotero-mcp's.
+Cloudflare MCP Server object whose URL ends in `/mcp`. The setup mirrors
+zotero-mcp's.
+
+- **One connector per server.** Claude connects to corpus-mcp as its own
+  custom connector, through its own Access application. A single Cloudflare
+  MCP portal bundling several servers gave Claude trouble, so the servers
+  are not combined.
 
 - **Claude's OAuth callback.** Add `https://claude.ai/api/mcp/auth_callback`
-  to **Allowed redirect URIs**. Cloudflare's instructions for Claude put this
-  under the portal's *Advanced settings*. For corpus-mcp it was set in the
-  Managed OAuth section of the self-hosted Access application in front of
-  the tunnel. Without it the OAuth handshake fails, even though the tunnel
-  and origin are healthy.
+  to **Allowed redirect URIs** in the Managed OAuth section of the
+  self-hosted Access application. Cloudflare's Claude instructions put it
+  under a portal's *Advanced settings*, but those apply only when Claude
+  connects through a portal. Without it the OAuth handshake fails, even
+  though the tunnel and origin are healthy.
 - **Origin HTTP behavior.** The server answers CORS preflight (`OPTIONS`,
   204) and returns 405 for `GET` and `DELETE`, because a stateless server has
   no stream or session to offer.
 - **Tool list changes.** After a deploy that changes the tool list, run
-  **Sync** on the MCP Server object, then refresh the Claude connector.
+  **Sync** on the MCP Server object, then refresh the Claude connector and
+  start a new conversation.
 
 ## Known issues
 
