@@ -184,9 +184,12 @@ then a self-hosted Access application in front of that hostname, then a
 Cloudflare MCP Server object (URL ending in `/mcp`) added to the MCP portal.
 The setup mirrors zotero-mcp's.
 
-- **Managed OAuth redirect URIs.** The Access application's Managed OAuth
-  section must list the allowed redirect URIs. Without them the OAuth
-  handshake fails, even though the tunnel and origin are healthy.
+- **Claude's OAuth callback.** Add `https://claude.ai/api/mcp/auth_callback`
+  to **Allowed redirect URIs**. Cloudflare's instructions for Claude put this
+  under the portal's *Advanced settings*. For corpus-mcp it was set in the
+  Managed OAuth section of the self-hosted Access application in front of
+  the tunnel. Without it the OAuth handshake fails, even though the tunnel
+  and origin are healthy.
 - **Origin HTTP behavior.** The server answers CORS preflight (`OPTIONS`,
   204) and returns 405 for `GET` and `DELETE`, because a stateless server has
   no stream or session to offer.
