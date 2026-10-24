@@ -34,6 +34,15 @@ it("answers health checks", async () => {
   expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, books: 1 });
 });
 
+it("answers CORS preflight and refuses GET instead of holding a stream open", async () => {
+  const preflight = await fetch(`${base}/mcp`, { method: "OPTIONS", headers: { origin: "https://claude.ai", "access-control-request-method": "POST" } });
+  expect(preflight.status).toBe(204);
+  expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+  const get = await fetch(`${base}/mcp`, { headers: { accept: "text/event-stream" } });
+  expect(get.status).toBe(405);
+  expect(get.headers.get("allow")).toBe("POST, OPTIONS");
+});
+
 it("serves the tools over Streamable HTTP", async () => {
   const client = new Client({ name: "test", version: "0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));

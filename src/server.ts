@@ -129,6 +129,14 @@ export async function serveStdio(config: Config): Promise<void> {
   await createServer(db, config).connect(new StdioServerTransport());
 }
 
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "content-type, accept, authorization, mcp-protocol-version, mcp-session-id, last-event-id",
+  "access-control-expose-headers": "mcp-protocol-version, mcp-session-id",
+  "access-control-max-age": "86400",
+};
+
 /** Stateless Streamable HTTP: a fresh server and transport per request, sharing one read-only database handle. */
 export async function serveHttp(config: Config): Promise<http.Server> {
   const db = openDatabase(config.dbPath, { readonly: true });
@@ -141,6 +149,19 @@ export async function serveHttp(config: Config): Promise<http.Server> {
     }
     if (url.pathname !== "/mcp") {
       res.writeHead(404).end();
+      return;
+    }
+    // Same CORS policy as zotero-mcp's `mcp-proxy --cors`, for browser-based clients and portals.
+    for (const [name, value] of Object.entries(CORS_HEADERS)) res.setHeader(name, value);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204).end();
+      return;
+    }
+    // Stateless: there is no server-initiated stream to GET and no session to DELETE.
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST, OPTIONS", "content-type": "application/json" }).end(JSON.stringify({
+        jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed. This stateless server accepts POST only." }, id: null,
+      }));
       return;
     }
     const server = createServer(db, config);
