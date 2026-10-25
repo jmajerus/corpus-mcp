@@ -534,10 +534,12 @@ adapts. Agreed with CC's agent, in order:
    (one replacement re-tags automatically, a split or drop goes to a
    person); `vocabulary_report`. `data/cc-taxonomy.json` left the repo. Until
    CC's export writes the new format, the live file is a one-time conversion
-   of that snapshot (version `cc-snapshot-2026-10-25`, 175 assignable terms
-   of 187). CC's export must handle `interdisciplinary-studies`, which is
-   both a domain and a domainless category: one term, assignable, with
-   children.
+   of that snapshot (now `cc-snapshot-2026-10-25.2`: 174 assignable terms
+   of 187). CC's export writes the format since concept-clusters c6817c2.
+   The Interdisciplinary Studies category was an empty leftover and was
+   withdrawn (4018daa), so every domain only groups; only `trivia` and
+   `vocabulary` are assignable at the top level. No book was tagged with
+   `interdisciplinary-studies` directly.
 2. **Neutral citations.** `cite_passage` and `cite_quote` return a CSL JSON
    item, a CSL locator (`{ label, locator }`, null for EPUB and MOBI), and
    corpus-mcp's reading `position`; filing becomes plain data (`bibtex`,
