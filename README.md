@@ -43,37 +43,40 @@ slug paths such as `social-sciences.psychology.social-psychology` (snapshot in
 leaves Calibre's tags valid. Tools and the review page show the titles
 ("Social Sciences › Psychology › Social Psychology") and accept either form. An agent takes
 books from `tagging_worklist` and calls `propose_tags`. A person approves,
-edits, or rejects each proposal on the review page at `/review`. Then
+edits, or rejects each proposal at `/admin/proposals`, or sets a book's categories directly on its page. Then
 `npm run tags:apply -- --apply` runs [`tools/calibre-tags.sh`](tools/calibre-tags.sh)
 on the Calibre-Web host. That script backs up `metadata.db` and adds the
 approved tags with `calibredb`, keeping each book's existing tags.
 
-## Admin dashboard
+## Admin
 
-`/admin` shows the corpus at a glance:
+An admin suite on the corpus server, on the model of
+[Concept Clusters](https://github.com/jmajerus/concept-clusters)' own admin.
+Pages show the **current state** of each kind of object. History is kept on a
+separate Changes page. **Anything an MCP agent can change, a person can change
+here too**, not just approve.
 
-- books indexed, refresh history, and the last pull from Calibre-Web
-- tag proposals, tags, citekey readiness, and printed ISBNs
-- data and backups, and free disk space
-- whether neighbouring LAN services are up
+| Page | Shows | People can edit |
+|---|---|---|
+| `/admin` | Metrics and health, linked into the pages below; jobs | Refresh, back up, and preview-then-apply Calibre jobs |
+| `/admin/books` | Every book, with filters for library, format, status, shelf, category, citekey, ISBN, and problems | — |
+| `/admin/books/<id>` | Metadata, categories, citekey, shelves, ISBNs, file, outline, and recent changes | The book's **categories** (complete set) and **citekey** (pin, replace, unpin) |
+| `/admin/categories` | The vocabulary tree with book counts, and other tags | — |
+| `/admin/citekeys` | Pinned keys, and books ready or blocked | On each book page |
+| `/admin/proposals` | Agent proposals | Approve, edit, reject, reopen |
+| `/admin/shelves`, `/admin/jobs`, `/admin/jobs/<id>` | Shelves; jobs, with each job's per-book changes and log | Apply a preview |
+| `/admin/changes` | The change log, filterable, with changes per day | — |
 
-It also runs common jobs:
+An approved category set is a book's complete set of vocabulary tags.
+Applying it adds and removes vocabulary tags to match, and never touches
+other tags. Calibre changes always run as preview, then apply. The apply
+runs exactly the previewed plan, backs up `metadata.db`, and refreshes the
+index. They run on the Calibre-Web host as named commands of the sync key's
+forced command, never as a shell.
 
-- refresh now
-- back up `data.db`
-- apply approved tags to Calibre
-- remove non-subject tags
-- add EPUBs for MOBI-only books
-
-Calibre changes always run a preview first. The apply runs exactly the
-previewed plan, backs up `metadata.db`, and refreshes the index. They run on
-the Calibre-Web host as named commands of the sync key's forced command, never
-as a shell. "Refresh now" starts the refresh unit through a polkit rule that
-allows nothing else.
-
-Every write, including approvals on `/review`, needs a verified Cloudflare
-Access identity (`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`). Direct LAN
-access is read-only.
+Every write needs a verified Cloudflare Access identity
+(`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`). Direct LAN access is
+read-only.
 
 ## Shelves
 

@@ -8,11 +8,12 @@ import { chunkPage } from "../src/chunk.js";
 import type { Config } from "../src/config.js";
 import { bookBibtex } from "../src/bibtex.js";
 import { calibreCitationData, proposeCitekey, proposedCitationKey } from "../src/citekey.js";
-import { type DataStore, backupDataStore, openDataStore } from "../src/data.js";
+import { type Change, type DataStore, backupDataStore, notYetLogged, openDataStore, queryChanges, recordChanges } from "../src/data.js";
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
-import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "../src/tagging.js";
+import { adminBooks, adminCategories } from "../src/adminQueries.js";
+import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist } from "../src/tagging.js";
 import { Vocabulary, buildVocabulary } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
@@ -649,6 +650,9 @@ describe("tag vocabulary and proposals", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("1 book(s)");
     expect(result.stdout).toMatch(/1\s+Networks\n\s+\+ social-sciences\.sociology/);
+    // The structured line /admin turns into its change table.
+    const item = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("@@change "))!.slice("@@change ".length));
+    expect(item).toEqual({ calibre_id: 1, uuid: "uuid-1", title: "Networks", added: ["social-sciences.sociology"], removed: [] });
     expect(result.stderr).toMatch(/skip 2 Echoes: that Calibre id no longer belongs to this book/);
   });
 });
@@ -700,5 +704,132 @@ describe("tag cleanup", () => {
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/2\s+Echoes\n\s+\+ trivia \| - MEAP V08/);
+  });
+});
+
+describe("change log", () => {
+  /** Edits the fixture library's metadata.db the way Calibre or Calibre-Web would. */
+  const calibre = (sql: string, ...params: unknown[]) => {
+    const db2 = new Database(path.join(root, "main", "metadata.db"));
+    db2.prepare(sql).run(...params);
+    db2.close();
+  };
+
+  it("records what a scan sees change in Calibre: new books, tag edits, removed books", () => {
+    const seen: Change[][] = [];
+    scanLibraries(config, db, { record: (c) => seen.push(c) });
+    expect(seen[0].filter((c) => c.kind === "book_added").map((c) => [c.book_id, c.detail])).toContainEqual(["main:1", "pdf"]);
+
+    calibre("INSERT INTO tags (id, name) VALUES (900, 'new-subject')");
+    calibre("INSERT INTO books_tags_link (book, tag) VALUES (1, 900)");
+    calibre("DELETE FROM books_tags_link WHERE book = 1 AND tag = (SELECT id FROM tags WHERE name = 'sociology')");
+    calibre("DELETE FROM books WHERE id = 6");
+    scanLibraries(config, db, { record: (c) => seen.push(c) });
+    expect(seen[1].map((c) => [c.kind, c.book_id, c.detail, c.source])).toEqual([
+      ["tag_added", "main:1", "new-subject", "calibre"],
+      ["tag_removed", "main:1", "sociology", "calibre"],
+      ["book_removed", "main:6", null, "calibre"],
+    ]);
+    scanLibraries(config, db, { record: (c) => seen.push(c) });
+    expect(seen[2]).toEqual([]);
+  });
+
+  it("logs a failing extraction once, not on every retry", () => {
+    config.libraries.push("broken");
+    makeLibrary(root, "broken", [{ id: 1, title: "Damaged", authors: ["Dee Mage"], files: { epub: Buffer.from("not a zip") } }]);
+    const seen: Change[] = [];
+    scanLibraries(config, db, { record: (c) => seen.push(...c) });
+    scanLibraries(config, db, { record: (c) => seen.push(...c) });
+    // A new book that fails is logged as the failure, once, though every scan retries it.
+    expect(seen.filter((c) => c.book_id === "broken:1").map((c) => c.kind)).toEqual(["extraction_failed"]);
+  });
+
+  it("skips what an admin job already logged when the follow-up refresh sees it", () => {
+    recordChanges(data, [
+      { kind: "tag_added", source: "admin-job", job_id: 7, book_id: "main:1", detail: "trivia" },
+      { kind: "format_added", source: "admin-job", job_id: 8, book_id: "main:2", detail: "mobi → epub" },
+    ]);
+    const kept = notYetLogged(data, [
+      { kind: "tag_added", source: "calibre", book_id: "main:1", detail: "trivia" },
+      { kind: "tag_added", source: "calibre", book_id: "main:1", detail: "something-else" },
+      { kind: "book_reextracted", source: "calibre", book_id: "main:2", detail: "mobi → epub" },
+      { kind: "book_reextracted", source: "calibre", book_id: "main:3", detail: "file changed" },
+    ]);
+    expect(kept.map((c) => [c.book_id, c.detail])).toEqual([["main:1", "something-else"], ["main:3", "file changed"]]);
+  });
+
+  it("filters the log, counting kinds across the other filters", () => {
+    recordChanges(data, [
+      { kind: "tag_added", source: "admin-job", job_id: 1, book_id: "main:1", title: "Networks", detail: "social-sciences.sociology", actor: "me@example.com", at: "2026-10-20T10:00:00Z" },
+      { kind: "tag_removed", source: "admin-job", job_id: 1, book_id: "main:1", title: "Networks", detail: "MEAP V08", actor: "me@example.com", at: "2026-10-20T10:00:01Z" },
+      { kind: "book_added", source: "calibre", book_id: "main:2", title: "Echoes", detail: "epub", at: "2026-10-22T09:00:00Z" },
+    ]);
+    const all = queryChanges(data, {});
+    expect(all).toMatchObject({ total: 3, by_kind: { tag_added: 1, tag_removed: 1, book_added: 1 }, actors: ["me@example.com"] });
+    expect(all.by_day).toEqual([{ day: "2026-10-20", n: 2 }, { day: "2026-10-22", n: 1 }]);
+    expect(all.rows.map((r) => (r as { detail: string }).detail)).toEqual(["epub", "MEAP V08", "social-sciences.sociology"]);
+    const tagsOnly = queryChanges(data, { kinds: ["tag_added"] });
+    expect(tagsOnly.total).toBe(1);
+    expect(tagsOnly.by_kind).toEqual({ tag_added: 1, tag_removed: 1, book_added: 1 });
+    expect(queryChanges(data, { job: 1 }).total).toBe(2);
+    expect(queryChanges(data, { sources: ["calibre"] }).total).toBe(1);
+    expect(queryChanges(data, { tag: "sociology" }).total).toBe(1);
+    expect(queryChanges(data, { q: "echo" }).total).toBe(1);
+    expect(queryChanges(data, { since: "2026-10-21T00:00:00Z" }).total).toBe(1);
+    expect(queryChanges(data, { actor: "ME@" }).total).toBe(2);
+  });
+
+  it("records proposals, reviews, and pins", () => {
+    scanLibraries(config, db);
+    proposeTags(c, { book_id: "main:1", tags: ["social-sciences.sociology"], rationale: "r" }, "agent@example.com");
+    reviewProposal(c, "uuid-1", { action: "approve", tags: ["social-sciences.sociology", "trivia"] }, "me@example.com");
+    pinCitekey(c, { book_id: "main:1", citekey: "author1986networks" }, "agent@example.com");
+    expect(queryChanges(data, {}).rows.map((r) => { const x = r as Change; return [x.kind, x.detail, x.source, x.actor]; }).reverse()).toEqual([
+      ["tag_proposed", "social-sciences.sociology", "agent", "agent@example.com"],
+      ["proposal_approved", "social-sciences.sociology", "review", "me@example.com"],
+      ["proposal_approved", "trivia", "review", "me@example.com"],
+      ["citekey_pinned", "author1986networks", "agent", "agent@example.com"],
+    ]);
+  });
+});
+
+describe("category sets", () => {
+  beforeEach(() => {
+    scanLibraries(config, db);
+  });
+
+  it("plans additions and removals so Calibre matches an approved set, never touching other tags", () => {
+    // main:5 carries social-sciences.psychology.social-psychology in Calibre.
+    setBookCategories(c, { book_id: "main:5", tags: ["Trivia"] }, "me@example.com");
+    expect(tagPlan(c, "main").books).toEqual([
+      { calibre_id: 5, uuid: "uuid-5", title: "Weak Ties Revisited", add: ["trivia"], remove: ["social-sciences.psychology.social-psychology"] },
+    ]);
+    // main:2's free-form tags are not vocabulary, so an empty set changes nothing there.
+    setBookCategories(c, { book_id: "main:2", tags: [] }, "me@example.com");
+    expect(tagPlan(c, "main", ["main:2"]).books).toEqual([]);
+    expect(tagPlan(c, "main", ["main:5"]).books).toHaveLength(1);
+    expect(() => setBookCategories(c, { book_id: "main:5", tags: ["Made Up"] }, "me")).toThrow(/Not in the vocabulary/);
+  });
+
+  it("derives each book's states for the admin list", () => {
+    setBookCategories(c, { book_id: "main:5", tags: ["Trivia"] }, "me@example.com");
+    proposeTags(c, { book_id: "main:1", tags: ["trivia"], rationale: "r" });
+    const list = adminBooks(c, {});
+    const state = Object.fromEntries(list.rows.map((r) => [r.book_id, [r.category_state, r.citekey_state, r.isbn_state, r.problems]]));
+    expect(state["main:1"]).toEqual(["pending", "ready", "valid", []]);
+    expect(state["main:5"]).toEqual(["not_applied", "blocked", "none", []]);
+    expect(state["main:6"]).toEqual(["uncategorized", "calibre", "none", []]);
+    expect(list.facets.category).toMatchObject({ pending: 1, not_applied: 1 });
+    expect(adminBooks(c, { citekey: "blocked" }).rows.map((r) => r.book_id).sort()).toEqual(["library:7", "main:2", "main:3", "main:5"]);
+    expect(adminBooks(c, { tag: "psychology" }).rows.map((r) => r.book_id)).toEqual(["main:5"]);
+    expect(adminBooks(c, { q: "fixed2000strength" }).rows.map((r) => r.book_id)).toEqual(["main:6"]);
+  });
+
+  it("counts books per vocabulary tag, including each subtree", () => {
+    const cats = adminCategories(c);
+    const social = cats.tree.find((n) => n.tag === "social-sciences")!;
+    expect(social).toMatchObject({ total: 1, books: 0 });
+    expect(social.children.find((n) => n.tag === "social-sciences.psychology")).toMatchObject({ total: 1 });
+    expect(cats.free.map((t) => t.tag)).toContain("meap v08");
   });
 });

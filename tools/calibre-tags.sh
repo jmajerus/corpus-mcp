@@ -16,7 +16,8 @@ library="${1:-/mnt/Calibre/main}"
 bin="${CALIBRE_BIN:-/usr/bin}"
 : "${TAG_PLAN:?TAG_PLAN is required}"
 
-# One line per book: id, title, resulting tags (comma-separated, as calibredb expects), change, separated
+# One line per book: id, title, resulting tags (comma-separated, as calibredb expects), change, and the
+# change as JSON (printed as an "@@change" line, which /admin turns into its change table), separated
 # by the unit separator \x1f. Not a tab: bash's read treats tabs as whitespace and merges an empty field
 # (a book losing all its tags) into the next, which once wrote the change summary in as a tag.
 SEP=$'\x1f'
@@ -42,7 +43,8 @@ for book in plan["books"]:
         continue
     if add or removed:
         change = " | ".join([f"+ {t}" for t in add] + [f"- {t}" for t in removed])
-        print("\x1f".join([str(book_id), title, ",".join(kept + add), change]))
+        item = json.dumps({"calibre_id": book_id, "uuid": book["uuid"], "title": title, "added": add, "removed": removed})
+        print("\x1f".join([str(book_id), title, ",".join(kept + add), change, item]))
 EOF
 )
 
@@ -50,7 +52,7 @@ count=$(printf '%s' "$changes" | grep -c . || true)
 echo "$count book(s) in $library get tag changes."
 [ "$count" -eq 0 ] && exit 0
 if [ "$apply" -eq 0 ]; then
-  printf '%s\n' "$changes" | awk -F"$SEP" '{ printf "  %5s  %s\n         %s\n", $1, $2, $4 }'
+  printf '%s\n' "$changes" | awk -F"$SEP" '{ printf "  %5s  %s\n         %s\n@@change %s\n", $1, $2, $4, $5 }'
   echo "Run again with --apply to write them."
   exit 0
 fi
@@ -59,9 +61,10 @@ backup="$library/metadata.db.before-tags-$(date +%Y%m%d-%H%M%S)"
 cp -p "$library/metadata.db" "$backup"
 echo "Backed up metadata.db to $backup"
 ok=0 failed=0
-while IFS="$SEP" read -r id title tags change; do
+while IFS="$SEP" read -r id title tags change item; do
   if out=$("$bin/calibredb" set_metadata --with-library "$library" --field "tags:$tags" "$id" 2>&1); then
     echo "  ok      $id  $title  $change"
+    echo "@@change $item"
     ok=$((ok + 1))
   else
     echo "  FAILED  $id  $title"

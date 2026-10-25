@@ -15,19 +15,21 @@ library="${1:-/mnt/Calibre/main}"
 bin="${CALIBRE_BIN:-/usr/bin}"
 
 books=$(python3 - "$library" <<'EOF'
-import sqlite3, sys
+import json, sqlite3, sys
 db = sqlite3.connect(f"file:{sys.argv[1]}/metadata.db?mode=ro", uri=True)
 rows = db.execute("""
-  SELECT b.id, b.path, d.name, LOWER(d.format), b.title FROM books b JOIN data d ON d.book = b.id
+  SELECT b.id, b.path, d.name, LOWER(d.format), b.title, b.uuid FROM books b JOIN data d ON d.book = b.id
   WHERE LOWER(d.format) IN ('mobi', 'azw3')
     AND NOT EXISTS (SELECT 1 FROM data e WHERE e.book = b.id AND LOWER(e.format) = 'epub')
   ORDER BY b.id, CASE LOWER(d.format) WHEN 'azw3' THEN 0 ELSE 1 END""")
 seen = set()
-for id_, path, name, fmt, title in rows:
+for id_, path, name, fmt, title, uuid in rows:
     if id_ in seen:
         continue  # one source per book; AZW3 (KF8) converts better than old MOBI
     seen.add(id_)
-    print(f"{id_}\t{path}/{name}.{fmt}\t{title}")
+    # The last field is the change as JSON, printed as an "@@change" line for /admin's change table.
+    item = json.dumps({"calibre_id": id_, "uuid": uuid, "title": title, "added_format": "epub", "source_format": fmt})
+    print(f"{id_}\t{path}/{name}.{fmt}\t{title}\t{item}")
 EOF
 )
 
@@ -35,7 +37,7 @@ count=$(printf '%s' "$books" | grep -c . || true)
 echo "$count book(s) in $library have MOBI or AZW3 but no EPUB."
 [ "$count" -eq 0 ] && exit 0
 if [ "$apply" -eq 0 ]; then
-  printf '%s\n' "$books" | awk -F'\t' '{ printf "  %5s  %s\n", $1, $3 }'
+  printf '%s\n' "$books" | awk -F'\t' '{ printf "  %5s  %s\n@@change %s\n", $1, $3, $4 }'
   echo "Run again with --apply to convert them."
   exit 0
 fi
@@ -47,11 +49,12 @@ echo "Backed up metadata.db to $backup"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 ok=0 failed=0
-while IFS=$'\t' read -r id source title; do
+while IFS=$'\t' read -r id source title item; do
   out="$work/$id.epub"
   if "$bin/ebook-convert" "$library/$source" "$out" > "$work/$id.log" 2>&1 \
      && "$bin/calibredb" add_format --dont-replace --with-library "$library" "$id" "$out" >> "$work/$id.log" 2>&1; then
     echo "  ok      $id  $title"
+    echo "@@change $item"
     ok=$((ok + 1))
   else
     echo "  FAILED  $id  $title"

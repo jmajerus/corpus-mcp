@@ -1,3 +1,4 @@
+import { recordChanges } from "./data.js";
 import type { BookRow, Corpus } from "./tools.js";
 import { ToolError, getBook, shelvesByBook } from "./tools.js";
 
@@ -139,6 +140,9 @@ export function proposeTags(c: Corpus, args: ProposeArgs, proposedBy?: string) {
     ON CONFLICT (calibre_uuid) DO UPDATE SET book_id = excluded.book_id, title = excluded.title, tags = excluded.tags,
       rationale = excluded.rationale, proposed_by = excluded.proposed_by, proposed_at = excluded.proposed_at`)
     .run(book.uuid, book.id, book.title, JSON.stringify(tags), rationale, proposedBy ?? null, new Date().toISOString());
+  recordChanges(c.data, tags.map((tag) => ({
+    kind: "tag_proposed" as const, source: "agent" as const, book_id: book.id, calibre_uuid: book.uuid, title: book.title, detail: tag, actor: proposedBy ?? null,
+  })));
   return { status: existing ? "replaced" : "proposed", book_id: book.id, tags };
 }
 
@@ -178,7 +182,9 @@ export function listProposals(c: Corpus, args: ListProposalsArgs = {}) {
         rationale: r.rationale,
         status: r.status,
         approved_tags: approved,
-        in_calibre: approved ? approved.every((t) => lower.has(t.toLowerCase())) : false,
+        in_calibre: approved && book ? (() => { const d = categoryDiff(c, book, approved); return !d.add.length && !d.remove.length; })() : false,
+        // What approving (or, once approved, applying) changes in Calibre: the set replaces the book's vocabulary tags.
+        calibre_changes: book ? categoryDiff(c, book, approved ?? (JSON.parse(r.tags) as string[])) : null,
         proposed_by: r.proposed_by,
         proposed_at: r.proposed_at,
         reviewed_by: r.reviewed_by,
@@ -194,40 +200,86 @@ export function reviewProposal(c: Corpus, calibreUuid: string, args: ReviewArgs,
   const row = c.data.prepare<[string], ProposalRow>("SELECT * FROM tag_proposals WHERE calibre_uuid = ?").get(calibreUuid);
   if (!row) throw new ToolError("No such proposal.");
   const now = new Date().toISOString();
+  const logged = (kind: "proposal_approved" | "proposal_rejected" | "proposal_reopened", details: (string | null)[]) => recordChanges(c.data, details.map((detail) => ({
+    kind, source: "review" as const, book_id: row.book_id, calibre_uuid: row.calibre_uuid, title: row.title, detail, actor: reviewedBy ?? null,
+  })));
   if (args.action === "approve") {
     // A reviewer may add a fourth or fifth tag, but every tag stays inside the vocabulary.
     const tags = canonicalTags(c, args.tags ?? (JSON.parse(row.tags) as string[]), 5);
     c.data.prepare("UPDATE tag_proposals SET status = 'approved', approved_tags = ?, reviewed_by = ?, reviewed_at = ? WHERE calibre_uuid = ?")
       .run(JSON.stringify(tags), reviewedBy ?? null, now, calibreUuid);
+    logged("proposal_approved", tags);
     return { status: "approved", tags };
   }
   if (args.action === "reject") {
     c.data.prepare("UPDATE tag_proposals SET status = 'rejected', approved_tags = NULL, reviewed_by = ?, reviewed_at = ? WHERE calibre_uuid = ?")
       .run(reviewedBy ?? null, now, calibreUuid);
+    logged("proposal_rejected", [null]);
     return { status: "rejected" };
   }
   if (args.action === "reopen") {
     c.data.prepare("UPDATE tag_proposals SET status = 'pending', approved_tags = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE calibre_uuid = ?")
       .run(calibreUuid);
+    logged("proposal_reopened", [null]);
     return { status: "pending" };
   }
   throw new ToolError(`Unknown action "${String(args.action)}".`);
 }
 
 /**
- * Approved tags that Calibre does not have yet, per book, for tools/calibre-tags.sh. Only the
- * missing tags are listed; the script adds them to the book's existing tags.
+ * How a book's vocabulary tags in Calibre differ from its approved set: an approved proposal holds the
+ * book's complete set of categories, so tags to add and vocabulary tags to remove. Free-form tags are
+ * never touched.
  */
-export function tagPlan(c: Corpus, library: string) {
+export function categoryDiff(c: Corpus, book: BookRow, approved: string[]): { add: string[]; remove: string[] } {
+  const calibre = (JSON.parse(book.tags) as string[]).filter((t) => c.vocabulary.has(t));
+  const want = new Set(approved.map((t) => t.toLowerCase()));
+  const have = new Set(calibre.map((t) => t.toLowerCase()));
+  return { add: approved.filter((t) => !have.has(t.toLowerCase())), remove: calibre.filter((t) => !want.has(t.toLowerCase())) };
+}
+
+/**
+ * The changes that make Calibre match the approved category sets, per book, for tools/calibre-tags.sh.
+ * `bookIds` limits the plan to those books (a book page's "apply this book").
+ */
+export function tagPlan(c: Corpus, library: string, bookIds?: string[]) {
   const rows = c.data.prepare("SELECT * FROM tag_proposals WHERE status = 'approved'").all() as ProposalRow[];
   const bookByUuid = c.db.prepare<[string, string], BookRow>("SELECT * FROM books WHERE uuid = ? AND library = ?");
+  const only = bookIds ? new Set(bookIds) : null;
   const books = [];
   for (const r of rows) {
     const book = bookByUuid.get(r.calibre_uuid, library);
-    if (!book) continue;
-    const have = new Set((JSON.parse(book.tags) as string[]).map((t) => t.toLowerCase()));
-    const add = (JSON.parse(r.approved_tags ?? "[]") as string[]).filter((t) => !have.has(t.toLowerCase()));
-    if (add.length) books.push({ calibre_id: Number(book.id.split(":")[1]), uuid: r.calibre_uuid, title: book.title, add });
+    if (!book || (only && !only.has(book.id))) continue;
+    const { add, remove } = categoryDiff(c, book, JSON.parse(r.approved_tags ?? "[]") as string[]);
+    if (add.length || remove.length) {
+      books.push({ calibre_id: Number(book.id.split(":")[1]), uuid: r.calibre_uuid, title: book.title, add, ...(remove.length ? { remove } : {}) });
+    }
   }
   return { library, generated_at: new Date().toISOString(), books };
+}
+
+export interface SetCategoriesArgs { book_id: string; tags: string[]; note?: string }
+
+/**
+ * A person sets a book's complete category set from its admin page: recorded as an approved proposal
+ * by that person, applied to Calibre by the tags job (preview, then apply) like any approval.
+ */
+export function setBookCategories(c: Corpus, args: SetCategoriesArgs, by: string) {
+  const book = getBook(c, args.book_id);
+  if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so it cannot be tagged.`);
+  const tags = args.tags.length ? canonicalTags(c, args.tags, 8) : [];
+  const now = new Date().toISOString();
+  const note = args.note?.trim() || `Set on the book's admin page by ${by}.`;
+  c.data.prepare(`
+    INSERT INTO tag_proposals (calibre_uuid, book_id, title, tags, rationale, status, approved_tags, proposed_by, proposed_at, reviewed_by, reviewed_at)
+    VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?)
+    ON CONFLICT (calibre_uuid) DO UPDATE SET book_id = excluded.book_id, title = excluded.title, tags = excluded.tags,
+      rationale = excluded.rationale, status = 'approved', approved_tags = excluded.approved_tags, proposed_by = excluded.proposed_by,
+      proposed_at = excluded.proposed_at, reviewed_by = excluded.reviewed_by, reviewed_at = excluded.reviewed_at`)
+    .run(book.uuid, book.id, book.title, JSON.stringify(tags), note, JSON.stringify(tags), by, now, by, now);
+  recordChanges(c.data, [{
+    kind: "categories_edited", source: "admin", book_id: book.id, calibre_uuid: book.uuid, title: book.title,
+    detail: tags.length ? tags.join(", ") : "(none)", actor: by,
+  }]);
+  return { status: "approved", book_id: book.id, tags, pending_in_calibre: categoryDiff(c, book, tags) };
 }

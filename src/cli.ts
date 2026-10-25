@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { loadConfig } from "./config.js";
-import { backupDataStore, openDataStore } from "./data.js";
+import { backupDataStore, notYetLogged, openDataStore, recordChanges } from "./data.js";
 import { openDatabase } from "./db.js";
 import { scanLibraries } from "./indexer.js";
 
@@ -19,9 +19,13 @@ async function main(argv: string[]): Promise<void> {
   switch (command) {
     case "index": {
       const db = openDatabase(config.dbPath);
+      const data = openDataStore(config.dataDbPath);
       const started = Date.now();
-      const summary = scanLibraries(config, db, { force: flags.includes("--force"), log: (m) => console.error(m) });
+      // Changes the scan sees in Calibre go to the change log, unless an admin job already logged them.
+      const record = (changes: Parameters<typeof notYetLogged>[1]) => recordChanges(data, notYetLogged(data, changes));
+      const summary = scanLibraries(config, db, { force: flags.includes("--force"), log: (m) => console.error(m), record });
       db.close();
+      data.close();
       console.error(`scan finished in ${((Date.now() - started) / 1000).toFixed(1)}s`, summary);
       // A book that fails extraction is recorded and reported by corpus_status; only an
       // unreadable library catalogue fails the run.

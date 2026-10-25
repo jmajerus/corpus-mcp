@@ -43,7 +43,16 @@ beforeAll(async () => {
     accessKeys: createLocalJWKSet({ keys: [jwk] }),
     jobCommands: {
       async refresh(log) { refreshes++; log("refreshed\n"); },
-      async calibre(command, stdin, log) { calibreCalls.push({ command, stdin }); log(`ran ${command}\n`); },
+      async calibre(command, stdin, log) {
+        calibreCalls.push({ command, stdin });
+        log(`ran ${command}\n`);
+        // Like calibre-tags.sh: one structured line per book, split across chunks to test reassembly.
+        for (const book of stdin ? (JSON.parse(stdin) as { books: { calibre_id: number; uuid: string; title: string; add?: string[] }[] }).books : []) {
+          const line = `@@change ${JSON.stringify({ calibre_id: book.calibre_id, uuid: book.uuid, title: book.title, added: book.add ?? [], removed: [] })}\n`;
+          log(line.slice(0, 10));
+          log(line.slice(10));
+        }
+      },
     },
   });
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -85,9 +94,11 @@ it("serves the tools over Streamable HTTP", async () => {
 });
 
 it("serves the tag review page and its API", async () => {
-  const page = await fetch(`${base}/review`);
+  const old = await fetch(`${base}/review`, { redirect: "manual" });
+  expect([old.status, old.headers.get("location")]).toEqual([302, "/admin/proposals"]);
+  const page = await fetch(`${base}/admin/proposals`);
   expect(page.headers.get("content-type")).toContain("text/html");
-  expect(await page.text()).toContain("<title>Tag Review</title>");
+  expect(await page.text()).toContain("<title>Proposals</title>");
   expect((await (await fetch(`${base}/api/vocabulary`)).json()).tags).toContainEqual({
     tag: "social-sciences.psychology.social-psychology", label: "Social Sciences › Psychology › Social Psychology",
   });
@@ -156,6 +167,13 @@ it("runs jobs: local ones directly, Calibre changes only as an apply of their ow
   const apply = await waitForJob((await (await startJob({ kind: "tags", mode: "apply", preview_of: preview.id })).json()).id);
   expect(apply).toMatchObject({ status: "succeeded", preview_of: preview.id });
   expect(calibreCalls.at(-1)).toEqual({ command: "tags-apply", stdin: JSON.stringify(plan) });
+  // Structured lines become the job's items, stay out of its log, and an apply's go to the change log.
+  expect(preview.items).toEqual([{ calibre_id: 1, uuid: "uuid-1", title: "Networks", added: ["social-sciences.sociology"], removed: [] }]);
+  expect(apply.log).not.toContain("@@change");
+  const logged = await (await fetch(`${base}/api/changes?job=${apply.id}`)).json();
+  expect(logged.rows.map((r: { kind: string; detail: string; actor: string; source: string }) => [r.kind, r.detail, r.actor, r.source]))
+    .toEqual([["tag_added", "social-sciences.sociology", "me@example.com", "admin-job"]]);
+  expect((await (await fetch(`${base}/api/changes?job=${preview.id}`)).json()).total).toBe(0);
   expect(refreshes).toBe(before + 1); // an apply refreshes the index afterwards
 
   const convert = await waitForJob((await (await startJob({ kind: "convert", mode: "preview" })).json()).id);
@@ -168,12 +186,52 @@ it("runs jobs: local ones directly, Calibre changes only as an apply of their ow
 });
 
 it("serves page scripts that parse, with no escapes lost to the TypeScript template literal", async () => {
-  for (const page of ["admin", "review"]) {
+  for (const page of ["admin", "admin/books", "admin/books/main:1", "admin/categories", "admin/citekeys", "admin/proposals", "admin/shelves",
+    "admin/jobs", "admin/jobs/1", "admin/changes"]) {
     const html = await (await fetch(`${base}/${page}`)).text();
-    const script = html.match(/<script>([\s\S]*)<\/script>/)![1];
-    expect(() => new Function(script)).not.toThrow();
+    expect(html).toContain('aria-label="Admin pages"');
+    // The layout's helpers and the page's own script are separate classic scripts sharing one scope.
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    expect(scripts).toHaveLength(2);
+    expect(() => new Function(scripts.join("\n;\n"))).not.toThrow();
   }
-  const admin = await (await fetch(`${base}/admin`)).text();
-  expect(admin).toContain('<dialog id="jobdialog"');
-  expect(admin).toContain("location.hash.match(/^#job-([0-9]+)$/)");
+});
+
+const asAdmin = (path: string, body: object, headers: Record<string, string> = { "cf-access-jwt-assertion": token }) =>
+  fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+
+it("lists books with derived states and facets, and shows one book", async () => {
+  const list = await (await fetch(`${base}/api/books`)).json();
+  expect(list.total).toBe(1);
+  expect(list.rows[0]).toMatchObject({ book_id: "main:1", format: "pdf", citekey_state: expect.any(String), isbn_state: "none" });
+  expect(list.facets.format).toEqual({ pdf: 1 });
+  expect((await (await fetch(`${base}/api/books?format=epub`)).json()).total).toBe(0);
+  expect((await fetch(`${base}/api/books?category=bogus`)).status).toBe(400);
+  const book = await (await fetch(`${base}/api/books/main%3A1`)).json();
+  expect(book).toMatchObject({ book_id: "main:1", title: "Networks", file: { format: "pdf", pages: 1 }, calibre_web_url: null });
+});
+
+it("lets a signed-in person set a book's categories and citekey; LAN requests cannot", async () => {
+  expect((await asAdmin("/api/books/main%3A1/categories", { tags: ["trivia"] }, {})).status).toBe(401);
+  const set = await (await asAdmin("/api/books/main%3A1/categories", { tags: ["Trivia"] })).json();
+  expect(set).toMatchObject({ status: "approved", tags: ["trivia"], pending_in_calibre: { add: ["trivia"], remove: [] } });
+  const book = await (await fetch(`${base}/api/books/main%3A1`)).json();
+  expect(book.categories).toMatchObject({ state: "not_applied", approved: [{ tag: "trivia" }], proposal: { proposed_by: "me@example.com" } });
+
+  // A book page previews just that book.
+  const preview = await waitForJob((await (await startJob({ kind: "tags", mode: "preview", books: ["main:1"] })).json()).id);
+  expect(preview.params).toMatchObject({ books: ["main:1"], plan: { books: [{ calibre_id: 1, add: ["trivia"] }] } });
+
+  expect((await (await asAdmin("/api/books/main%3A1/citekey", { citekey: "author2000networks" })).json())).toMatchObject({ status: "pinned" });
+  expect((await (await asAdmin("/api/books/main%3A1/citekey", { citekey: null })).json())).toEqual({ status: "unpinned", book_id: "main:1", citekey: "author2000networks" });
+  const changes = await (await fetch(`${base}/api/changes?q=main:1&source=admin`)).json();
+  expect(changes.rows.map((r: { kind: string }) => r.kind)).toEqual(["citekey_unpinned", "citekey_pinned", "categories_edited"]);
+});
+
+it("summarizes categories, citekeys, and shelves", async () => {
+  const cats = await (await fetch(`${base}/api/categories`)).json();
+  expect(cats).toMatchObject({ books: 1, tree: expect.any(Array), free: expect.any(Array) });
+  expect(cats.tree.find((n: { tag: string }) => n.tag === "social-sciences").children.length).toBeGreaterThan(0);
+  expect(await (await fetch(`${base}/api/citekeys`)).json()).toEqual({ pinned: [] });
+  expect((await (await fetch(`${base}/api/shelves`)).json()).shelves).toEqual([]);
 });

@@ -7,17 +7,25 @@ import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { accessIdentity } from "./access.js";
 import { adminMetrics } from "./admin.js";
-import { ADMIN_HTML } from "./adminPage.js";
+import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
 import { type Config, loadConfig } from "./config.js";
 import { JOB_KINDS, type JobCommands, type JobKind, type JobMode, JobRunner, systemCommands } from "./jobs.js";
-import { openDataStore } from "./data.js";
+import { openDataStore, queryChanges } from "./data.js";
 import { openDatabase } from "./db.js";
-import { REVIEW_HTML } from "./reviewPage.js";
-import { getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "./tagging.js";
+import { BOOK_HTML } from "./web/book.js";
+import { BOOKS_HTML } from "./web/books.js";
+import { CATEGORIES_HTML, CITEKEYS_HTML, SHELVES_HTML } from "./web/catalog.js";
+import { CHANGES_HTML } from "./web/changes.js";
+import { DASHBOARD_HTML } from "./web/dashboard.js";
+import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
+import { PROPOSALS_HTML } from "./web/proposals.js";
+import {
+  getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist,
+} from "./tagging.js";
 import { Vocabulary } from "./vocabulary.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
-  searchCorpus, tagCleanupPlan,
+  searchCorpus, tagCleanupPlan, unpinCitekey,
 } from "./tools.js";
 
 const VERSION = "0.2.0";
@@ -269,8 +277,52 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
   const html = (body: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(body);
   try {
     const path = url.pathname;
-    if (req.method === "GET" && path === "/review") html(REVIEW_HTML);
-    else if (req.method === "GET" && path === "/admin") html(ADMIN_HTML);
+    const pages: Record<string, string> = {
+      "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
+      "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
+    };
+    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey)?$/);
+    if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
+    else if (req.method === "GET" && pages[path]) html(pages[path]);
+    else if (req.method === "GET" && /^\/admin\/books\/[^/]+$/.test(path)) html(BOOK_HTML);
+    else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);
+    else if (req.method === "GET" && path === "/api/books") {
+      const p = url.searchParams;
+      const text = (name: string) => p.get(name)?.trim() || undefined;
+      sendJson(res, 200, adminBooks(c, {
+        q: text("q"), library: text("library"), format: text("format"), status: text("status"), shelf: text("shelf"), tag: text("tag"),
+        category: oneOf(p.get("category"), ["uncategorized", "categorized", "pending", "not_applied"] as const),
+        citekey: oneOf(p.get("citekey"), ["calibre", "pinned", "ready", "blocked"] as const),
+        isbn: oneOf(p.get("isbn"), ["valid", "invalid", "printed", "none"] as const),
+        problem: oneOf(p.get("problem"), ["failed", "no_file", "no_text", "no_outline"] as const),
+        sort: oneOf(p.get("sort"), ["title", "year", "id"] as const),
+        limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
+      }));
+    } else if (req.method === "GET" && bookPath && !bookPath[2]) sendJson(res, 200, adminBook(c, config, decodeURIComponent(bookPath[1])));
+    else if (req.method === "POST" && bookPath?.[2] === "/categories") {
+      const by = await writer();
+      if (by === null) return;
+      const body = (await readJson(req)) as { tags?: unknown; note?: string };
+      if (!Array.isArray(body.tags)) throw new ToolError("Send the book's complete set of categories as tags: [].");
+      sendJson(res, 200, setBookCategories(c, { book_id: decodeURIComponent(bookPath[1]), tags: body.tags.map(String), note: body.note }, by));
+    } else if (req.method === "POST" && bookPath?.[2] === "/citekey") {
+      const by = await writer();
+      if (by === null) return;
+      const body = (await readJson(req)) as { citekey?: string | null; replace?: boolean };
+      const bookId = decodeURIComponent(bookPath[1]);
+      sendJson(res, 200, body.citekey ? pinCitekey(c, { book_id: bookId, citekey: body.citekey, replace: body.replace }, by, "admin") : unpinCitekey(c, bookId, by));
+    } else if (req.method === "GET" && path === "/api/categories") sendJson(res, 200, adminCategories(c));
+    else if (req.method === "GET" && path === "/api/citekeys") sendJson(res, 200, adminCitekeys(c));
+    else if (req.method === "GET" && path === "/api/shelves") sendJson(res, 200, listShelves(c));
+    else if (req.method === "GET" && path === "/api/changes") {
+      const p = url.searchParams;
+      const text = (name: string) => p.get(name)?.trim() || undefined;
+      sendJson(res, 200, queryChanges(c.data, {
+        since: text("since"), until: text("until"), kinds: p.getAll("kind"), sources: p.getAll("source"), q: text("q"), tag: text("tag"),
+        job: p.has("job") ? Number(p.get("job")) || undefined : undefined, actor: text("actor"),
+        limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
+      }));
+    }
     else if (req.method === "GET" && path === "/api/whoami") {
       const result = await accessIdentity(req, admin.access, web.options.accessKeys);
       sendJson(res, 200, "error" in result ? { can_write: false, reason: result.error } : { can_write: true, identity: result.identity });
@@ -292,15 +344,16 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     } else if (req.method === "GET" && path === "/api/admin/metrics") {
       sendJson(res, 200, await adminMetrics(c, config, VERSION));
     } else if (req.method === "GET" && path === "/api/admin/jobs") {
-      sendJson(res, 200, { kinds: JOB_KINDS, ...runner.list() });
+      sendJson(res, 200, { kinds: JOB_KINDS, ...runner.list(Math.min(Math.max(Number(url.searchParams.get("limit")) || 30, 1), 500)) });
     } else if (req.method === "GET" && /^\/api\/admin\/jobs\/\d+$/.test(path)) {
       sendJson(res, 200, runner.get(Number(path.split("/").at(-1))));
     } else if (req.method === "POST" && path === "/api/admin/jobs") {
       const by = await writer();
       if (by === null) return;
-      const body = (await readJson(req)) as { kind?: string; mode?: string; preview_of?: number; also?: unknown };
+      const body = (await readJson(req)) as { kind?: string; mode?: string; preview_of?: number; also?: unknown; books?: unknown };
       const also = Array.isArray(body.also) ? body.also.map(String).filter(Boolean) : undefined;
-      const id = runner.start(body.kind as JobKind, (body.mode ?? "apply") as JobMode, { previewOf: body.preview_of, also }, by);
+      const books = Array.isArray(body.books) ? body.books.map(String) : undefined;
+      const id = runner.start(body.kind as JobKind, (body.mode ?? "apply") as JobMode, { previewOf: body.preview_of, also, books }, by);
       sendJson(res, 202, { id });
     } else sendJson(res, 404, { error: "Not found." });
   } catch (error) {
@@ -336,7 +389,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books }));
       return;
     }
-    if (url.pathname === "/review" || url.pathname === "/admin" || url.pathname.startsWith("/api/")) {
+    if (url.pathname === "/review" || url.pathname === "/admin" || url.pathname.startsWith("/admin/") || url.pathname.startsWith("/api/")) {
       await serveWeb(web, req, res, url);
       return;
     }

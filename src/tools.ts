@@ -3,7 +3,7 @@ import path from "node:path";
 import * as mupdf from "mupdf";
 import { bookBibtex } from "./bibtex.js";
 import { CITEKEY_PATTERN, type CitekeyBlocker } from "./citekey.js";
-import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUuid } from "./data.js";
+import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUuid, recordChanges } from "./data.js";
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
@@ -28,7 +28,7 @@ export interface BookRow {
   publisher: string | null; year: number | null; language: string | null; isbn: string | null;
   calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; printed_isbns: string | null; tags: string;
   description: string | null; format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
-  page_count: number | null; status: string; error: string | null;
+  page_count: number | null; status: string; error: string | null; calibre_id: number; file_size: number | null; text_chars: number | null;
 }
 
 interface PageRow { page_index: number; label: string | null; section_path: string | null; text: string }
@@ -75,13 +75,13 @@ function checkPage(book: { id: string; page_count: number }, page: number): void
 }
 
 /** The key that identifies the book in Zotero: Calibre's identifier overrides a pinned key. */
-function effectiveCitekey(book: BookRow, pin: PinnedCitekey | undefined) {
+export function effectiveCitekey(book: BookRow, pin: PinnedCitekey | undefined) {
   if (book.calibre_citekey) return { citekey: book.calibre_citekey, citekey_source: "calibre" as const };
   if (pin) return { citekey: pin.citekey, citekey_source: "pinned" as const };
   return { citekey: null, citekey_source: null };
 }
 
-function citekeyInfo(book: BookRow, pin: PinnedCitekey | undefined) {
+export function citekeyInfo(book: BookRow, pin: PinnedCitekey | undefined) {
   return {
     ...effectiveCitekey(book, pin),
     proposed_citekey: book.proposed_citekey,
@@ -120,7 +120,7 @@ export function tagFilterValue(c: Corpus, tag: string): string {
   return c.vocabulary.toSlugPath(tag);
 }
 
-function tagFilter(c: Corpus, tag: string): string {
+export function tagFilter(c: Corpus, tag: string): string {
   const condition = `EXISTS (SELECT 1 FROM json_each(b.tags) t
     WHERE ('.' || lower(t.value) || '.') LIKE '%.' || replace(replace(replace(lower(@tag), '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '.%' ESCAPE '\\')`;
   const any = c.db.prepare(`SELECT 1 FROM books b WHERE ${condition} LIMIT 1`).get({ tag: tagFilterValue(c, tag) });
@@ -436,7 +436,7 @@ const BLOCKER_FIXES: Record<CitekeyBlocker, string> = {
 };
 
 /** The ISBNs the book's own text prints, found at index time. */
-function printedIsbns(book: BookRow): IsbnCandidate[] {
+export function printedIsbns(book: BookRow): IsbnCandidate[] {
   return book.printed_isbns ? (JSON.parse(book.printed_isbns) as IsbnCandidate[]) : [];
 }
 
@@ -522,7 +522,7 @@ export function citePassage(c: Corpus, args: CiteArgs) {
 export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
 
 /** Records the citekey Concept Clusters assigned when it filed the book, against the book's Calibre UUID. */
-export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string) {
+export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" = "agent") {
   const book = getBook(c, args.book_id);
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so its citekey cannot be pinned.`);
   const citekey = args.citekey.trim().toLowerCase();
@@ -555,7 +555,23 @@ export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string) {
     ON CONFLICT (calibre_uuid) DO UPDATE SET citekey = excluded.citekey, book_id = excluded.book_id,
       title = excluded.title, pinned_at = excluded.pinned_at, pinned_by = excluded.pinned_by`)
     .run(book.uuid, citekey, book.id, book.title, pinnedAt, pinnedBy ?? null);
+  recordChanges(c.data, [{
+    kind: "citekey_pinned", source, book_id: book.id, calibre_uuid: book.uuid, title: book.title,
+    detail: existing ? `${existing.citekey} → ${citekey}` : citekey, actor: pinnedBy ?? null,
+  }]);
   return { status: existing ? "replaced" : "pinned", book_id: book.id, citekey, previous: existing?.citekey, pinned_at: pinnedAt, warnings };
+}
+
+/** Removes a book's pinned citekey (the admin book page); its key no longer resolves to the book. */
+export function unpinCitekey(c: Corpus, bookId: string, by: string) {
+  const book = getBook(c, bookId);
+  const pin = pinnedByUuid(c.data, book.uuid);
+  if (!pin) throw new ToolError(`${book.id} has no pinned citekey.`);
+  c.data.prepare("DELETE FROM citekeys WHERE calibre_uuid = ?").run(pin.calibre_uuid);
+  recordChanges(c.data, [{
+    kind: "citekey_unpinned", source: "admin", book_id: book.id, calibre_uuid: book.uuid, title: book.title, detail: pin.citekey, actor: by,
+  }]);
+  return { status: "unpinned", book_id: book.id, citekey: pin.citekey };
 }
 
 export function corpusStatus(c: Corpus) {
@@ -584,7 +600,7 @@ export function corpusStatus(c: Corpus) {
  * Why a tag is probably not a subject (a BISAC code, a publisher's name, a status or format, a
  * description pasted into the tag field), or null. Vocabulary tags are never suspect.
  */
-function suspectTagReason(c: Corpus): (tag: string) => string | null {
+export function suspectTagReason(c: Corpus): (tag: string) => string | null {
   const publishers = (c.db.prepare("SELECT DISTINCT lower(publisher) FROM books WHERE publisher IS NOT NULL").pluck().all() as string[]);
   return (tag) => {
     const lower = tag.toLowerCase();

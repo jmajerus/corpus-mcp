@@ -515,6 +515,29 @@ domain › category › subcategory (about 62 categories across 15 domains), so
   restart of corpus-mcp or a stop of the refresh. The dispatcher runs the
   named commands and refuses a shell, injection, and an rsync write.
 
+## Admin suite (2026-10-25)
+
+The admin follows Concept Clusters' model: current-state pages first, and
+history kept apart on `/admin/changes`.
+
+- **Parity.** Anything an MCP agent can change, a person can change in the
+  admin. Agents propose category sets (`propose_tags`) and pin citekeys
+  (`pin_citekey`). On a book's page a person sets the complete category set
+  (recorded as an approved proposal by that person) and pins, replaces, or
+  unpins the citekey.
+- **Complete sets.** An approved proposal is the book's complete set of
+  vocabulary tags. `tagPlan` adds and removes vocabulary tags to match; other
+  tags are never touched. A book page can preview and apply just that book.
+- **Pages.** All on one layout (`src/web/layout.ts`): Dashboard, Books (list
+  and detail), Categories, Citekeys, Proposals (formerly `/review`, which now
+  redirects), Shelves, Jobs (list and detail; the job page replaced the
+  earlier dialog), and Changes.
+- **Change log.** `data.db` `changes` records Calibre writes from admin jobs
+  (from the scripts' `@@change` lines), changes a refresh sees in Calibre
+  (including edits in Calibre-Web; those already logged by a job are
+  skipped), proposals and reviews, category edits, and citekey pins and
+  unpins.
+
 ## Remote access (Claude web)
 
 Claude web reaches the server through Cloudflare. The path is a Cloudflare

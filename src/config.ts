@@ -14,6 +14,8 @@ export interface AdminConfig {
   refreshLog: string;
   /** Written by corpus-sync.sh after each pull. */
   syncStatus: string;
+  /** Calibre-Web's address, for links to a book's page there (books of `shelvesLibrary` only). */
+  calibreWebUrl?: string;
 }
 
 const DEFAULT_NEIGHBORS = "zotero-mcp=http://zotero-mcp.localdomain:8000/mcp;calibre-web=http://calibre-web.localdomain:8083/;authoring=http://authoring.localdomain:8787/";
@@ -68,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       refreshUnit: env.CORPUS_REFRESH_UNIT ?? "corpus-refresh.service",
       refreshLog: env.CORPUS_REFRESH_LOG ?? "/var/lib/corpus-mcp/refresh.log",
       syncStatus: env.CORPUS_SYNC_STATUS ?? "/var/lib/corpus-mcp/sync-status.json",
+      calibreWebUrl: env.CORPUS_CALIBRE_WEB_URL ?? "http://calibre-web.localdomain:8083",
     },
     host: env.CORPUS_HOST ?? "0.0.0.0",
     port: Number.parseInt(env.CORPUS_PORT ?? "8000", 10),

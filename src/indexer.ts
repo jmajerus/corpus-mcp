@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { type BookMetadata, type CatalogueEntry, readCatalogue } from "./calibre.js";
 import { chunkPage } from "./chunk.js";
+import type { Change, ChangeKind } from "./data.js";
 import { proposeCitekey } from "./citekey.js";
 import { ISBN_SCAN_VERSION, findPrintedIsbns } from "./isbn.js";
 import type { Config } from "./config.js";
@@ -23,6 +24,9 @@ export interface ScanSummary {
 }
 
 interface ExistingRow {
+  title: string;
+  tags: string;
+  format: string | null;
   file_path: string | null;
   file_size: number | null;
   file_mtime: number | null;
@@ -46,13 +50,20 @@ function sha256(data: Uint8Array): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-export function scanLibraries(config: Config, db: DB, { force = false, log = (() => {}) as Log } = {}): ScanSummary {
+/**
+ * Scans the libraries into the index. `record` receives what changed in Calibre since the last scan
+ * (new, re-extracted, failed, and removed books, and tags added or removed), for the change log.
+ */
+export function scanLibraries(config: Config, db: DB, {
+  force = false, log = (() => {}) as Log, record = (() => {}) as (changes: Change[]) => void,
+} = {}): ScanSummary {
+  const changes: Change[] = [];
   const startedAt = new Date();
   const summary: ScanSummary = { scanned: 0, extracted: 0, unchanged: 0, noFile: 0, failed: 0, removed: 0, excluded: 0, unreadableLibraries: [], shelves: "no export" };
   const seen = new Set<string>();
 
   const getExisting = db.prepare<[string], ExistingRow>(
-    "SELECT file_path, file_size, file_mtime, sha256, extractor_version, status FROM books WHERE id = ?",
+    "SELECT title, tags, format, file_path, file_size, file_mtime, sha256, extractor_version, status FROM books WHERE id = ?",
   );
 
   for (const library of config.libraries) {
@@ -80,6 +91,16 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
       const id = `${library}:${metadata.calibreId}`;
       seen.add(id);
       summary.scanned++;
+      const existing = getExisting.get(id);
+      const change = (kind: ChangeKind, detail: string | null) =>
+        changes.push({ kind, source: "calibre", book_id: id, calibre_uuid: metadata.uuid, title: metadata.title, detail });
+      if (existing) {
+        // Tags edited in Calibre or Calibre-Web since the last scan.
+        const before = new Set((JSON.parse(existing.tags) as string[]).map((t) => t.toLowerCase()));
+        const after = new Set(metadata.tags.map((t) => t.toLowerCase()));
+        for (const tag of metadata.tags) if (!before.has(tag.toLowerCase())) change("tag_added", tag);
+        for (const tag of JSON.parse(existing.tags) as string[]) if (!after.has(tag.toLowerCase())) change("tag_removed", tag);
+      }
 
       const choice = chooseBookFile(libraryRoot, files);
       if (!choice) {
@@ -87,6 +108,7 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
           clearContent(db, id);
           writeBook(db, id, library, relFolder, metadata, { status: "no_file" });
         })();
+        if (!existing) change("book_added", "no readable file");
         summary.noFile++;
         continue;
       }
@@ -94,7 +116,6 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
       const relFile = path.relative(config.booksRoot, choice.file);
       const stat = fs.statSync(choice.file);
       const mtime = Math.floor(stat.mtimeMs);
-      const existing = getExisting.get(id);
       const sameVersion = existing?.extractor_version === EXTRACTOR_VERSION && existing.status === "indexed";
       const file = { format: choice.format, file_path: relFile, file_size: stat.size, file_mtime: mtime };
 
@@ -135,6 +156,10 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
           }
         })();
         summary.extracted++;
+        if (!existing) change("book_added", choice.format);
+        else if (existing.status !== "indexed") change("book_reextracted", `${existing.status.replace("_", " ")} → indexed (${choice.format})`);
+        else if (existing.format !== choice.format) change("book_reextracted", `${existing.format} → ${choice.format}`);
+        else if (!force) change("book_reextracted", "file changed");
         log(`indexed ${id} ${metadata.title} (${choice.format}, ${book.pages.length} pages)`);
       } catch (error) {
         db.transaction(() => {
@@ -142,6 +167,8 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
           writeBook(db, id, library, relFolder, metadata, { ...file, sha256: hash, status: "failed", error: String((error as Error).message ?? error) });
         })();
         summary.failed++;
+        // A failing book is retried every scan; log it once per file.
+        if (existing?.status !== "failed" || existing.sha256 !== hash) change("extraction_failed", String((error as Error).message ?? error));
         log(`failed ${id} ${metadata.title}: ${(error as Error).message}`);
       }
     }
@@ -151,8 +178,11 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
   fillDerivedColumns(db);
 
   const stale = (db.prepare("SELECT id FROM books").pluck().all() as string[]).filter((id) => !seen.has(id));
+  const staleRow = db.prepare<[string], { title: string; uuid: string | null }>("SELECT title, uuid FROM books WHERE id = ?");
   db.transaction(() => {
     for (const id of stale) {
+      const row = staleRow.get(id);
+      changes.push({ kind: "book_removed", source: "calibre", book_id: id, calibre_uuid: row?.uuid ?? null, title: row?.title ?? null, detail: null });
       clearContent(db, id);
       db.prepare("DELETE FROM books WHERE id = ?").run(id);
     }
@@ -163,6 +193,7 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
   db.prepare("INSERT INTO scan_runs (started_at, finished_at, seconds, summary) VALUES (?, ?, ?, ?)")
     .run(startedAt.toISOString(), finishedAt.toISOString(), (finishedAt.getTime() - startedAt.getTime()) / 1000, JSON.stringify(summary));
   db.prepare("DELETE FROM scan_runs WHERE id NOT IN (SELECT id FROM scan_runs ORDER BY id DESC LIMIT 500)").run();
+  record(changes);
   return summary;
 }
 
