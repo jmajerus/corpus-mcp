@@ -81,8 +81,8 @@ it("serves the tools over Streamable HTTP", async () => {
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "cite_passage", "corpus_status", "get_book_outline", "get_tag_vocabulary", "list_books", "list_shelves", "list_tags", "pin_citekey",
-    "propose_tags", "read_book", "render_page", "search_corpus", "tagging_worklist",
+    "cite_passage", "cite_quote", "corpus_status", "delete_quote", "get_book_outline", "get_quote", "get_tag_vocabulary", "list_books", "list_shelves",
+    "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "save_quote", "search_corpus", "search_quotes", "tagging_worklist", "update_quote",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });
@@ -187,7 +187,7 @@ it("runs jobs: local ones directly, Calibre changes only as an apply of their ow
 
 it("serves page scripts that parse, with no escapes lost to the TypeScript template literal", async () => {
   for (const page of ["admin", "admin/books", "admin/books/main:1", "admin/categories", "admin/citekeys", "admin/proposals", "admin/shelves",
-    "admin/jobs", "admin/jobs/1", "admin/changes"]) {
+    "admin/jobs", "admin/jobs/1", "admin/changes", "admin/quotes", "admin/quotes/1", "admin/books/main:1/read"]) {
     const html = await (await fetch(`${base}/${page}`)).text();
     expect(html).toContain('aria-label="Admin pages"');
     // The layout's helpers and the page's own script are separate classic scripts sharing one scope.
@@ -234,4 +234,15 @@ it("summarizes categories, citekeys, and shelves", async () => {
   expect(cats.tree.find((n: { tag: string }) => n.tag === "social-sciences").children.length).toBeGreaterThan(0);
   expect(await (await fetch(`${base}/api/citekeys`)).json()).toEqual({ pinned: [] });
   expect((await (await fetch(`${base}/api/shelves`)).json()).shelves).toEqual([]);
+});
+
+it("saves quotes from the admin only with Access, and serves the reader's pages", async () => {
+  expect((await asAdmin("/api/quotes", { book_id: "main:1", text: "Weak ties" }, {})).status).toBe(401);
+  const saved = await (await asAdmin("/api/quotes", { book_id: "main:1", text: "novel information", page: 1, labels: ["test"] })).json();
+  expect(saved).toMatchObject({ saved: true, quote: { text: "novel information", created_by: "me@example.com", source: "admin" } });
+  const reader = await (await fetch(`${base}/api/books/main%3A1/pages?start=1&count=2`)).json();
+  expect(reader).toMatchObject({ book_id: "main:1", page_count: 1, start: 1, end: 1, quotes: [{ id: saved.quote.id, start_page: 1 }] });
+  expect((await (await fetch(`${base}/api/quotes?label=test`)).json()).total).toBe(1);
+  expect((await (await asAdmin(`/api/quotes/${saved.quote.id}`, { note: "edited" })).json()).note).toBe("edited");
+  expect(await (await asAdmin(`/api/quotes/${saved.quote.id}/delete`, {})).json()).toEqual({ deleted: saved.quote.id });
 });

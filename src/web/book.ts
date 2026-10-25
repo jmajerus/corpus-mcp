@@ -71,7 +71,8 @@ function render() {
     '</tbody></table></div><p class="note"><a href="/admin/changes?q=' + encodeURIComponent(b.book_id) + '&range=all">All changes to this book</a></p>' : '<p class="note">No recorded changes.</p>';
   document.getElementById("book").innerHTML =
     '<div class="head"><div><h1>' + esc(b.title) + '</h1><p class="sub">' + esc(b.authors.join(", ")) + (b.year ? " · " + b.year : "") + (b.publisher ? " · " + esc(b.publisher) : "") + " · " + esc(b.book_id) + "</p>" + badges.join("") + "</div>" +
-    '<div class="links">' + (b.calibre_web_url ? '<a href="' + esc(b.calibre_web_url) + '" target="_blank" rel="noopener">Open in Calibre-Web</a>' : "") + "</div></div>" +
+    '<div class="links">' + (b.status === "indexed" ? '<a href="/admin/books/' + encodeURIComponent(b.book_id) + '/read">Read</a>' : "") +
+      (b.calibre_web_url ? ' · <a href="' + esc(b.calibre_web_url) + '" target="_blank" rel="noopener">Open in Calibre-Web</a>' : "") + "</div></div>" +
     (b.description ? '<p class="desc">' + esc(String(b.description).replace(/<[^>]+>/g, " ").slice(0, 600)) + "</p>" : "") +
     '<div class="cols">' + categoriesCard() + citekeyCard() +
     '<div class="card"><h2>Shelves and other tags</h2>' + kv([["Shelves", b.shelves.length ? b.shelves.map((s) => '<a class="chip muted" href="/admin/books?shelf=' + encodeURIComponent(s) + '">' + esc(s) + "</a>").join("") : '<span class="note">None</span>'],
@@ -83,8 +84,17 @@ function render() {
       ["Calibre", "id " + b.calibre_id + ' · <span class="note">' + esc(b.uuid || "") + "</span>"]]) + "</div>" +
     '<div class="card"><h2>Outline</h2>' + (b.outline.length ? '<ul class="outline">' + b.outline.map((o) => '<li style="padding-left:' + o.level * 14 + 'px">' + esc(o.title) +
       '<span class="pg">' + (o.page_label ? "p. " + esc(o.page_label) : o.page ? (f.page_kind === "location" ? "loc. " : "p. ") + o.page : "") + "</span></li>").join("") + "</ul>" : '<p class="note">No outline.</p>') + "</div>" +
-    "</div><h2>Recent changes</h2>" + changes;
+    "</div><h2>Quotes</h2>" + quotesSection() + "<h2>Recent changes</h2>" + changes;
   renderDesired();
+}
+
+function quotesSection() {
+  const read = book.status === "indexed" ? '<a href="/admin/books/' + encodeURIComponent(book.book_id) + '/read">Open the reader</a> and select a passage to save a quote.' : "";
+  if (!book.quotes.length) return '<p class="note">No quotes from this book. ' + read + "</p>";
+  return '<div class="scroll"><table><thead><tr><th>Quote</th><th>Where</th><th>Categories and labels</th></tr></thead><tbody>' +
+    book.quotes.map((q) => '<tr><td><a href="/admin/quotes/' + q.id + '">#' + q.id + "</a> " + esc(q.text.length > 220 ? q.text.slice(0, 220) + "…" : q.text) + "</td><td>" + esc(q.locator) +
+      (q.status === "orphaned" ? " " + '<span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</td><td>" + q.categories.map((t) => tagChip(t.tag)).join("") +
+      q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</td></tr>").join("") + '</tbody></table></div><p class="note">' + read + "</p>";
 }
 
 function renderDesired() {

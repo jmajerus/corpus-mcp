@@ -19,13 +19,15 @@ import { CHANGES_HTML } from "./web/changes.js";
 import { DASHBOARD_HTML } from "./web/dashboard.js";
 import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
 import { PROPOSALS_HTML } from "./web/proposals.js";
+import { QUOTE_HTML, QUOTES_HTML, READER_HTML } from "./web/quotes.js";
 import {
   getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist,
 } from "./tagging.js";
 import { Vocabulary } from "./vocabulary.js";
+import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
-  searchCorpus, tagCleanupPlan, unpinCitekey,
+  getBook, searchCorpus, tagCleanupPlan, unpinCitekey,
 } from "./tools.js";
 
 const VERSION = "0.2.0";
@@ -134,6 +136,71 @@ export function createServer(c: Corpus): McpServer {
     const email = extra.requestInfo?.headers["cf-access-authenticated-user-email"];
     return json(proposeTags(c, args, typeof email === "string" ? email : undefined));
   }));
+
+  const accessEmail = (extra: { requestInfo?: { headers: Record<string, unknown> } }) => {
+    // Set by Cloudflare Access; informational only, because LAN requests bypass Access.
+    const email = extra.requestInfo?.headers["cf-access-authenticated-user-email"];
+    return typeof email === "string" ? email : undefined;
+  };
+  const writes = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
+
+  server.registerTool("save_quote", {
+    title: "Save a quote",
+    description: "Save a passage from a book as a quote. The text is checked against the book: quote marks, dashes, spacing, and case may differ, and the book's exact wording is what gets saved. If the passage is not in the book, nothing is saved and the closest passages are returned. Give the page where the passage starts (as search_corpus or read_book report it) to find it fastest.",
+    inputSchema: {
+      book_id: bookId,
+      text: z.string().min(1).max(2000).describe("The passage, as close to the book's wording as possible"),
+      page: page.optional().describe("Page or location where the passage starts"),
+      note: z.string().max(2000).optional().describe("Why the passage matters"),
+      categories: z.array(z.string()).max(5).optional().describe("Vocabulary categories (get_tag_vocabulary), slug or title"),
+      labels: z.array(z.string()).max(20).optional().describe('Free-form labels, e.g. "cc:puzzle:<puzzle id>"'),
+    },
+    annotations: { title: "Save a quote", ...writes },
+  }, (args, extra) => run(() => json(saveQuote(c, args, accessEmail(extra), "agent"))));
+
+  server.registerTool("search_quotes", {
+    title: "Search quotes",
+    description: "Find saved quotes by words in their text, note, or labels, and by book, author, category (including subcategories), label, or status.",
+    inputSchema: {
+      query: z.string().optional(), book_id: bookId.optional(), author: z.string().optional(),
+      category: z.string().optional().describe("A vocabulary category, slug or title; includes those below it"),
+      label: z.string().optional(), status: z.enum(["verified", "orphaned"]).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+    },
+    annotations: { title: "Search quotes", ...readOnly },
+  }, (args) => run(() => json(searchQuotes(c, { q: args.query, book: args.book_id, author: args.author, category: args.category, label: args.label, status: args.status, limit: args.limit }))));
+
+  server.registerTool("get_quote", {
+    title: "Get a quote",
+    description: "One saved quote with the text around it, its locator, and its citation.",
+    inputSchema: { id: z.number().int() },
+    annotations: { title: "Get a quote", ...readOnly },
+  }, ({ id }) => run(() => json(getQuote(c, id))));
+
+  server.registerTool("update_quote", {
+    title: "Update a quote",
+    description: "Change a quote's note, categories, or labels. The quoted text cannot change; save a new quote instead.",
+    inputSchema: {
+      id: z.number().int(), note: z.string().max(2000).nullable().optional(),
+      categories: z.array(z.string()).max(5).optional().describe("Replaces the quote's categories"),
+      labels: z.array(z.string()).max(20).optional().describe("Replaces the quote's labels"),
+    },
+    annotations: { title: "Update a quote", ...writes, idempotentHint: true },
+  }, (args, extra) => run(() => json(updateQuote(c, args, accessEmail(extra), "agent"))));
+
+  server.registerTool("delete_quote", {
+    title: "Delete a quote",
+    description: "Delete a saved quote.",
+    inputSchema: { id: z.number().int() },
+    annotations: { title: "Delete a quote", ...writes, destructiveHint: true, idempotentHint: true },
+  }, ({ id }, extra) => run(() => json(deleteQuote(c, id, accessEmail(extra), "agent"))));
+
+  server.registerTool("cite_quote", {
+    title: "Cite a quote",
+    description: "The quote's verified text and locator, with a Concept Clusters citation object for its book and pages (as cite_passage returns).",
+    inputSchema: { id: z.number().int() },
+    annotations: { title: "Cite a quote", ...readOnly },
+  }, ({ id }) => run(() => json(citeQuote(c, id))));
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",
@@ -280,11 +347,59 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     const pages: Record<string, string> = {
       "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
+      "/admin/quotes": QUOTES_HTML,
     };
-    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey)?$/);
+    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages)?$/);
+    const quotePath = path.match(/^\/api\/quotes\/(\d+)(\/delete)?$/);
     if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+$/.test(path)) html(BOOK_HTML);
+    else if (req.method === "GET" && /^\/admin\/books\/[^/]+\/read$/.test(path)) html(READER_HTML);
+    else if (req.method === "GET" && /^\/admin\/quotes\/\d+$/.test(path)) html(QUOTE_HTML);
+    else if (req.method === "GET" && bookPath?.[2] === "/pages") {
+      const book = getBook(c, decodeURIComponent(bookPath[1]));
+      if (book.status !== "indexed" || !book.page_count) throw new ToolError(`${book.id} has no indexed text.`);
+      const start = Math.min(Math.max(Number(url.searchParams.get("start")) || 1, 1), book.page_count);
+      const count = Math.min(Math.max(Number(url.searchParams.get("count")) || 4, 1), 12);
+      const end = Math.min(start + count - 1, book.page_count);
+      const pages = c.db.prepare("SELECT page_index, label, section_path, text FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index")
+        .all(book.id, start - 1, end - 1) as { page_index: number; label: string | null; section_path: string | null; text: string }[];
+      sendJson(res, 200, {
+        book_id: book.id, title: book.title, authors: JSON.parse(book.authors), page_count: book.page_count, page_kind: book.reflowable ? "location" : "pdf_page",
+        outline: c.db.prepare("SELECT level, title, start_page FROM outline WHERE book_id = ? AND level <= 1 AND start_page IS NOT NULL ORDER BY ord").all(book.id)
+          .map((o) => ({ ...(o as { level: number; title: string; start_page: number }), page: (o as { start_page: number }).start_page + 1 })),
+        start, end,
+        pages: pages.map((p) => ({ page: p.page_index + 1, label: p.label, section: p.section_path, text: p.text })),
+        quotes: quotesOnPages(c, book, start - 1, end - 1),
+      });
+    }
+    else if (req.method === "GET" && path === "/api/quotes") {
+      const p = url.searchParams;
+      const text = (name: string) => p.get(name)?.trim() || undefined;
+      sendJson(res, 200, searchQuotes(c, {
+        q: text("q"), book: text("book"), author: text("author"), category: text("category"), label: text("label"),
+        status: oneOf(p.get("status"), ["verified", "orphaned"] as const), by: text("by"), since: text("since"),
+        limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
+      }));
+    } else if (req.method === "GET" && quotePath && !quotePath[2]) sendJson(res, 200, getQuote(c, Number(quotePath[1])));
+    else if (req.method === "POST" && path === "/api/quotes") {
+      const by = await writer();
+      if (by === null) return;
+      const body = (await readJson(req)) as { book_id?: string; text?: string; page?: number; note?: string; categories?: unknown; labels?: unknown };
+      if (!body.book_id || !body.text) throw new ToolError("Send book_id and text.");
+      const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
+      sendJson(res, 200, saveQuote(c, { book_id: body.book_id, text: body.text, page: body.page, note: body.note, categories: list(body.categories), labels: list(body.labels) }, by, "admin"));
+    } else if (req.method === "POST" && quotePath) {
+      const by = await writer();
+      if (by === null) return;
+      const id = Number(quotePath[1]);
+      if (quotePath[2]) sendJson(res, 200, deleteQuote(c, id, by, "admin"));
+      else {
+        const body = (await readJson(req)) as { note?: string | null; categories?: unknown; labels?: unknown };
+        const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
+        sendJson(res, 200, updateQuote(c, { id, note: body.note, categories: list(body.categories), labels: list(body.labels) }, by, "admin"));
+      }
+    }
     else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);
     else if (req.method === "GET" && path === "/api/books") {
       const p = url.searchParams;

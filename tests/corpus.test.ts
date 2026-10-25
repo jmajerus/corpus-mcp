@@ -13,6 +13,7 @@ import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
+import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
 import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist } from "../src/tagging.js";
 import { Vocabulary, buildVocabulary } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
@@ -833,3 +834,74 @@ describe("category sets", () => {
     expect(cats.free.map((t) => t.tag)).toContain("meap v08");
   });
 });
+
+describe("quotes", () => {
+  beforeEach(() => {
+    scanLibraries(config, db);
+  });
+
+  it("matches loosely across quote marks, dashes, spacing, case, and page breaks", () => {
+    expect(normalizeQuote("  \u201CSmart\u201D \u2014 quotes\u2019  here ")).toBe('"Smart" - quotes\' here');
+    const pages = [
+      { page_index: 0, label: null, section_path: null, text: "First page ends with a\nbroken sentence" },
+      { page_index: 1, label: null, section_path: null, text: "that continues here. Then more." },
+    ];
+    expect(locate(pages, "a broken  sentence that CONTINUES here")).toMatchObject({
+      start_page: 0, start_offset: 21, end_page: 1, end_offset: 19, text: "a\nbroken sentence\nthat continues here",
+    });
+    expect(locate(pages, "not in the text")).toBeNull();
+  });
+
+  it("saves the book's exact wording, found from the given page or anywhere", () => {
+    const saved = saveQuote(c, { book_id: "main:1", page: 3, text: "weak ties carry  novel information", note: "Granovetter's point", categories: ["Sociology"], labels: ["cc:puzzle:weak-ties", " "] }, "me@example.com", "admin");
+    expect(saved).toMatchObject({ saved: true, exact: false, quote: {
+      text: "Weak ties carry novel information", page: 3, page_label: "1", locator: "p. 1", section: "Part One › Chapter 1",
+      categories: [{ tag: "social-sciences.sociology" }], labels: ["cc:puzzle:weak-ties"], status: "verified", source: "admin",
+    } });
+    // Wrong page: found anyway through the full-text index.
+    expect(saveQuote(c, { book_id: "main:1", page: 1, text: "Structural holes separate" }, undefined, "agent")).toMatchObject({ saved: true, quote: { page: 5 } });
+    // Crossing a page break.
+    expect(saveQuote(c, { book_id: "main:1", page: 3, text: "its measurement. Strong ties sit" }, undefined, "agent").quote).toMatchObject({ page: 3, end_page: 4 });
+    expect(saveQuote(c, { book_id: "main:1", text: "Weak ties carry novel information" }, undefined, "agent")).toMatchObject({ saved: false, reason: expect.stringMatching(/already saved as quote/) });
+    const missing = saveQuote(c, { book_id: "main:1", page: 3, text: "strong ties carry novel information" }, undefined, "agent");
+    expect(missing).toMatchObject({ saved: false, reason: expect.stringMatching(/not found/) });
+    expect((missing as { closest: unknown[] }).closest.length).toBeGreaterThan(0);
+    expect(() => saveQuote(c, { book_id: "main:1", text: "x".repeat(2001) }, undefined, "agent")).toThrow(/limited to 2000/);
+    expect(() => saveQuote(c, { book_id: "main:1", text: "Weak ties", categories: ["Made Up"] }, undefined, "agent")).toThrow(/Not in the vocabulary/);
+  });
+
+  it("searches, edits, deletes, and cites quotes, logging each change", () => {
+    const a = saveQuote(c, { book_id: "main:1", page: 3, text: "Weak ties carry novel information", categories: ["social-sciences.sociology.social-change"], labels: ["Granovetter"] }, "me", "admin");
+    saveQuote(c, { book_id: "main:2", page: 1, text: "The echo chamber amplifies familiar claims." }, "agent@x", "agent");
+    const id = (a as { quote: { id: number } }).quote.id;
+    expect(searchQuotes(c, {}).total).toBe(2);
+    expect(searchQuotes(c, { q: "novel" }).quotes.map((q) => q.id)).toEqual([id]);
+    expect(searchQuotes(c, { category: "Sociology" }).total).toBe(1);
+    expect(searchQuotes(c, { category: "social-sciences" }).total).toBe(1);
+    expect(searchQuotes(c, { label: "granovetter" }).total).toBe(1);
+    expect(searchQuotes(c, { book: "main:2" }).total).toBe(1);
+    expect(searchQuotes(c, { author: "cy writer" }).total).toBe(1);
+    expect(quotesOnPages(c, getBookRow("main:1"), 0, 4)).toEqual([{ id, start_page: 3, start_offset: 0, end_page: 3, end_offset: 33, note: null }]);
+
+    expect(updateQuote(c, { id, note: "Strength of weak ties", labels: [] }, "me", "admin")).toMatchObject({ note: "Strength of weak ties", labels: [], categories: [{ tag: "social-sciences.sociology.social-change" }] });
+    expect(citeQuote(c, id)).toMatchObject({ quote: "Weak ties carry novel information", quote_locator: "p. 1", citation: { title: "Networks", pages: "1" } });
+    deleteQuote(c, id, "me", "admin");
+    expect(searchQuotes(c, {}).total).toBe(1);
+    expect(queryChanges(data, { kinds: ["quote_saved", "quote_edited", "quote_deleted"] }).rows.map((r) => (r as Change).kind)).toEqual(["quote_deleted", "quote_edited", "quote_saved", "quote_saved"]);
+  });
+
+  it("re-anchors quotes when their book's file changes, and orphans those that are gone", () => {
+    const echo = saveQuote(c, { book_id: "main:2", page: 1, text: "echo chamber amplifies" }, undefined, "agent") as { quote: { id: number } };
+    const beta = saveQuote(c, { book_id: "main:2", page: 2, text: "Filter bubbles differ" }, undefined, "agent") as { quote: { id: number } };
+    const file = path.join(root, "main", "Cy Writer", "Echoes (2)", "Echoes - Cy Writer.epub");
+    fs.writeFileSync(file, makeEpub("Echoes", [{ title: "New opening", paragraphs: ["A preface first."] }, { title: "Alpha", paragraphs: ["The echo chamber amplifies familiar claims."] }]));
+    scanLibraries(config, db);
+    expect(reanchorQuotes(db, data)).toEqual({ reanchored: 1, orphaned: 1 });
+    expect(searchQuotes(c, { book: "main:2" }).quotes.map((q) => [q.id, q.status, q.page]).sort()).toEqual([[echo.quote.id, "verified", 2], [beta.quote.id, "orphaned", 2]].sort());
+    expect(reanchorQuotes(db, data)).toEqual({ reanchored: 0, orphaned: 0 });
+  });
+});
+
+function getBookRow(id: string) {
+  return db.prepare("SELECT * FROM books WHERE id = ?").get(id) as Parameters<typeof quotesOnPages>[1];
+}

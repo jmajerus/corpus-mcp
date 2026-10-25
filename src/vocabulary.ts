@@ -85,7 +85,12 @@ export class Vocabulary {
    */
   find(value: string): VocabularyTag | undefined {
     const tag = value.trim().toLowerCase();
-    return this.byTag.get(tag) ?? this.byTitlePath.get(segments(value).map(looseTitle).join("."));
+    const exact = this.byTag.get(tag) ?? this.byTitlePath.get(segments(value).map(looseTitle).join("."));
+    if (exact) return exact;
+    // A bare category or subcategory ("Sociology", "social-change") when exactly one tag ends with it.
+    const last = looseTitle(value);
+    const matches = this.tags.filter((t) => t.tag.split(".").at(-1) === tag || looseTitle(segments(t.label).at(-1) ?? "") === last);
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   /** True when a Calibre tag is one of the vocabulary's slug tags. */

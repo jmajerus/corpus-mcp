@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 4;
+export const DATA_SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -69,7 +69,50 @@ CREATE TABLE IF NOT EXISTS changes (
 );
 CREATE INDEX IF NOT EXISTS changes_at ON changes(at);
 CREATE INDEX IF NOT EXISTS changes_book ON changes(book_id, at);
-CREATE INDEX IF NOT EXISTS changes_kind ON changes(kind, at);`;
+CREATE INDEX IF NOT EXISTS changes_kind ON changes(kind, at);
+
+-- Quotable excerpts, verified against the book's text when saved (src/quotes.ts). The anchor (pages,
+-- offsets into the stored page text, and the text around it) lets a re-index find the quote again.
+CREATE TABLE IF NOT EXISTS quotes (
+  id INTEGER PRIMARY KEY,
+  calibre_uuid TEXT NOT NULL,
+  book_id TEXT NOT NULL,             -- at save time; the Calibre UUID is the stable link
+  title TEXT NOT NULL,
+  text TEXT NOT NULL,                -- the book's exact wording
+  note TEXT,
+  categories TEXT NOT NULL DEFAULT '[]', -- JSON: vocabulary tags (slugs)
+  labels TEXT NOT NULL DEFAULT '[]', -- JSON: free-form labels, e.g. cc:puzzle:<id>
+  start_page INTEGER NOT NULL,       -- 0-based page or location index
+  start_offset INTEGER NOT NULL,     -- character offset in that page's stored text
+  end_page INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,       -- exclusive
+  page_label TEXT,
+  end_page_label TEXT,
+  section_path TEXT,
+  prefix TEXT NOT NULL,              -- about 40 characters before, for re-anchoring
+  suffix TEXT NOT NULL,              -- about 40 characters after
+  sha256 TEXT,                       -- the book file the anchor refers to
+  status TEXT NOT NULL CHECK (status IN ('verified', 'orphaned')),
+  source TEXT NOT NULL,              -- agent | admin
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_by TEXT,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS quotes_book ON quotes(calibre_uuid, start_page);
+CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(
+  text, note, labels, content='quotes', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS quotes_ai AFTER INSERT ON quotes BEGIN
+  INSERT INTO quotes_fts(rowid, text, note, labels) VALUES (new.id, new.text, new.note, new.labels);
+END;
+CREATE TRIGGER IF NOT EXISTS quotes_ad AFTER DELETE ON quotes BEGIN
+  INSERT INTO quotes_fts(quotes_fts, rowid, text, note, labels) VALUES ('delete', old.id, old.text, old.note, old.labels);
+END;
+CREATE TRIGGER IF NOT EXISTS quotes_au AFTER UPDATE ON quotes BEGIN
+  INSERT INTO quotes_fts(quotes_fts, rowid, text, note, labels) VALUES ('delete', old.id, old.text, old.note, old.labels);
+  INSERT INTO quotes_fts(rowid, text, note, labels) VALUES (new.id, new.text, new.note, new.labels);
+END;`;
 
 export type DataStore = Database.Database;
 
@@ -122,6 +165,7 @@ export const CHANGE_KINDS = [
   "tag_added", "tag_removed", "format_added", "book_added", "book_reextracted", "book_removed", "extraction_failed",
   "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "citekey_pinned",
   "categories_edited", "citekey_unpinned",
+  "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
 ] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 export type ChangeSource = "admin-job" | "admin" | "cli" | "calibre" | "review" | "agent";

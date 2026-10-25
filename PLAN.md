@@ -308,7 +308,26 @@ own metadata, with no lookup.
 fill unknown authors and years, fix author sort names, and merge duplicate
 books. `corpus_status` lists the books to fix.
 
-## Quotes (phase 5 design)
+## Quotes (built 2026-10-25)
+
+Implemented as designed below, with these decisions:
+
+- **Tags.** Quotes carry vocabulary categories (slugs, which can be more
+  specific than the book's) plus free-form labels (`cc:puzzle:<id>`).
+- **Creating, for people.** A reader view (`/admin/books/<id>/read`) shows
+  the text with saved quotes highlighted. Selecting a passage saves it
+  through the same check `save_quote` uses.
+- **Admin pages.** `/admin/quotes` (list) and `/admin/quotes/<id>`
+  (context, citation, and editing of note, categories, and labels; delete).
+  Each book page lists its quotes.
+- **Re-anchoring** runs after every scan (`reanchorQuotes`). A quote is
+  retried only when its book's file changes.
+- **History.** Saves, edits, deletes, re-anchors, and orphanings go into the
+  change log.
+- **Lookup.** A category given as a bare name ("Sociology") resolves when it
+  is unique in the vocabulary.
+
+Original design:
 
 A quote store for passages worth keeping, separate from Zotero. It starts
 with Calibre books, where the server can check every quote against the

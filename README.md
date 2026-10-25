@@ -30,9 +30,12 @@ books that live in Calibre.
 | `get_tag_vocabulary` | Concept Clusters' taxonomy as Calibre tags, the controlled vocabulary for categories. |
 | `tagging_worklist` | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Proposes 1–3 vocabulary tags for a book, for a person to review. |
+| `save_quote` | Saves a passage as a quote after checking it against the book; the book's exact wording is stored. |
+| `search_quotes`, `get_quote`, `update_quote`, `delete_quote` | Find, read, and edit saved quotes (note, categories, labels). |
+| `cite_quote` | A quote's verified text and locator with its citation object. |
 | `corpus_status` | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
 
-All tools except `pin_citekey` and `propose_tags` are read-only, and corpus-mcp never writes to Calibre.
+The citekey, tag-proposal, and quote tools write to corpus-mcp's own data; corpus-mcp never writes to Calibre itself.
 
 ## Categories
 
@@ -60,7 +63,9 @@ here too**, not just approve.
 |---|---|---|
 | `/admin` | Metrics and health, linked into the pages below; jobs | Refresh, back up, and preview-then-apply Calibre jobs |
 | `/admin/books` | Every book, with filters for library, format, status, shelf, category, citekey, ISBN, and problems | — |
-| `/admin/books/<id>` | Metadata, categories, citekey, shelves, ISBNs, file, outline, and recent changes | The book's **categories** (complete set) and **citekey** (pin, replace, unpin) |
+| `/admin/books/<id>` | Metadata, categories, citekey, shelves, ISBNs, file, outline, quotes, and recent changes | The book's **categories** (complete set) and **citekey** (pin, replace, unpin) |
+| `/admin/books/<id>/read` | The book's text page by page, with saved quotes highlighted | **Select a passage to save it as a quote** |
+| `/admin/quotes`, `/admin/quotes/<id>` | Every quote, filtered by words, category, label, author, and status; one quote in its surrounding text, with its citation | A quote's **note, categories, labels**; delete |
 | `/admin/categories` | The vocabulary tree with book counts, and other tags | — |
 | `/admin/citekeys` | Pinned keys, and books ready or blocked | On each book page |
 | `/admin/proposals` | Agent proposals | Approve, edit, reject, reopen |
@@ -77,6 +82,26 @@ forced command, never as a shell.
 Every write needs a verified Cloudflare Access identity
 (`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`). Direct LAN access is
 read-only.
+
+## Quotes
+
+Quotes are passages saved from the books, by agents (`save_quote`) or by
+people (select text in a book's reader). Either way, the passage is checked
+against the book's text. Quote marks, dashes, spacing, case, and a page break
+inside the passage may differ; what's stored is the book's exact wording. A
+passage that isn't in the book isn't saved, and the closest passages are
+returned instead.
+
+Each quote records:
+- an anchor: its pages, offsets, and the text around it
+- categories from the vocabulary (including subcategories more specific than
+  its book's)
+- free-form labels, such as `cc:puzzle:<id>`
+- a note
+
+When a book's file changes, its quotes are found again by their text, or
+marked orphaned; never deleted. Quotes live in `data.db` and are backed up
+nightly.
 
 ## Shelves
 

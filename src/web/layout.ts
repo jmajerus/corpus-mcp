@@ -4,11 +4,12 @@
  * since a TypeScript template literal would swallow them.
  */
 
-export type NavKey = "dashboard" | "books" | "categories" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes";
+export type NavKey = "dashboard" | "books" | "quotes" | "categories" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes";
 
 const NAV: [NavKey, string, string][] = [
   ["dashboard", "Dashboard", "/admin"],
   ["books", "Books", "/admin/books"],
+  ["quotes", "Quotes", "/admin/quotes"],
   ["categories", "Categories", "/admin/categories"],
   ["citekeys", "Citekeys", "/admin/citekeys"],
   ["proposals", "Proposals", "/admin/proposals"],

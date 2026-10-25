@@ -3,6 +3,7 @@ import { loadConfig } from "./config.js";
 import { backupDataStore, notYetLogged, openDataStore, recordChanges } from "./data.js";
 import { openDatabase } from "./db.js";
 import { scanLibraries } from "./indexer.js";
+import { reanchorQuotes } from "./quotes.js";
 
 const USAGE = `Usage:
   corpus-mcp index [--force]   Scan the libraries and update the index
@@ -24,6 +25,9 @@ async function main(argv: string[]): Promise<void> {
       // Changes the scan sees in Calibre go to the change log, unless an admin job already logged them.
       const record = (changes: Parameters<typeof notYetLogged>[1]) => recordChanges(data, notYetLogged(data, changes));
       const summary = scanLibraries(config, db, { force: flags.includes("--force"), log: (m) => console.error(m), record });
+      // Quotes whose book file changed are found again by their text, or marked orphaned.
+      const quotes = reanchorQuotes(db, data);
+      if (quotes.reanchored || quotes.orphaned) console.error(`quotes: ${quotes.reanchored} re-anchored, ${quotes.orphaned} orphaned`);
       db.close();
       data.close();
       console.error(`scan finished in ${((Date.now() - started) / 1000).toFixed(1)}s`, summary);
