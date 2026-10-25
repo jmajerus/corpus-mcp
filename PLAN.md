@@ -416,6 +416,15 @@ below the given one, and a tag-hygiene report in `corpus_status`.
 - Several are not subjects at all: publisher names, `MEAP V08`, `Sample Book`.
 - `misinformation` (26 books) mirrors the Misinformation shelf.
 
+**Status (2026-10-25).** Built and deployed. The vocabulary is
+`data/cc-taxonomy.json` (concept-clusters `authoring:taxonomy:export`, 175
+tags). The tools are `get_tag_vocabulary`, `tagging_worklist`, and
+`propose_tags`. The review page is `/review` on the corpus server, with
+`/api/tag-proposals`, `/api/vocabulary`, and `/api/tag-plan`; those routes
+send no CORS headers, and their POST requires JSON. Apply with
+`npm run tags:apply [-- --apply]`. The tag filter matches at any level.
+First batch: 24 pending proposals for the Misinformation shelf.
+
 **Plan: Concept Clusters taxonomy as the vocabulary** (chosen 2026-10-25).
 Shelves stay as a few broad, curated collections. Tags become the granular,
 many-to-many subject classification, mirroring Concept Clusters'

@@ -27,9 +27,23 @@ books that live in Calibre.
 | `render_page` | Returns a PNG of a PDF page, for figures, tables, and equations. |
 | `cite_passage` | Builds a citation object (`title`, `author`, `publisher`, `year`, `pages`) for a book and page range, warns about missing metadata, and for a book not yet in Zotero offers ways to file it (see *Citekeys*). |
 | `pin_citekey` | Records the citekey a book was given when it was filed in Zotero. |
+| `get_tag_vocabulary` | Concept Clusters' taxonomy as Calibre tags, the controlled vocabulary for categories. |
+| `tagging_worklist` | Books still without a tag proposal, with the context needed to choose tags. |
+| `propose_tags` | Proposes 1–3 vocabulary tags for a book, for a person to review. |
 | `corpus_status` | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
 
-All tools except `pin_citekey` are read-only, and corpus-mcp never writes to Calibre.
+All tools except `pin_citekey` and `propose_tags` are read-only, and corpus-mcp never writes to Calibre.
+
+## Categories
+
+Calibre tags (Calibre-Web's *Categories*) follow a controlled vocabulary:
+[Concept Clusters](https://github.com/jmajerus/concept-clusters)' taxonomy as
+`Domain.Category.Subcategory` (snapshot in [`data/`](data/)). An agent takes
+books from `tagging_worklist` and calls `propose_tags`. A person approves,
+edits, or rejects each proposal on the review page at `/review`. Then
+`npm run tags:apply -- --apply` runs [`tools/calibre-tags.sh`](tools/calibre-tags.sh)
+on the Calibre-Web host. That script backs up `metadata.db` and adds the
+approved tags with `calibredb`, keeping each book's existing tags.
 
 ## Shelves
 

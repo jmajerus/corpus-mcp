@@ -7,6 +7,9 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { openDataStore } from "./data.js";
 import { openDatabase } from "./db.js";
+import { REVIEW_HTML } from "./reviewPage.js";
+import { getTagVocabulary, listProposals, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "./tagging.js";
+import { Vocabulary } from "./vocabulary.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
   searchCorpus,
@@ -87,6 +90,38 @@ export function createServer(c: Corpus): McpServer {
     annotations: { title: "List tags", ...readOnly },
   }, (args) => run(() => json(listTags(c, args))));
 
+  server.registerTool("get_tag_vocabulary", {
+    title: "Get tag vocabulary",
+    description: "Concept Clusters' taxonomy as Calibre tags (Domain.Category.Subcategory), the only tags propose_tags accepts.",
+    inputSchema: { under: z.string().optional().describe('Only tags at or below this one, e.g. "Social Sciences.Psychology"') },
+    annotations: { title: "Get tag vocabulary", ...readOnly },
+  }, (args) => run(() => json(getTagVocabulary(c, args))));
+
+  server.registerTool("tagging_worklist", {
+    title: "Get books to tag",
+    description: "Indexed books that have no tag proposal yet (and, by default, no vocabulary tag), with title, authors, description, chapter titles, shelves, and existing tags, for choosing vocabulary tags with propose_tags.",
+    inputSchema: {
+      limit: z.number().int().min(1).max(25).optional().describe("Books to return (default 10)"),
+      shelf: z.string().optional().describe("Only books on this Calibre-Web shelf"),
+      include_tagged: z.boolean().optional().describe("Also include books that already carry a vocabulary tag"),
+    },
+    annotations: { title: "Get books to tag", ...readOnly },
+  }, (args) => run(() => json(taggingWorklist(c, args))));
+
+  server.registerTool("propose_tags", {
+    title: "Propose tags for a book",
+    description: "Propose 1-3 vocabulary tags for a book, with a one- or two-sentence rationale. Proposals wait for a person's review on the /review page; nothing is written to Calibre until approved tags are applied.",
+    inputSchema: {
+      book_id: bookId,
+      tags: z.array(z.string()).min(1).max(3).describe("Exact tags from get_tag_vocabulary, most specific first"),
+      rationale: z.string().min(1).max(600).describe("Why these tags fit the book"),
+    },
+    annotations: { title: "Propose tags for a book", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, (args, extra) => run(() => {
+    const email = extra.requestInfo?.headers["cf-access-authenticated-user-email"];
+    return json(proposeTags(c, args, typeof email === "string" ? email : undefined));
+  }));
+
   server.registerTool("get_book_outline", {
     title: "Get book outline",
     description: "Metadata and table of contents with the page where each section starts. Read this before reading a long book.",
@@ -163,11 +198,69 @@ export function createServer(c: Corpus): McpServer {
 }
 
 function openCorpus(config: Config): Corpus {
-  return { db: openDatabase(config.dbPath, { readonly: true }), data: openDataStore(config.dataDbPath), booksRoot: config.booksRoot };
+  return {
+    db: openDatabase(config.dbPath, { readonly: true }),
+    data: openDataStore(config.dataDbPath),
+    booksRoot: config.booksRoot,
+    vocabulary: Vocabulary.load(config.vocabularyPath),
+  };
 }
 
 export async function serveStdio(config: Config): Promise<void> {
   await createServer(openCorpus(config)).connect(new StdioServerTransport());
+}
+
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(body));
+}
+
+async function readJson(req: http.IncomingMessage, limit = 64 * 1024): Promise<unknown> {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) throw new ToolError("Request body too large.");
+    chunks.push(chunk as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } catch {
+    throw new ToolError("Request body is not JSON.");
+  }
+}
+
+/**
+ * The tag review page and its JSON API. These routes send no CORS headers, so another site cannot
+ * read them, and the POST requires a JSON body, which a cross-site form cannot send.
+ */
+async function serveReview(c: Corpus, config: Config, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+  const reviewer = req.headers["cf-access-authenticated-user-email"];
+  try {
+    if (req.method === "GET" && url.pathname === "/review") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(REVIEW_HTML);
+    } else if (req.method === "GET" && url.pathname === "/api/vocabulary") {
+      sendJson(res, 200, getTagVocabulary(c));
+    } else if (req.method === "GET" && url.pathname === "/api/tag-proposals") {
+      const number = (name: string) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined);
+      sendJson(res, 200, listProposals(c, { status: url.searchParams.get("status") ?? undefined, limit: number("limit"), offset: number("offset") }));
+    } else if (req.method === "POST" && url.pathname.startsWith("/api/tag-proposals/")) {
+      if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) throw new ToolError("Send JSON.");
+      const body = (await readJson(req)) as { action?: string; tags?: unknown };
+      const tags = Array.isArray(body.tags) ? body.tags.map(String) : undefined;
+      const uuid = decodeURIComponent(url.pathname.slice("/api/tag-proposals/".length));
+      sendJson(res, 200, reviewProposal(c, uuid, { action: body.action as "approve", tags }, typeof reviewer === "string" ? reviewer : undefined));
+    } else if (req.method === "GET" && url.pathname === "/api/tag-plan") {
+      sendJson(res, 200, tagPlan(c, url.searchParams.get("library") ?? config.shelvesLibrary));
+    } else {
+      sendJson(res, 404, { error: "Not found." });
+    }
+  } catch (error) {
+    if (error instanceof ToolError) sendJson(res, 400, { error: error.message });
+    else {
+      console.error("review request failed", error);
+      sendJson(res, 500, { error: "Internal error." });
+    }
+  }
 }
 
 const CORS_HEADERS = {
@@ -187,6 +280,10 @@ export async function serveHttp(config: Config): Promise<http.Server> {
     if (url.pathname === "/health") {
       const books = db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get();
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books }));
+      return;
+    }
+    if (url.pathname === "/review" || url.pathname.startsWith("/api/")) {
+      await serveReview(corpus, config, req, res, url);
       return;
     }
     if (url.pathname !== "/mcp") {

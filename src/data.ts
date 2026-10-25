@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 1;
+export const DATA_SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -21,6 +21,23 @@ CREATE TABLE IF NOT EXISTS citekeys (
   pinned_at TEXT NOT NULL,
   pinned_by TEXT
 );
+
+-- Agent-proposed vocabulary tags for a book, reviewed on the /review page. Approved tags are applied
+-- to Calibre by tools/calibre-tags.sh; corpus-mcp itself never writes to Calibre.
+CREATE TABLE IF NOT EXISTS tag_proposals (
+  calibre_uuid TEXT PRIMARY KEY,
+  book_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  tags TEXT NOT NULL,                -- JSON array: the tags as proposed
+  rationale TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  approved_tags TEXT,                -- JSON array: the tags as approved, possibly edited
+  proposed_by TEXT,
+  proposed_at TEXT NOT NULL,
+  reviewed_by TEXT,
+  reviewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS tag_proposals_status ON tag_proposals(status, proposed_at);
 `;
 
 export type DataStore = Database.Database;

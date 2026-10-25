@@ -50,7 +50,8 @@ it("serves the tools over Streamable HTTP", async () => {
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "cite_passage", "corpus_status", "get_book_outline", "list_books", "list_shelves", "list_tags", "pin_citekey", "read_book", "render_page", "search_corpus",
+    "cite_passage", "corpus_status", "get_book_outline", "get_tag_vocabulary", "list_books", "list_shelves", "list_tags", "pin_citekey",
+    "propose_tags", "read_book", "render_page", "search_corpus", "tagging_worklist",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });
@@ -59,4 +60,30 @@ it("serves the tools over Streamable HTTP", async () => {
   const image = await client.callTool({ name: "render_page", arguments: { book_id: "main:1", page: 1 } });
   expect((image.content as { type: string }[])[0].type).toBe("image");
   await client.close();
+});
+
+it("serves the tag review page and its API", async () => {
+  const page = await fetch(`${base}/review`);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  expect(await page.text()).toContain("<title>Tag Review</title>");
+  expect((await (await fetch(`${base}/api/vocabulary`)).json()).tags).toContain("Social Sciences.Psychology.Social Psychology");
+
+  const client = new Client({ name: "test", version: "0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  const proposed = await client.callTool({ name: "propose_tags", arguments: {
+    book_id: "main:1", tags: ["Social Sciences.Sociology"], rationale: "About weak ties in social networks." } });
+  expect(proposed.isError).toBeFalsy();
+  await client.close();
+
+  const list = await (await fetch(`${base}/api/tag-proposals?status=pending`)).json();
+  expect(list.counts.pending).toBe(1);
+  const uuid = list.proposals[0].calibre_uuid;
+  const notJson = await fetch(`${base}/api/tag-proposals/${uuid}`, { method: "POST", body: "action=approve" });
+  expect(notJson.status).toBe(400);
+  const approved = await fetch(`${base}/api/tag-proposals/${uuid}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approve", tags: ["Social Sciences.Sociology"] }),
+  });
+  expect(await approved.json()).toEqual({ status: "approved", tags: ["Social Sciences.Sociology"] });
+  expect(approved.headers.get("access-control-allow-origin")).toBeNull();
+  expect((await (await fetch(`${base}/api/tag-plan`)).json()).books[0].add).toEqual(["Social Sciences.Sociology"]);
 });

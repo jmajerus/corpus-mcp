@@ -7,6 +7,7 @@ import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUui
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
+import type { Vocabulary } from "./vocabulary.js";
 
 export { validIsbn };
 
@@ -19,14 +20,14 @@ export { validIsbn };
 
 export class ToolError extends Error {}
 
-/** The read-only index, the read-write primary data, and the mirrored book files. */
-export interface Corpus { db: DB; data: DataStore; booksRoot: string }
+/** The read-only index, the read-write primary data, the mirrored book files, and the tag vocabulary. */
+export interface Corpus { db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary }
 
-interface BookRow {
+export interface BookRow {
   id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;
   publisher: string | null; year: number | null; language: string | null; isbn: string | null;
   calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; printed_isbns: string | null; tags: string;
-  format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
+  description: string | null; format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
   page_count: number | null; status: string; error: string | null;
 }
 
@@ -35,7 +36,7 @@ interface PageRow { page_index: number; label: string | null; section_path: stri
 const BOOK_ID = /^[^:\s]+:\d+$/;
 
 /** A book by id ("main:42") or citekey: Calibre's identifier, then a pinned key, then a proposed key held by one book. */
-function getBook(c: Corpus, idOrCitekey: string): BookRow {
+export function getBook(c: Corpus, idOrCitekey: string): BookRow {
   const byId = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE id = ?");
   if (BOOK_ID.test(idOrCitekey)) {
     const book = byId.get(idOrCitekey);
@@ -89,7 +90,7 @@ function citekeyInfo(book: BookRow, pin: PinnedCitekey | undefined) {
 }
 
 /** Shelf names per book id, for the given books (all books when omitted). */
-function shelvesByBook(c: Corpus, bookIds?: string[]): Map<string, string[]> {
+export function shelvesByBook(c: Corpus, bookIds?: string[]): Map<string, string[]> {
   const rows = c.db.prepare(`
     SELECT bs.book_id, s.name FROM book_shelves bs JOIN shelves s ON s.id = bs.shelf_id
     ${bookIds ? "WHERE bs.book_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY s.name`)
@@ -110,11 +111,13 @@ function shelfFilter(c: Corpus, shelf: string): string {
 
 /**
  * The SQL condition for books carrying a tag or any tag below it. Calibre (and Calibre-Web's
- * "Categories") nest tags with ".": "Social Science" matches "Social Science.Sociology". Case-insensitive.
+ * "Categories") nest tags with ".": "Social Sciences" matches "Social Sciences.Psychology". The tag may
+ * also start at any level, so "Psychology" matches "Social Sciences.Psychology.Social Psychology"
+ * without naming the domain. Case-insensitive.
  */
 function tagFilter(c: Corpus, tag: string): string {
   const condition = `EXISTS (SELECT 1 FROM json_each(b.tags) t
-    WHERE lower(t.value) = lower(@tag) OR lower(substr(t.value, 1, length(@tag) + 1)) = lower(@tag) || '.')`;
+    WHERE ('.' || lower(t.value) || '.') LIKE '%.' || replace(replace(replace(lower(@tag), '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '.%' ESCAPE '\\')`;
   const any = c.db.prepare(`SELECT 1 FROM books b WHERE ${condition} LIMIT 1`).get({ tag });
   if (!any) {
     const similar = c.db.prepare(`
