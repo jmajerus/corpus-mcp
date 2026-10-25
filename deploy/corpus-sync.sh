@@ -17,6 +17,8 @@ set -eu
 : "${CORPUS_SSH_KEY:=/var/lib/corpus-mcp/.ssh/id_ed25519}"
 : "${CORPUS_REMOTE_PATH:={library}/}"
 : "${CORPUS_SHELVES_FILE:=/var/lib/corpus-mcp/shelves.json}"
+: "${CORPUS_SYNC_STATUS:=/var/lib/corpus-mcp/sync-status.json}"
+results=""
 
 status=0
 for library in $(echo "$CORPUS_LIBRARIES" | tr ',' ' '); do
@@ -27,17 +29,23 @@ for library in $(echo "$CORPUS_LIBRARIES" | tr ',' ' '); do
     --include='*/' --include='/metadata.db' \
     --include='*.pdf' --include='*.epub' --include='*.mobi' --include='*.azw3' \
     --exclude='*' \
-    "$CORPUS_SOURCE:$remote" "$CORPUS_BOOKS_ROOT/$library/" || {
+    "$CORPUS_SOURCE:$remote" "$CORPUS_BOOKS_ROOT/$library/" && results="$results\"$library\":\"ok\"," || {
       echo "sync of $library failed" >&2
+      results="$results\"$library\":\"failed\","
       status=1
     }
 done
 if ssh -i "$CORPUS_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=yes "$CORPUS_SOURCE" shelves > "$CORPUS_SHELVES_FILE.new" \
    && [ -s "$CORPUS_SHELVES_FILE.new" ]; then
   mv "$CORPUS_SHELVES_FILE.new" "$CORPUS_SHELVES_FILE"
+  shelves=ok
 else
   echo "shelf export failed; keeping the previous shelves" >&2
   rm -f "$CORPUS_SHELVES_FILE.new"
+  shelves=failed
   status=1
 fi
+# For the admin dashboard: when the last pull finished and what succeeded.
+printf '{"finished_at":"%s","libraries":{%s},"shelves":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${results%,}" "$shelves" \
+  > "$CORPUS_SYNC_STATUS.new" && mv "$CORPUS_SYNC_STATUS.new" "$CORPUS_SYNC_STATUS"
 exit $status

@@ -74,6 +74,8 @@ async function sourceSetup() {
   await runAsRoot(SOURCE_HOST, readScript("source-setup.sh"), {
     CORPUS_PUBKEY: pubkey,
     CORPUS_SOURCE_SCRIPT: Buffer.from(readScript("corpus-source.sh")).toString("base64"),
+    CORPUS_TAGS_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-tags.sh")).toString("base64"),
+    CORPUS_CONVERT_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-convert.sh")).toString("base64"),
   });
   console.log("\nSource ready. Next: npm run deploy");
 }
@@ -93,14 +95,19 @@ async function sourceSetupUserKey() {
   const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
   const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
   if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
-  // The forced command (deploy/corpus-source.sh) allows read-only rsync of main and the shelf export.
-  const script = Buffer.from(readScript("corpus-source.sh")).toString("base64");
+  // The forced command (deploy/corpus-source.sh) allows read-only rsync of main, the shelf export, and
+  // /admin's named Calibre commands, which run the two scripts installed beside it.
+  const encode = (file) => Buffer.from(fs.readFileSync(path.join(root, file))).toString("base64");
   const sourceUser = SOURCE_HOST.split("@")[0];
   await runAsUser(SOURCE_HOST, [
     "set -eu",
     "install -d -m 0755 ~/.local/bin",
-    `printf %s ${shellQuote(script)} | base64 -d | sed 's|^RSYNC_ROOT=.*|RSYNC_ROOT="/mnt/Calibre/main"|' > ~/.local/bin/corpus-source`,
-    "chmod 0755 ~/.local/bin/corpus-source",
+    `printf %s ${shellQuote(encode("deploy/corpus-source.sh"))} | base64 -d | sed`
+      + ` -e 's|^RSYNC_ROOT=.*|RSYNC_ROOT="/mnt/Calibre/main"|' -e 's|^LIBRARY=.*|LIBRARY="/mnt/Calibre/main"|'`
+      + ` -e "s|^TOOLS_DIR=.*|TOOLS_DIR=\\"$HOME/.local/bin\\"|" > ~/.local/bin/corpus-source`,
+    `printf %s ${shellQuote(encode("tools/calibre-tags.sh"))} | base64 -d > ~/.local/bin/calibre-tags.sh`,
+    `printf %s ${shellQuote(encode("tools/calibre-convert.sh"))} | base64 -d > ~/.local/bin/calibre-convert.sh`,
+    "chmod 0755 ~/.local/bin/corpus-source ~/.local/bin/calibre-tags.sh ~/.local/bin/calibre-convert.sh",
     "install -d -m 0700 ~/.ssh",
     "touch ~/.ssh/authorized_keys && chmod 0600 ~/.ssh/authorized_keys",
     // Replace any earlier line for this key (it was forced to rrsync alone).
@@ -143,6 +150,13 @@ chmod +x deploy/*.sh
 [ -f /etc/corpus-mcp/env ] || install -m 0644 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
 install -m 0644 deploy/corpus-mcp.service deploy/corpus-refresh.service deploy/corpus-refresh.timer \
   deploy/corpus-backup.service deploy/corpus-backup.timer /etc/systemd/system/
+# The dashboard's "Refresh now" (polkit) and the refresh log's rotation.
+if [ -d /etc/polkit-1/rules.d ]; then install -m 0644 deploy/50-corpus-refresh.rules /etc/polkit-1/rules.d/; fi
+if [ -d /etc/logrotate.d ]; then install -m 0644 deploy/corpus-mcp.logrotate /etc/logrotate.d/corpus-mcp; fi
+touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp/refresh.log
+# Settings added after first install.
+grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
+grep -q '^CORPUS_ACCESS_AUD=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_AUD=' >> /etc/corpus-mcp/env
 previous=$(readlink /opt/corpus-mcp/current || true)
 echo "previous=$previous"
 ln -sfn "$release" /opt/corpus-mcp/current.new && mv -T /opt/corpus-mcp/current.new /opt/corpus-mcp/current

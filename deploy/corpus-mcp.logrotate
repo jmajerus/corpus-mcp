@@ -1,0 +1,8 @@
+/var/lib/corpus-mcp/refresh.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

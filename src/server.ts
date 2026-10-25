@@ -4,7 +4,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { Config } from "./config.js";
+import type { JWTVerifyGetKey } from "jose";
+import { accessIdentity } from "./access.js";
+import { adminMetrics } from "./admin.js";
+import { ADMIN_HTML } from "./adminPage.js";
+import { type Config, loadConfig } from "./config.js";
+import { JOB_KINDS, type JobCommands, type JobKind, type JobMode, JobRunner, systemCommands } from "./jobs.js";
 import { openDataStore } from "./data.js";
 import { openDatabase } from "./db.js";
 import { REVIEW_HTML } from "./reviewPage.js";
@@ -232,38 +237,76 @@ async function readJson(req: http.IncomingMessage, limit = 64 * 1024): Promise<u
   }
 }
 
+export interface WebOptions {
+  /** Access signing keys (tests); production fetches the team's keys. */
+  accessKeys?: JWTVerifyGetKey;
+  /** Job processes (tests); production runs systemctl and ssh. */
+  jobCommands?: JobCommands;
+}
+
+interface Web { c: Corpus; config: Config; runner: JobRunner; options: WebOptions }
+
 /**
- * The tag review page and its JSON API. These routes send no CORS headers, so another site cannot
- * read them, and the POST requires a JSON body, which a cross-site form cannot send.
+ * The tag review page, the admin dashboard, and their JSON API. Reads are open on the LAN; every
+ * write needs a verified Cloudflare Access identity. These routes send no CORS headers, so another
+ * site cannot read them, and writes require a JSON body, which a cross-site form cannot send.
  */
-async function serveReview(c: Corpus, config: Config, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
-  const reviewer = req.headers["cf-access-authenticated-user-email"];
+async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+  const { c, config, runner } = web;
+  const admin = config.admin!;
+  const writer = async () => {
+    const result = await accessIdentity(req, admin.access, web.options.accessKeys);
+    if ("error" in result) {
+      sendJson(res, result.status, { error: result.error });
+      return null;
+    }
+    if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) {
+      sendJson(res, 400, { error: "Send JSON." });
+      return null;
+    }
+    return result.identity.email ?? result.identity.subject;
+  };
+  const html = (body: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(body);
   try {
-    if (req.method === "GET" && url.pathname === "/review") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(REVIEW_HTML);
-    } else if (req.method === "GET" && url.pathname === "/api/vocabulary") {
-      sendJson(res, 200, getTagVocabulary(c));
-    } else if (req.method === "GET" && url.pathname === "/api/tag-proposals") {
+    const path = url.pathname;
+    if (req.method === "GET" && path === "/review") html(REVIEW_HTML);
+    else if (req.method === "GET" && path === "/admin") html(ADMIN_HTML);
+    else if (req.method === "GET" && path === "/api/whoami") {
+      const result = await accessIdentity(req, admin.access, web.options.accessKeys);
+      sendJson(res, 200, "error" in result ? { can_write: false, reason: result.error } : { can_write: true, identity: result.identity });
+    } else if (req.method === "GET" && path === "/api/vocabulary") sendJson(res, 200, getTagVocabulary(c));
+    else if (req.method === "GET" && path === "/api/tag-proposals") {
       const number = (name: string) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined);
       sendJson(res, 200, listProposals(c, { status: url.searchParams.get("status") ?? undefined, limit: number("limit"), offset: number("offset") }));
-    } else if (req.method === "POST" && url.pathname.startsWith("/api/tag-proposals/")) {
-      if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) throw new ToolError("Send JSON.");
+    } else if (req.method === "POST" && path.startsWith("/api/tag-proposals/")) {
+      const by = await writer();
+      if (by === null) return;
       const body = (await readJson(req)) as { action?: string; tags?: unknown };
       const tags = Array.isArray(body.tags) ? body.tags.map(String) : undefined;
-      const uuid = decodeURIComponent(url.pathname.slice("/api/tag-proposals/".length));
-      sendJson(res, 200, reviewProposal(c, uuid, { action: body.action as "approve", tags }, typeof reviewer === "string" ? reviewer : undefined));
-    } else if (req.method === "GET" && url.pathname === "/api/tag-plan") {
+      sendJson(res, 200, reviewProposal(c, decodeURIComponent(path.slice("/api/tag-proposals/".length)), { action: body.action as "approve", tags }, by));
+    } else if (req.method === "GET" && path === "/api/tag-plan") {
       sendJson(res, 200, tagPlan(c, url.searchParams.get("library") ?? config.shelvesLibrary));
-    } else if (req.method === "GET" && url.pathname === "/api/tag-cleanup-plan") {
+    } else if (req.method === "GET" && path === "/api/tag-cleanup-plan") {
       // ?also=<tag> (repeatable) removes further tags the hygiene rules do not flag.
       sendJson(res, 200, tagCleanupPlan(c, url.searchParams.get("library") ?? config.shelvesLibrary, url.searchParams.getAll("also")));
-    } else {
-      sendJson(res, 404, { error: "Not found." });
-    }
+    } else if (req.method === "GET" && path === "/api/admin/metrics") {
+      sendJson(res, 200, await adminMetrics(c, config, VERSION));
+    } else if (req.method === "GET" && path === "/api/admin/jobs") {
+      sendJson(res, 200, { kinds: JOB_KINDS, ...runner.list() });
+    } else if (req.method === "GET" && /^\/api\/admin\/jobs\/\d+$/.test(path)) {
+      sendJson(res, 200, runner.get(Number(path.split("/").at(-1))));
+    } else if (req.method === "POST" && path === "/api/admin/jobs") {
+      const by = await writer();
+      if (by === null) return;
+      const body = (await readJson(req)) as { kind?: string; mode?: string; preview_of?: number; also?: unknown };
+      const also = Array.isArray(body.also) ? body.also.map(String).filter(Boolean) : undefined;
+      const id = runner.start(body.kind as JobKind, (body.mode ?? "apply") as JobMode, { previewOf: body.preview_of, also }, by);
+      sendJson(res, 202, { id });
+    } else sendJson(res, 404, { error: "Not found." });
   } catch (error) {
     if (error instanceof ToolError) sendJson(res, 400, { error: error.message });
     else {
-      console.error("review request failed", error);
+      console.error("web request failed", error);
       sendJson(res, 500, { error: "Internal error." });
     }
   }
@@ -278,9 +321,14 @@ const CORS_HEADERS = {
 };
 
 /** Stateless Streamable HTTP: a fresh server and transport per request, sharing the database handles. */
-export async function serveHttp(config: Config): Promise<http.Server> {
+export async function serveHttp(config: Config, options: WebOptions = {}): Promise<http.Server> {
   const corpus = openCorpus(config);
   const { db } = corpus;
+  const fullConfig: Config = { ...config, admin: config.admin ?? loadConfig({}).admin };
+  const web: Web = {
+    c: corpus, config: fullConfig, options,
+    runner: new JobRunner(corpus, fullConfig, options.jobCommands ?? systemCommands(fullConfig.admin!)),
+  };
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/health") {
@@ -288,8 +336,8 @@ export async function serveHttp(config: Config): Promise<http.Server> {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books }));
       return;
     }
-    if (url.pathname === "/review" || url.pathname.startsWith("/api/")) {
-      await serveReview(corpus, config, req, res, url);
+    if (url.pathname === "/review" || url.pathname === "/admin" || url.pathname.startsWith("/api/")) {
+      await serveWeb(web, req, res, url);
       return;
     }
     if (url.pathname !== "/mcp") {

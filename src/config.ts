@@ -1,4 +1,22 @@
 import path from "node:path";
+import type { AccessConfig } from "./access.js";
+
+/** Settings for the /admin dashboard; every field has a default, so tests and older configs can omit it. */
+export interface AdminConfig {
+  access: AccessConfig;
+  /** Neighbouring LAN services shown in the dashboard's status strip. */
+  neighbors: { name: string; url: string }[];
+  /** ssh target and key for the Calibre-Web host's forced command (deploy/corpus-source.sh). */
+  source: string;
+  sshKey: string;
+  refreshUnit: string;
+  /** corpus-refresh.service appends its output here, so the dashboard can show it. */
+  refreshLog: string;
+  /** Written by corpus-sync.sh after each pull. */
+  syncStatus: string;
+}
+
+const DEFAULT_NEIGHBORS = "zotero-mcp=http://zotero-mcp.localdomain:8000/mcp;calibre-web=http://calibre-web.localdomain:8083/;authoring=http://authoring.localdomain:8787/";
 
 export interface Config {
   /** Directory holding one folder per Calibre library. */
@@ -16,6 +34,7 @@ export interface Config {
   shelvesLibrary: string;
   /** Concept Clusters taxonomy snapshot used as the tag vocabulary; defaults to data/cc-taxonomy.json. */
   vocabularyPath?: string;
+  admin?: AdminConfig;
   host: string;
   port: number;
 }
@@ -38,6 +57,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     shelvesFile: path.resolve(env.CORPUS_SHELVES_FILE ?? "/var/lib/corpus-mcp/shelves.json"),
     shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
     vocabularyPath: env.CORPUS_VOCABULARY ? path.resolve(env.CORPUS_VOCABULARY) : undefined,
+    admin: {
+      access: { teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined },
+      neighbors: (env.CORPUS_NEIGHBORS ?? DEFAULT_NEIGHBORS).split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {
+        const at = pair.indexOf("=");
+        return { name: pair.slice(0, at).trim(), url: pair.slice(at + 1).trim() };
+      }),
+      source: env.CORPUS_SOURCE ?? "corpus-sync@calibre-web.localdomain",
+      sshKey: env.CORPUS_SSH_KEY ?? "/var/lib/corpus-mcp/.ssh/id_ed25519",
+      refreshUnit: env.CORPUS_REFRESH_UNIT ?? "corpus-refresh.service",
+      refreshLog: env.CORPUS_REFRESH_LOG ?? "/var/lib/corpus-mcp/refresh.log",
+      syncStatus: env.CORPUS_SYNC_STATUS ?? "/var/lib/corpus-mcp/sync-status.json",
+    },
     host: env.CORPUS_HOST ?? "0.0.0.0",
     port: Number.parseInt(env.CORPUS_PORT ?? "8000", 10),
   };

@@ -47,6 +47,7 @@ function sha256(data: Uint8Array): string {
 }
 
 export function scanLibraries(config: Config, db: DB, { force = false, log = (() => {}) as Log } = {}): ScanSummary {
+  const startedAt = new Date();
   const summary: ScanSummary = { scanned: 0, extracted: 0, unchanged: 0, noFile: 0, failed: 0, removed: 0, excluded: 0, unreadableLibraries: [], shelves: "no export" };
   const seen = new Set<string>();
 
@@ -157,7 +158,11 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
     }
   })();
   summary.removed = stale.length;
-  setMeta(db, "last_scan", new Date().toISOString());
+  const finishedAt = new Date();
+  setMeta(db, "last_scan", finishedAt.toISOString());
+  db.prepare("INSERT INTO scan_runs (started_at, finished_at, seconds, summary) VALUES (?, ?, ?, ?)")
+    .run(startedAt.toISOString(), finishedAt.toISOString(), (finishedAt.getTime() - startedAt.getTime()) / 1000, JSON.stringify(summary));
+  db.prepare("DELETE FROM scan_runs WHERE id NOT IN (SELECT id FROM scan_runs ORDER BY id DESC LIMIT 500)").run();
   return summary;
 }
 

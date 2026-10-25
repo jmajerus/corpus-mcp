@@ -12,6 +12,9 @@ WorkingDirectory=/opt/corpus-mcp/current
 # A failed pull (for example, calibre-web.localdomain is down) still indexes whatever is on disk.
 ExecStart=-/opt/corpus-mcp/current/deploy/corpus-sync.sh
 ExecStart=/usr/bin/node /opt/corpus-mcp/current/dist/cli.js index
+# The dashboard streams this file while a refresh runs (deploy/corpus-mcp.logrotate rotates it).
+StandardOutput=append:/var/lib/corpus-mcp/refresh.log
+StandardError=inherit
 Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=yes

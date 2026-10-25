@@ -484,6 +484,37 @@ domain › category › subcategory (about 62 categories across 15 domains), so
 6. **Cleanup.** The hygiene report lists BISAC, publisher, and status tags
    for removal once the vocabulary tags are in.
 
+## Admin dashboard (2026-10-25)
+
+`/admin` on the corpus server.
+
+- **Metrics.** `corpus_status` reduced to counts, plus:
+  - refresh history (an index `scan_runs` table)
+  - the last pull (`sync-status.json`, written by `corpus-sync.sh`)
+  - file sizes, backup age, and free disk space
+  - a status strip for zotero-mcp, calibre-web, and authoring (HTTP probes,
+    cached for 30 seconds)
+- **Jobs.** Defined in `src/jobs.ts`. One runs at a time, logs stream to the
+  page, and history is kept in the `data.db` `jobs` table.
+  - *Refresh now* starts `corpus-refresh.service` through a polkit rule
+    (`deploy/50-corpus-refresh.rules`, start only, that unit only) and tails
+    `refresh.log`.
+  - *Back up* runs in process.
+  - *Tags*, *cleanup*, and *convert* are preview, then apply. The apply
+    reuses the preview's stored plan, needs a successful preview under an
+    hour old, and refreshes afterwards. They run as `tags-preview`,
+    `tags-apply`, `convert-preview`, and `convert-apply` in CT 115's forced
+    command, using the installed `calibre-tags.sh` and `calibre-convert.sh`.
+    Each apply backs up `metadata.db`.
+- **Auth.** Every write, `/review` approvals included, needs a
+  `Cf-Access-Jwt-Assertion` token verified with `jose` against the team's
+  keys, issuer, and the corpus application's AUD tag (`src/access.ts`, on
+  the pattern of concept-clusters' `accessAuth.js`). Without both settings
+  every write is refused. Direct LAN access is read-only.
+- **Verified.** The polkit rule allows starting the refresh and refuses a
+  restart of corpus-mcp or a stop of the refresh. The dispatcher runs the
+  named commands and refuses a shell, injection, and an rsync write.
+
 ## Remote access (Claude web)
 
 Claude web reaches the server through Cloudflare. The path is a Cloudflare

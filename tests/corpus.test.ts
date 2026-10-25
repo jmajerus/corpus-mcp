@@ -496,7 +496,24 @@ describe("shelves", () => {
     expect(exported.shelves).toEqual([{ id: 1, name: "Misinformation", books: [{ book_id: 53, order: 1 }, { book_id: 7, order: 2 }] }]);
     const refused = run("cat /etc/passwd");
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toMatch(/only read-only rsync and 'shelves'/);
+    expect(refused.stderr).toMatch(/only read-only rsync, 'shelves', and the tags-\/convert- commands are allowed/);
+    expect(run("tags-apply; id").status).toBe(1);
+  });
+
+  it("runs the admin's named Calibre commands through their scripts, with the plan on stdin", () => {
+    const tools = path.join(root, "tools");
+    fs.mkdirSync(tools);
+    // Stand-ins that report how they were called.
+    fs.writeFileSync(path.join(tools, "calibre-tags.sh"), 'echo "tags $* plan=$(printf %s "$TAG_PLAN" | base64 -d)"\n');
+    fs.writeFileSync(path.join(tools, "calibre-convert.sh"), 'echo "convert $*"\n');
+    const script = fs.readFileSync(new URL("../deploy/corpus-source.sh", import.meta.url), "utf8")
+      .replace(/^TOOLS_DIR=.*$/m, `TOOLS_DIR="${tools}"`).replace(/^LIBRARY=.*$/m, 'LIBRARY="/lib/main"');
+    const run = (command: string, input = "") =>
+      spawnSync("sh", ["-c", script], { env: { ...process.env, SSH_ORIGINAL_COMMAND: command }, input, encoding: "utf8" }).stdout.trim();
+    expect(run("tags-preview", '{"books":[]}')).toBe('tags /lib/main plan={"books":[]}');
+    expect(run("tags-apply", '{"books":[1]}')).toBe('tags --apply /lib/main plan={"books":[1]}');
+    expect(run("convert-preview")).toBe("convert /lib/main");
+    expect(run("convert-apply")).toBe("convert --apply /lib/main");
   });
 });
 

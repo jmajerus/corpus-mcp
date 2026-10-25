@@ -13,8 +13,14 @@ case "$CORPUS_PUBKEY" in ssh-ed25519\ *) ;; *) echo "CORPUS_PUBKEY is not an ed2
 id corpus-sync >/dev/null 2>&1 || useradd --system --create-home --shell /bin/sh corpus-sync
 passwd -l corpus-sync >/dev/null
 install -d -o corpus-sync -g corpus-sync -m 0700 /home/corpus-sync/.ssh
-printf %s "$CORPUS_SOURCE_SCRIPT" | base64 -d | sed 's|^RSYNC_ROOT=.*|RSYNC_ROOT="/mnt/Calibre"|' > /usr/local/bin/corpus-source
-chmod 0755 /usr/local/bin/corpus-source
+printf %s "$CORPUS_SOURCE_SCRIPT" | base64 -d \
+  | sed -e 's|^RSYNC_ROOT=.*|RSYNC_ROOT="/mnt/Calibre"|' -e 's|^LIBRARY=.*|LIBRARY="/mnt/Calibre/main"|' -e 's|^TOOLS_DIR=.*|TOOLS_DIR="/usr/local/bin"|' \
+  > /usr/local/bin/corpus-source
+printf %s "${CORPUS_TAGS_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-tags.sh
+printf %s "${CORPUS_CONVERT_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-convert.sh
+chmod 0755 /usr/local/bin/corpus-source /usr/local/bin/calibre-tags.sh /usr/local/bin/calibre-convert.sh
+# /admin's Calibre commands write the library, so corpus-sync needs the library owner's group.
+if getent group "$(stat -c %G /mnt/Calibre/main)" >/dev/null; then usermod -aG "$(stat -c %G /mnt/Calibre/main)" corpus-sync; fi
 echo "restrict,command=\"/usr/local/bin/corpus-source\" $CORPUS_PUBKEY" > /home/corpus-sync/.ssh/authorized_keys
 chown corpus-sync:corpus-sync /home/corpus-sync/.ssh/authorized_keys
 chmod 0600 /home/corpus-sync/.ssh/authorized_keys

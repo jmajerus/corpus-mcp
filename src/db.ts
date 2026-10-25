@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -82,6 +82,15 @@ CREATE TABLE IF NOT EXISTS book_shelves (
   PRIMARY KEY (book_id, shelf_id)
 );
 CREATE INDEX IF NOT EXISTS book_shelves_shelf ON book_shelves(shelf_id, ord);
+
+-- One row per scan, for the admin dashboard's refresh history (the newest 500 are kept).
+CREATE TABLE IF NOT EXISTS scan_runs (
+  id INTEGER PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  seconds REAL NOT NULL,
+  summary TEXT NOT NULL              -- JSON ScanSummary
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(
   text, content='passages', content_rowid='id',

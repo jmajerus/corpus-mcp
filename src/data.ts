@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 2;
+export const DATA_SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -38,7 +38,20 @@ CREATE TABLE IF NOT EXISTS tag_proposals (
   reviewed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS tag_proposals_status ON tag_proposals(status, proposed_at);
-`;
+
+-- Admin jobs launched from /admin (see src/jobs.ts), with their output.
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('preview', 'apply')),
+  params TEXT NOT NULL,              -- JSON; a preview stores the plan its apply will run
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'interrupted')),
+  requested_by TEXT,
+  preview_of INTEGER REFERENCES jobs(id),
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  log TEXT NOT NULL
+);`;
 
 export type DataStore = Database.Database;
 

@@ -48,6 +48,33 @@ edits, or rejects each proposal on the review page at `/review`. Then
 on the Calibre-Web host. That script backs up `metadata.db` and adds the
 approved tags with `calibredb`, keeping each book's existing tags.
 
+## Admin dashboard
+
+`/admin` shows the corpus at a glance:
+
+- books indexed, refresh history, and the last pull from Calibre-Web
+- tag proposals, tags, citekey readiness, and printed ISBNs
+- data and backups, and free disk space
+- whether neighbouring LAN services are up
+
+It also runs common jobs:
+
+- refresh now
+- back up `data.db`
+- apply approved tags to Calibre
+- remove non-subject tags
+- add EPUBs for MOBI-only books
+
+Calibre changes always run a preview first. The apply runs exactly the
+previewed plan, backs up `metadata.db`, and refreshes the index. They run on
+the Calibre-Web host as named commands of the sync key's forced command, never
+as a shell. "Refresh now" starts the refresh unit through a polkit rule that
+allows nothing else.
+
+Every write, including approvals on `/review`, needs a verified Cloudflare
+Access identity (`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`). Direct LAN
+access is read-only.
+
 ## Shelves
 
 Calibre-Web shelves are topic collections, such as *Misinformation*, kept in
