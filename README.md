@@ -172,6 +172,29 @@ or ebook) when one is printed beside it. Copyright pages often list several
 editions, and back pages often advertise other books, so these are offered for
 someone to confirm, never filed automatically.
 
+## Zotero
+
+corpus-mcp can mirror a Zotero library, read-only, to see which Calibre books
+are already filed there. zotero.org can be slow to answer, so nothing waits on
+it: a background sync (every 30 minutes, and from the dashboard) copies the
+fields matching needs into `data.db`, asking only for what changed since the
+last library version, with long timeouts, retries, and Zotero's `Backoff` and
+`Retry-After` headers honoured. Everything else reads the mirror.
+
+- **Matching:** a book matches an item whose Extra holds `Calibre UUID: <uuid>`
+  (written when a book is filed from `cite_passage`'s BibTeX), else one item
+  with the book's ISBN, else a link a person confirmed. Items with the same
+  title, first author, and year are offered as candidates to confirm or
+  reject, on the book's page and at `/admin/zotero`.
+- **Pinning:** a matched item's citekey (Zotero's `citationKey` field, or a
+  `Citation Key:` line in Extra) is pinned to a book that has no key yet.
+  A key that differs from a pinned or Calibre key is reported, never changed.
+- **Citing:** `cite_passage` and `cite_quote` add `zotero` (the matched item)
+  and warn before filing a book that is already there.
+- **Setup:** make a key with read-only library access at
+  zotero.org/settings/keys, put `CORPUS_ZOTERO_LIBRARY=users/<id>` and
+  `CORPUS_ZOTERO_API_KEY` in `.env`, and run `npm run deploy -- --zotero`.
+
 ## Citations
 
 `cite_passage` (and `cite_quote`, for a saved quote) returns:

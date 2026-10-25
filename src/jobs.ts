@@ -11,7 +11,7 @@ import { type Corpus, ToolError, tagCleanupPlan } from "./tools.js";
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
@@ -22,6 +22,7 @@ export const JOB_KINDS: Record<JobKind, JobSpec> = {
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
   cleanup: { title: "Remove non-subject tags from Calibre", calibre: true, previewable: true },
   convert: { title: "Add EPUBs for MOBI/AZW3-only books", calibre: true, previewable: true },
+  zotero: { title: "Sync from Zotero now", calibre: false, previewable: false },
 };
 
 export interface JobRow {
@@ -47,6 +48,8 @@ export interface JobCommands {
   refresh(log: (text: string) => void): Promise<void>;
   /** Runs a named command on the Calibre-Web host with optional stdin; rejects on a non-zero exit. */
   calibre(command: string, stdin: string | undefined, log: (text: string) => void): Promise<void>;
+  /** Syncs the Zotero mirror; absent when Zotero is not configured. */
+  zotero?(log: (text: string) => void): Promise<void>;
 }
 
 function run(cmd: string, args: string[], log: (text: string) => void, stdin?: string): Promise<number> {
@@ -235,6 +238,9 @@ export class JobRunner {
     switch (kind) {
       case "refresh":
         return this.commands.refresh(log);
+      case "zotero":
+        if (!this.commands.zotero) throw new ToolError("Zotero is not configured (CORPUS_ZOTERO_API_KEY and CORPUS_ZOTERO_LIBRARY).");
+        return this.commands.zotero(log);
       case "backup":
         log(`Backed up to ${await backupDataStore(this.c.data, this.config.backupDir)}\n`);
         return;

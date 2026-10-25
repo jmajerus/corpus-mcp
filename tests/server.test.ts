@@ -186,9 +186,22 @@ it("runs jobs: local ones directly, Calibre changes only as an apply of their ow
     .toEqual(["convert:preview", "tags:apply", "tags:preview", "backup:apply"]);
 });
 
+it("reports Zotero as unconfigured, and refuses its job", async () => {
+  expect(await (await fetch(`${base}/api/zotero`)).json()).toMatchObject({ configured: false, books: { total: 1, not_found: 1 } });
+  expect((await (await fetch(`${base}/api/books/main:1`)).json()).zotero).toBeNull();
+  const job = await (await fetch(`${base}/api/admin/jobs`, { method: "POST", headers: { "content-type": "application/json", "cf-access-jwt-assertion": token },
+    body: JSON.stringify({ kind: "zotero", mode: "apply" }) })).json();
+  let row;
+  for (let i = 0; i < 50 && (!row || row.status === "running"); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+    row = await (await fetch(`${base}/api/admin/jobs/${job.id}`)).json();
+  }
+  expect(row).toMatchObject({ kind: "zotero", status: "failed", log: expect.stringMatching(/Zotero is not configured/) });
+});
+
 it("serves page scripts that parse, with no escapes lost to the TypeScript template literal", async () => {
   for (const page of ["admin", "admin/books", "admin/books/main:1", "admin/categories", "admin/citekeys", "admin/proposals", "admin/shelves",
-    "admin/jobs", "admin/jobs/1", "admin/changes", "admin/quotes", "admin/quotes/1", "admin/books/main:1/read"]) {
+    "admin/jobs", "admin/jobs/1", "admin/changes", "admin/quotes", "admin/quotes/1", "admin/books/main:1/read", "admin/zotero"]) {
     const html = await (await fetch(`${base}/${page}`)).text();
     expect(html).toContain('aria-label="Admin pages"');
     // The layout's helpers and the page's own script are separate classic scripts sharing one scope.

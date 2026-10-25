@@ -568,6 +568,31 @@ adapts. Agreed with CC's agent, in order:
    `CORPUS_VOCABULARY_SOURCE`, so every deploy also installs CC's latest
    export.
 
+## Zotero mirror (stage 1 built 2026-10-25)
+
+Read-only, against the personal library CC files into; CC stays the only
+filer. Design for zotero.org's latency (ZCode saw `file_zotero_reference`
+time out at 30 s after the item was created):
+
+- **Mirror, not calls.** `zotero_items`, `zotero_isbns`, and `zotero_links`
+  in `data.db` (schema 9). A sync fetches `items/top?since=<version>`
+  (including trashed, to drop them) and `deleted?since=`, pages by what came
+  back, and saves the version last, so an interrupted sync repeats rather
+  than skips. 90 s timeouts, four tries, `Backoff` and `Retry-After`
+  honoured. One sync at a time (`ZoteroSync`), on a 30-minute timer in the
+  server and as the dashboard job "Sync from Zotero now".
+- **Matching:** Calibre UUID in Extra (CC appends the BibTeX note there),
+  then a unique ISBN, then a confirmed link; title + first author + year
+  (±1) are candidates. An item whose Extra names another Calibre book is
+  never a match or candidate for this one.
+- **Pinning:** automatic for matched books with no pin and no Calibre key,
+  as change source `zotero`; mismatches are reported only.
+- **Not yet:** quote export as child notes (stage 2, write key, a
+  `Zotero-Write-Token` on every write so a timed-out write can be retried
+  without a duplicate).
+- **Switching on:** `CORPUS_ZOTERO_LIBRARY` and `CORPUS_ZOTERO_API_KEY` in
+  the workstation `.env`, then `npm run deploy -- --zotero`.
+
 ## Admin dashboard (2026-10-25)
 
 `/admin` on the corpus server.

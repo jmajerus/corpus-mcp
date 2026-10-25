@@ -13,7 +13,7 @@ const CORPUS_HOST = process.env.CORPUS_DEPLOY_HOST ?? "authoring@corpus-mcp.loca
 const SOURCE_HOST = process.env.CORPUS_SOURCE_ADMIN_HOST ?? "authoring@calibre-web.localdomain";
 const ASKPASS = path.join(root, "tools", "askpass.mjs");
 
-const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --vocabulary[=file] | --skip-tests]
+const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --vocabulary[=file] | --zotero | --skip-tests]
 
   (no flag)       build, test, install a new release, restart, health-check, roll back on failure
   --provision     one-time setup of the corpus LXC (Node 22, corpus user, sync key); prints the key
@@ -27,6 +27,9 @@ const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source
                   validate the tag vocabulary (default CORPUS_VOCABULARY_SOURCE) and install it as
                   /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
                   A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set.
+  --zotero        copy CORPUS_ZOTERO_LIBRARY, CORPUS_ZOTERO_API_KEY, and CORPUS_ZOTERO_INTERVAL_MINUTES
+                  from .env into the server's /etc/corpus-mcp/env (mode 0640) and restart it;
+                  an empty CORPUS_ZOTERO_API_KEY turns the mirror off
   --skip-tests    deploy without running the test suite first
 
 Needs AUTHORING_DEPLOY_PASSWORD (npm run deploy loads .env when present; see .env.example).`;
@@ -146,6 +149,26 @@ mv /var/lib/corpus-mcp/vocabulary.json.new /var/lib/corpus-mcp/vocabulary.json
 echo "vocabulary=${vocabulary.version ?? "(no version)"} (${vocabulary.tags.length} assignable terms)"`);
 }
 
+/** Sets the Zotero settings in the server's env from this machine's .env, so the key never passes through a chat or a command line. */
+async function pushZotero() {
+  const library = process.env.CORPUS_ZOTERO_LIBRARY ?? "";
+  const key = process.env.CORPUS_ZOTERO_API_KEY ?? "";
+  if (key && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`CORPUS_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
+  const settings = { CORPUS_ZOTERO_LIBRARY: library, CORPUS_ZOTERO_API_KEY: key, CORPUS_ZOTERO_INTERVAL_MINUTES: process.env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? "" };
+  const encoded = Buffer.from(Object.entries(settings).map(([k, v]) => `${k}=${v}`).join("\n")).toString("base64");
+  await runAsRoot(CORPUS_HOST, `
+set -euo pipefail
+f=/etc/corpus-mcp/env
+printf %s ${shellQuote(encoded)} | base64 -d > /tmp/corpus-zotero.env
+grep -v -e '^CORPUS_ZOTERO_LIBRARY=' -e '^CORPUS_ZOTERO_API_KEY=' -e '^CORPUS_ZOTERO_INTERVAL_MINUTES=' "$f" > "$f.new" || true
+grep -v '=$' /tmp/corpus-zotero.env >> "$f.new" || true
+rm -f /tmp/corpus-zotero.env
+chown root:corpus "$f.new" && chmod 0640 "$f.new" && mv "$f.new" "$f"
+systemctl restart corpus-mcp.service
+sleep 2
+. "$f"; curl -sf "http://127.0.0.1:\${CORPUS_PORT:-8000}/api/zotero" | head -c 300; echo`);
+}
+
 async function deploy({ skipTests }) {
   execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
   if (!skipTests) execFileSync("npm", ["test"], { cwd: root, stdio: "inherit" });
@@ -216,13 +239,14 @@ ls -1dt /opt/corpus-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
-  const known = new Set(["--provision", "--source-setup", "--source-setup-user-key", "--skip-tests", "--vocabulary"]);
+  const known = new Set(["--provision", "--source-setup", "--source-setup-user-key", "--skip-tests", "--vocabulary", "--zotero"]);
   const unknown = argv.find((a) => !known.has(a.split("=")[0]));
   if (unknown) throw new Error(`Unknown argument ${unknown}.\n\n${USAGE}`);
   if (!password) throw new Error(`AUTHORING_DEPLOY_PASSWORD is not set.\n\n${USAGE}`);
   if (argv.includes("--provision")) return provision();
   if (argv.includes("--source-setup")) return sourceSetup();
   if (argv.includes("--source-setup-user-key")) return sourceSetupUserKey();
+  if (argv.includes("--zotero")) return pushZotero();
   const vocabularyArg = argv.find((a) => a.split("=")[0] === "--vocabulary");
   if (vocabularyArg) {
     execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AdminConfig, Config } from "./config.js";
 import { listProposals } from "./tagging.js";
+import { zoteroReport } from "./zotero.js";
 import { type Corpus, corpusStatus, listShelves } from "./tools.js";
 
 /** The numbers behind the /admin dashboard. Everything here is read-only. */
@@ -105,6 +106,10 @@ export async function adminMetrics(c: Corpus, config: Config, version: string) {
     quotes: Object.fromEntries((c.data.prepare(`
       SELECT 'total' AS k, COUNT(*) AS n FROM quotes UNION ALL
       SELECT 'orphaned', COUNT(*) FROM quotes WHERE status = 'orphaned'`).all() as { k: string; n: number }[]).map((r) => [r.k, r.n])),
+    zotero: config.zotero ? (() => {
+      const z = zoteroReport(c, config.zotero);
+      return { in_zotero: z.books.calibre_uuid + z.books.isbn + z.books.confirmed, candidates: z.books.candidates, mismatches: z.mismatches.length, synced_at: z.sync.synced_at, error: z.sync.error };
+    })() : null,
     disk: [disk(path.dirname(config.dbPath)), disk(config.booksRoot)],
     neighbors: await probeNeighbors(admin.neighbors),
   };

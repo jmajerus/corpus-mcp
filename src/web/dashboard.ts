@@ -57,6 +57,9 @@ async function loadMetrics() {
     card("Citekeys", go("/admin/citekeys", num(m.citekeys.pinned) + " pinned"), [[go("/admin/books?citekey=ready", "Ready to file"), num(m.citekeys.ready_to_file)],
       [go("/admin/books?citekey=blocked", "Blocked"), num(Object.values(m.citekeys.blocked).reduce((a, b) => a + b, 0)), "warn"], ["Proposed collisions", num(m.citekeys.proposed_collisions)]]),
     card("Quotes", go("/admin/quotes", num(m.quotes.total)), [[go("/admin/quotes?status=orphaned", "Orphaned"), num(m.quotes.orphaned), m.quotes.orphaned ? "bad" : ""]]),
+    ...(m.zotero ? [card("Zotero", go("/admin/zotero", num(m.zotero.in_zotero) + " in Zotero"), [["Synced", ago(m.zotero.synced_at), m.zotero.error ? "bad" : ""],
+      [go("/admin/zotero", "Possible matches"), num(m.zotero.candidates), m.zotero.candidates ? "warn" : ""], [go("/admin/zotero", "Citekey mismatches"), num(m.zotero.mismatches), m.zotero.mismatches ? "warn" : ""]],
+      m.zotero.error ? "warn" : "")] : []),
     card("ISBNs", go("/admin/books?isbn=printed", num(m.printed_isbns.books_printing_isbn)) + ' <span class="note">printed only</span>', [[go("/admin/books?isbn=none", "No ISBN"), "→"], [go("/admin/books?isbn=valid", "Valid in Calibre"), "→"]]),
     card("Last refresh", ago(m.index.last_scan), run ? [["Took", run.seconds.toFixed(1) + " s"], ["Extracted", num(run.extracted)], ["Failed", num(run.failed), run.failed ? "warn" : ""],
       ["Unreadable libraries", num((run.unreadable_libraries || []).length), (run.unreadable_libraries || []).length ? "bad" : ""]] : [], staleScan ? "warn" : ""),
@@ -78,6 +81,7 @@ function renderActions() {
     tags: "Make Calibre match every approved category set: adds and removes vocabulary tags. Preview lists each book; apply runs that list.",
     cleanup: "Remove non-subject tags (BISAC codes, publisher names, statuses, pasted descriptions) from Calibre.",
     convert: "Add an EPUB to every MOBI/AZW3-only book so it gets chapter citations.",
+    zotero: "Fetch what changed in the Zotero library since the last sync (it also runs on its own timer), and pin the citekeys of matched books.",
   };
   document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) =>
     '<div class="card action"><h3>' + esc(spec.title) + "</h3><p>" + esc(help[kind] || "") + "</p>" +

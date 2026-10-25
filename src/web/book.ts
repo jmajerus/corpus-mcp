@@ -45,12 +45,27 @@ function categoriesCard() {
   return '<div class="card"><h2>Categories ' + badge("category", c.state) + "</h2><div>In Calibre: " + calibre + "</div>" + pending + proposal + editor + "</div>";
 }
 
+// Where the book is in the Zotero mirror; title-only candidates get confirm and reject buttons.
+function zoteroRow() {
+  const z = book.zotero;
+  if (!z) return '<span class="note">not synced</span>';
+  const how = { calibre_uuid: "by its Calibre UUID", isbn: "by ISBN", confirmed: "confirmed by a person" };
+  if (z.match) return '<a href="' + esc(z.link) + '">' + esc(z.match.key) + "</a>" + (z.match.citekey ? " · " + esc(z.match.citekey) : ' · <span class="note">no citekey</span>') +
+    ' <span class="note">' + esc(how[z.match.matched_by] || z.match.matched_by) + "</span>";
+  if (!z.candidates.length) return '<span class="note">not found</span>';
+  const dis = canWrite ? "" : " disabled";
+  return z.candidates.map((x) => '<div>Maybe <a href="' + esc(x.link) + '">' + esc(x.key) + "</a> " + esc(x.title || "") + (x.year ? " (" + x.year + ")" : "") + (x.citekey ? " · " + esc(x.citekey) : "") +
+    ' <button type="button" data-zkey="' + esc(x.key) + '" data-zaction="confirm"' + dis + ">This book</button>" +
+    ' <button type="button" data-zkey="' + esc(x.key) + '" data-zaction="reject"' + dis + ">Not this book</button></div>").join("");
+}
+
 function citekeyCard() {
   const k = book.citekey;
   const blockers = { unknown_author: "Calibre has no author", merged_authors: "an author record names several people", no_year: "Calibre has no year", malformed: "the proposed key is malformed" };
   const rows = [["State", badge("citekey", k.state)], ["Calibre identifier", k.calibre_identifier ? esc(k.calibre_identifier) : null],
     ["Pinned", k.pinned ? esc(k.pinned.citekey) + ' <span class="note">' + (k.pinned.pinned_by ? "by " + esc(k.pinned.pinned_by) + " · " : "") + esc(ago(k.pinned.pinned_at)) + "</span>" : null],
-    ["Proposed", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null]];
+    ["Proposed", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null],
+    ["Zotero", zoteroRow()]];
   const editor = '<div class="editor"><strong>Pin a citekey</strong><div class="note">The key the book was given when it was filed in a reference manager.</div><div class="row">' +
     '<input type="text" id="citekey" value="' + esc(k.pinned ? k.pinned.citekey : k.proposed || "") + '" aria-label="Citekey"' + (canWrite ? "" : " disabled") + ">" +
     '<button type="button" class="primary" id="pin"' + (canWrite ? "" : " disabled") + ">" + (k.pinned ? "Replace" : "Pin") + "</button>" +
@@ -113,7 +128,10 @@ document.getElementById("book").addEventListener("click", async (e) => {
   const t = e.target;
   if (t.dataset.remove) { desired = desired.filter((x) => x !== t.dataset.remove); renderDesired(); return; }
   try {
-    if (t.id === "addbtn") {
+    if (t.dataset.zkey) {
+      const out = await post("/api/zotero/link", { book_id: id, key: t.dataset.zkey, action: t.dataset.zaction });
+      toast(t.dataset.zaction === "confirm" ? "Linked" + (out.pinned.length ? " and pinned " + out.pinned.join(", ") : "") + "." : "Marked as not this book."); await load();
+    } else if (t.id === "addbtn") {
       const value = document.getElementById("addcat").value.trim().toLowerCase();
       const match = [...LABELS].find(([tag, label]) => tag === value || label.toLowerCase() === value);
       if (!match) { toast("Not in the vocabulary."); return; }

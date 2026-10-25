@@ -20,10 +20,12 @@ import { DASHBOARD_HTML } from "./web/dashboard.js";
 import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
 import { PROPOSALS_HTML } from "./web/proposals.js";
 import { QUOTE_HTML, QUOTES_HTML, READER_HTML } from "./web/quotes.js";
+import { ZOTERO_HTML } from "./web/zotero.js";
 import {
   getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport,
 } from "./tagging.js";
 import { VocabularySource } from "./vocabulary.js";
+import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
@@ -54,6 +56,13 @@ function run(body: () => CallToolResult): CallToolResult {
 }
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+
+/** Adds the Zotero mirror's view of the book to a citation: its item, or a warning before filing a copy. */
+function withZotero<T extends { warnings: string[] }>(c: Corpus, bookId: string, cite: T) {
+  const info = zoteroCiteInfo(c, getBook(c, bookId));
+  if (!info) return cite;
+  return { ...cite, zotero: info.zotero, zotero_synced_at: info.synced_at, warnings: info.note ? [...cite.warnings, info.note] : cite.warnings };
+}
 
 export function createServer(c: Corpus): McpServer {
   const server = new McpServer({ name: "corpus-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
@@ -207,7 +216,10 @@ export function createServer(c: Corpus): McpServer {
     description: "The quote's verified text and a readable locator (quote_locator), with its citation as cite_passage returns it for the quote's pages: a CSL JSON item, a CSL locator, and filing data.",
     inputSchema: { id: z.number().int() },
     annotations: { title: "Cite a quote", ...readOnly },
-  }, ({ id }) => run(() => json(citeQuote(c, id))));
+  }, ({ id }) => run(() => {
+    const cite = citeQuote(c, id);
+    return json(withZotero(c, cite.citekey ?? getQuote(c, id).current_book_id!, cite));
+  }));
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",
@@ -257,7 +269,7 @@ export function createServer(c: Corpus): McpServer {
       end_page: page.optional().describe("Last page, if the passage spans pages"),
     },
     annotations: { title: "Cite a book", ...readOnly },
-  }, (args) => run(() => json(citePassage(c, args))));
+  }, (args) => run(() => json(withZotero(c, args.book_id, citePassage(c, args)))));
 
   server.registerTool("pin_citekey", {
     title: "Pin a book's citekey",
@@ -326,6 +338,8 @@ export interface WebOptions {
   accessKeys?: JWTVerifyGetKey;
   /** Job processes (tests); production runs systemctl and ssh. */
   jobCommands?: JobCommands;
+  /** false: no background Zotero sync (tests run it through the job). */
+  zoteroTimer?: boolean;
 }
 
 interface Web { c: Corpus; config: Config; runner: JobRunner; options: WebOptions }
@@ -356,7 +370,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     const pages: Record<string, string> = {
       "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
-      "/admin/quotes": QUOTES_HTML,
+      "/admin/quotes": QUOTES_HTML, "/admin/zotero": ZOTERO_HTML,
     };
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages)?$/);
     const quotePath = path.match(/^\/api\/quotes\/(\d+)(\/delete)?$/);
@@ -442,6 +456,14 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     } else if (req.method === "GET" && path === "/api/categories") sendJson(res, 200, adminCategories(c));
     else if (req.method === "GET" && path === "/api/vocabulary/report") sendJson(res, 200, vocabularyReport(c));
     else if (req.method === "GET" && path === "/api/citekeys") sendJson(res, 200, adminCitekeys(c));
+    else if (req.method === "GET" && path === "/api/zotero") sendJson(res, 200, zoteroReport(c, config.zotero));
+    else if (req.method === "POST" && path === "/api/zotero/link") {
+      const by = await writer();
+      if (by === null) return;
+      const body = (await readJson(req)) as { book_id?: string; key?: string; action?: string };
+      if (!body.book_id || !body.key) throw new ToolError("Send book_id, key, and action.");
+      sendJson(res, 200, linkZotero(c, { book_id: body.book_id, key: body.key, action: oneOf(body.action ?? "", ["confirm", "reject", "clear"] as const) ?? "confirm" }, by));
+    }
     else if (req.method === "GET" && path === "/api/shelves") sendJson(res, 200, listShelves(c));
     else if (req.method === "GET" && path === "/api/changes") {
       const p = url.searchParams;
@@ -507,10 +529,16 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const corpus = openCorpus(config);
   const { db } = corpus;
   const fullConfig: Config = { ...config, admin: config.admin ?? loadConfig({}).admin };
+  // The mirror syncs in the background on its own timer; the dashboard's job shares the same sync.
+  const zotero = fullConfig.zotero ? new ZoteroSync(corpus, fullConfig.zotero) : null;
+  const commands = options.jobCommands ?? systemCommands(fullConfig.admin!);
   const web: Web = {
     c: corpus, config: fullConfig, options,
-    runner: new JobRunner(corpus, fullConfig, options.jobCommands ?? systemCommands(fullConfig.admin!)),
+    runner: new JobRunner(corpus, fullConfig, {
+      ...commands, ...(zotero && !commands.zotero ? { zotero: async (log: (text: string) => void) => { await zotero.run(log); } } : {}),
+    }),
   };
+  if (zotero && options.zoteroTimer !== false) zotero.start();
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/health") {

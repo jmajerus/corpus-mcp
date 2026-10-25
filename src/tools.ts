@@ -547,7 +547,7 @@ export function citePassage(c: Corpus, args: CiteArgs) {
 export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
 
 /** Records a citekey assigned elsewhere (when the book was filed in a reference manager), against the book's Calibre UUID. */
-export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" = "agent") {
+export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" | "zotero" = "agent") {
   const book = getBook(c, args.book_id);
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so its citekey cannot be pinned.`);
   // Kept as given: another project's keys may use capitals (Better BibTeX's nyeFuturePower2011). Lookups ignore case.

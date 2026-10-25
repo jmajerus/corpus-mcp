@@ -1,3 +1,4 @@
+import { zoteroItemLink, zoteroMatch, zoteroSynced } from "./zotero.js";
 import type { Config } from "./config.js";
 import { allPinned, pinnedByUuid, queryChanges } from "./data.js";
 import { validIsbn } from "./isbn.js";
@@ -113,7 +114,12 @@ export function adminBook(c: Corpus, config: Config, id: string) {
   const approved = proposal?.status === "approved" ? (JSON.parse(proposal.approved_tags ?? "[]") as string[]) : null;
   const admin = config.admin;
   const reason = suspectTagReason(c);
+  const zotero = zoteroSynced(c) ? zoteroMatch(c, b) : null;
   return {
+    zotero: zotero && {
+      ...zotero, link: zotero.match ? zoteroItemLink(config.zotero?.library, zotero.match.key) : null,
+      candidates: zotero.candidates.map((x) => ({ ...x, link: zoteroItemLink(config.zotero?.library, x.key) })),
+    },
     book_id: b.id, library: b.library, calibre_id: b.calibre_id, uuid: b.uuid, title: b.title, authors: JSON.parse(b.authors) as string[],
     author_sorts: JSON.parse(b.author_sorts) as string[], publisher: b.publisher, year: b.year, language: b.language,
     description: b.description, status: b.status, error: b.error,

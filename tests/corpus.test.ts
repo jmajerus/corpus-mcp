@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readCatalogue } from "../src/calibre.js";
 import { chunkPage } from "../src/chunk.js";
@@ -9,13 +11,14 @@ import type { Config } from "../src/config.js";
 import { bookBibtex } from "../src/bibtex.js";
 import { type CslItem, type PresetName, proposeCitekey as ruleKey, citekeyWellFormed } from "@jmajerus/citekey";
 import { calibreCsl, proposeCitekey } from "../src/citekey.js";
-import { type Change, type DataStore, backupDataStore, notYetLogged, openDataStore, queryChanges, recordChanges } from "../src/data.js";
+import { type Change, type DataStore, backupDataStore, notYetLogged, openDataStore, pinnedByUuid, queryChanges, recordChanges } from "../src/data.js";
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
 import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
 import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport } from "../src/tagging.js";
+import { type ZoteroConfig, linkZotero, syncZotero, zoteroCiteInfo, zoteroMatch, zoteroReport } from "../src/zotero.js";
 import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
@@ -1016,3 +1019,89 @@ describe("quotes", () => {
 function getBookRow(id: string) {
   return db.prepare("SELECT * FROM books WHERE id = ?").get(id) as Parameters<typeof quotesOnPages>[1];
 }
+
+describe("zotero mirror", () => {
+  // A stand-in Zotero Web API: items with versions, a deletion log, pages of two, and one 429 first.
+  interface Item { key: string; version: number; data: Record<string, unknown> }
+  let api: http.Server;
+  let items: Map<string, Item>;
+  let deleted: { key: string; version: number }[];
+  let libraryVersion: number;
+  let requests: string[];
+  let throttle: number;
+  let zconfig: ZoteroConfig;
+  const put = (key: string, data: Record<string, unknown>) => {
+    libraryVersion++;
+    items.set(key, { key, version: libraryVersion, data: { key, itemType: "book", ...data } });
+  };
+
+  beforeEach(async () => {
+    scanLibraries(config, db);
+    items = new Map(); deleted = []; libraryVersion = 0; requests = []; throttle = 1;
+    put("AAAA1111", { title: "Networks", date: "1986", creators: [{ creatorType: "author", lastName: "Author", firstName: "Ann" }], extra: "Calibre UUID: uuid-1", citationKey: "author1986networks" });
+    put("BBBB2222", { title: "Strength in Numbers", date: "2000", creators: [{ creatorType: "author", lastName: "Fixed", firstName: "Fay" }], extra: "Citation Key: fixed2000strengtha\nCalibre UUID: uuid-6" });
+    put("CCCC3333", { title: "Echoes: A Study", creators: [{ creatorType: "author", lastName: "Writer", firstName: "Cy" }], citationKey: "writer2010echoes" });
+    put("DDDD4444", { itemType: "note", note: "a standalone note" });
+    put("EEEE5555", { title: "Weak Ties Revisited", extra: "Calibre UUID: uuid-5", citationKey: "one2001weak", deleted: 1 });
+    api = http.createServer((req, res) => {
+      const url = new URL(req.url!, "http://x");
+      requests.push(`${url.pathname}?${url.searchParams}`);
+      if (req.headers["zotero-api-key"] !== "k") return void res.writeHead(403).end();
+      if (throttle-- > 0) return void res.writeHead(429, { "retry-after": "0" }).end();
+      const since = Number(url.searchParams.get("since") ?? 0);
+      const headers = { "content-type": "application/json", "last-modified-version": String(libraryVersion) };
+      if (url.pathname === "/users/1/items/top") {
+        const changed = [...items.values()].filter((i) => i.version > since);
+        const start = Number(url.searchParams.get("start") ?? 0);
+        return void res.writeHead(200, { ...headers, "total-results": String(changed.length) }).end(JSON.stringify(changed.slice(start, start + 2)));
+      }
+      if (url.pathname === "/users/1/deleted") return void res.writeHead(200, headers).end(JSON.stringify({ items: deleted.filter((d) => d.version > since).map((d) => d.key) }));
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    zconfig = { library: "users/1", apiKey: "k", apiBase: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, intervalMinutes: 30 };
+  });
+
+  afterEach(() => new Promise<void>((r) => api.close(() => r())));
+
+  it("mirrors the library in pages, matches books, pins their keys, and reports what needs a person", async () => {
+    const first = await syncZotero(c, zconfig);
+    expect(first).toEqual({ full: true, fetched: 5, removed: 0, version: 5, pinned: ["author1986networks"] });
+    // One 429 was retried; then three pages of two.
+    expect(requests.filter((r) => r.startsWith("/users/1/items/top")).map((r) => new URLSearchParams(r.split("?")[1]).get("start"))).toEqual(["0", "0", "2", "4"]);
+    expect(pinnedByUuid(data, "uuid-1")).toMatchObject({ citekey: "author1986networks", pinned_by: "zotero:AAAA1111" });
+    expect(queryChanges(data, { sources: ["zotero"] }).rows.map((r) => (r as Change).kind)).toEqual(["citekey_pinned"]);
+
+    const report = zoteroReport(c, zconfig);
+    expect(report.books).toMatchObject({ calibre_uuid: 2, isbn: 0, confirmed: 0, candidates: 1 });
+    expect(report.sync).toMatchObject({ version: 5, items: 4, trashed: 1, error: null });
+    expect(report.candidates).toEqual([{ book_id: "main:2", title: "Echoes", year: null, candidates: [{ key: "CCCC3333", citekey: "writer2010echoes", title: "Echoes: A Study", year: null }] }]);
+    expect(report.mismatches).toEqual([{ book_id: "main:6", title: "Strength in Numbers", zotero_key: "BBBB2222", matched_by: "calibre_uuid", calibre: "fixed2000strength", zotero_citekey: "fixed2000strengtha" }]);
+    // The trashed item and the note match nothing; library:7, a copy of Networks, is not offered A (filed for main:1).
+    expect(zoteroMatch(c, getBookRow("main:5")).match).toBeNull();
+    expect(zoteroMatch(c, getBookRow("library:7")).candidates).toEqual([]);
+    expect(zoteroCiteInfo(c, getBookRow("main:2"))?.note).toMatch(/1 item\(s\) with this title and author \(CCCC3333\)/);
+    expect(zoteroCiteInfo(c, getBookRow("main:1"))).toMatchObject({ zotero: { key: "AAAA1111", matched_by: "calibre_uuid" }, note: expect.stringMatching(/don't file it again/) });
+
+    // Incremental: only what changed since version 5, and the deletion log.
+    items.delete("AAAA1111"); libraryVersion++; deleted.push({ key: "AAAA1111", version: libraryVersion });
+    put("GGGG7777", { title: "Networks (2nd printing)", ISBN: "0-00-000000-X 9780000000002", citationKey: "author1986networks" });
+    requests = [];
+    expect(await syncZotero(c, zconfig)).toEqual({ full: false, fetched: 1, removed: 1, version: 7, pinned: [] });
+    expect(requests).toEqual(["/users/1/items/top?format=json&includeTrashed=1&since=5&limit=100&start=0", "/users/1/deleted?since=5"]);
+    expect(zoteroMatch(c, getBookRow("main:1")).match).toMatchObject({ key: "GGGG7777", matched_by: "isbn" });
+
+    // A person settles the candidate: rejecting hides it; confirming links and pins.
+    expect(linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "reject" }, "me").candidates).toEqual([]);
+    linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "clear" }, "me");
+    expect(linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "confirm" }, "me")).toMatchObject({ pinned: ["writer2010echoes"], match: { matched_by: "confirmed" } });
+  });
+
+  it("keeps the last error and the library version when a sync fails", async () => {
+    await syncZotero(c, zconfig);
+    await expect(syncZotero(c, { ...zconfig, apiKey: "wrong" })).rejects.toThrow(/refused the API key/);
+    expect(zoteroReport(c, zconfig).sync).toMatchObject({ version: 5, error: expect.stringMatching(/refused the API key/) });
+    await syncZotero(c, zconfig);
+    expect(zoteroReport(c, zconfig).sync.error).toBeNull();
+  });
+});

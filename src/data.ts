@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 8;
+export const DATA_SCHEMA_VERSION = 9;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -99,6 +99,38 @@ CREATE TABLE IF NOT EXISTS quotes (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS quotes_book ON quotes(calibre_uuid, start_page);
+
+-- A read-only mirror of the Zotero library's top-level items (src/zotero.ts): the fields that tie a
+-- Calibre book to its Zotero item, refreshed by version so nothing waits on zotero.org.
+CREATE TABLE IF NOT EXISTS zotero_items (
+  key TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  item_type TEXT NOT NULL,
+  title TEXT,
+  title_norm TEXT,                   -- normalizedTitle(), for candidate matches
+  first_creator TEXT,                -- the first author's (or editor's) family name, folded
+  year INTEGER,
+  citekey TEXT,                      -- Better BibTeX's, from the citationKey field or Extra
+  calibre_uuid TEXT,                 -- the "Calibre UUID:" line filing wrote to Extra
+  trashed INTEGER NOT NULL DEFAULT 0,
+  synced_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS zotero_items_uuid ON zotero_items(calibre_uuid);
+CREATE INDEX IF NOT EXISTS zotero_items_title ON zotero_items(title_norm);
+CREATE TABLE IF NOT EXISTS zotero_isbns (
+  isbn TEXT NOT NULL,                -- ISBN-13
+  key TEXT NOT NULL,
+  PRIMARY KEY (isbn, key)
+);
+-- A person's verdict on a title-only match: this Zotero item is (or is not) this Calibre book.
+CREATE TABLE IF NOT EXISTS zotero_links (
+  calibre_uuid TEXT NOT NULL,
+  zotero_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('confirmed', 'rejected')),
+  linked_by TEXT,
+  linked_at TEXT NOT NULL,
+  PRIMARY KEY (calibre_uuid, zotero_key)
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(
   text, note, labels, content='quotes', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
 );
@@ -168,9 +200,10 @@ export const CHANGE_KINDS = [
   "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "citekey_pinned",
   "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
+  "zotero_linked",
 ] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
-export type ChangeSource = "admin-job" | "admin" | "cli" | "calibre" | "review" | "agent";
+export type ChangeSource = "admin-job" | "admin" | "cli" | "calibre" | "review" | "agent" | "zotero";
 
 export interface Change {
   kind: ChangeKind; source: ChangeSource; job_id?: number | null; book_id?: string | null; calibre_uuid?: string | null;

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { DEFAULT_PRESET, type PresetName, isPreset } from "./citekey.js";
+import type { ZoteroConfig } from "./zotero.js";
 import type { AccessConfig } from "./access.js";
 
 /** Settings for the /admin dashboard; every field has a default, so tests and older configs can omit it. */
@@ -37,6 +38,8 @@ export interface Config {
   shelvesLibrary: string;
   /** The @jmajerus/citekey preset for proposed citekeys. */
   citekeyPreset: PresetName;
+  /** A Zotero library to mirror read-only (src/zotero.ts); off when no API key is set. */
+  zotero?: ZoteroConfig;
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
   admin?: AdminConfig;
@@ -51,6 +54,16 @@ function citekeyPreset(name: string | undefined): PresetName {
   if (!name) return DEFAULT_PRESET;
   if (!isPreset(name)) throw new Error(`CORPUS_CITEKEY_PRESET "${name}" is not a citekey preset (author-year-word, bbt-default).`);
   return name;
+}
+
+function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
+  if (!env.CORPUS_ZOTERO_API_KEY) return undefined;
+  const library = env.CORPUS_ZOTERO_LIBRARY ?? "";
+  if (!/^(users|groups)\/\d+$/.test(library)) throw new Error(`CORPUS_ZOTERO_LIBRARY "${library}" should be "users/<user id>" or "groups/<group id>".`);
+  return {
+    library, apiKey: env.CORPUS_ZOTERO_API_KEY, apiBase: env.CORPUS_ZOTERO_API ?? "https://api.zotero.org",
+    intervalMinutes: Number(env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? 30) || 30,
+  };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -68,6 +81,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     shelvesFile: path.resolve(env.CORPUS_SHELVES_FILE ?? "/var/lib/corpus-mcp/shelves.json"),
     shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
     citekeyPreset: citekeyPreset(env.CORPUS_CITEKEY_PRESET),
+    zotero: zoteroConfig(env),
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
       access: { teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined },
