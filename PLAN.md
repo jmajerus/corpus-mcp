@@ -250,6 +250,25 @@ also accepts a citekey. `corpus_status` reports key readiness: books ready
 for a key, and books blocked by an unknown author, missing year, or
 malformed sort name.
 
+**Printed ISBNs.** When Calibre has no valid ISBN, the indexer scans the
+first 20 and last 5 pages for ISBNs (`src/isbn.ts`; a regex plus the
+checksum, without isbntools). A match counts if it follows "ISBN" or is a
+978/979 ISBN-13. Each distinct ISBN keeps:
+
+- its page
+- `position`: `front`, or `back`, where it is often an advert
+- the printed line
+- a binding label, read from a parenthetical after the ISBN, then the text
+  before it, then the text after it
+
+The results are stored with `ISBN_SCAN_VERSION`, so a heuristic change
+recomputes them without re-extracting text. `cite_passage` returns them as
+`isbn_candidates`, never as a filing, because a copyright page often lists
+several editions and the right one is the edition held. Online lookup by
+title is deliberately skipped: it uses the same sources as Zotero's ISBN
+lookup and often returns a different edition. Live: 340 of the 434 books
+without a Calibre ISBN print at least one.
+
 **Needs from Concept Clusters.**
 
 - `file_zotero_reference` accepts `bibtex` (one `@book` entry). It files

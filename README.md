@@ -48,6 +48,13 @@ Pinned keys live in `data.db`, which unlike the index is never rebuilt and is
 backed up nightly. `corpus_status` lists books whose metadata blocks a key:
 an unknown author, no year, or one author record naming several people.
 
+When Calibre has no valid ISBN, `cite_passage` also returns `isbn_candidates`.
+These are the checksum-valid ISBNs printed in the book's first and last pages,
+each with its page, the printed line, and its binding (hardcover, paperback,
+or ebook) when one is printed beside it. Copyright pages often list several
+editions, and back pages often advertise other books, so these are offered for
+someone to confirm, never filed automatically.
+
 ## Locators
 
 - **PDF.** Pages are physical pages. Each page also keeps its printed label

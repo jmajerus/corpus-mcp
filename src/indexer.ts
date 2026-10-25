@@ -4,6 +4,7 @@ import path from "node:path";
 import { type BookMetadata, type CatalogueEntry, readCatalogue } from "./calibre.js";
 import { chunkPage } from "./chunk.js";
 import { proposeCitekey } from "./citekey.js";
+import { ISBN_SCAN_VERSION, findPrintedIsbns } from "./isbn.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
@@ -143,6 +144,8 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
     }
   }
 
+  fillDerivedColumns(db);
+
   const stale = (db.prepare("SELECT id FROM books").pluck().all() as string[]).filter((id) => !seen.has(id));
   db.transaction(() => {
     for (const id of stale) {
@@ -153,6 +156,34 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
   summary.removed = stale.length;
   setMeta(db, "last_scan", new Date().toISOString());
   return summary;
+}
+
+/** Copyright pages sit in the front matter, or at the back of some ebooks. */
+const FRONT_PAGES = 20;
+const BACK_PAGES = 5;
+
+/**
+ * Columns computed from the stored page text, filled for books extracted since the last scan or
+ * computed by older rules, so the server never scans page text to answer a status request.
+ */
+function fillDerivedColumns(db: DB): void {
+  db.prepare(`
+    UPDATE books SET text_chars = (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM pages p WHERE p.book_id = books.id)
+    WHERE status = 'indexed' AND text_chars IS NULL`).run();
+  const books = db.prepare(`
+    SELECT id, page_count FROM books
+    WHERE status = 'indexed' AND (printed_isbns_version IS NULL OR printed_isbns_version != ?)`)
+    .all(ISBN_SCAN_VERSION) as { id: string; page_count: number }[];
+  const pages = db.prepare(`
+    SELECT page_index, label, text FROM pages
+    WHERE book_id = ? AND (page_index < ? OR page_index >= ?) ORDER BY page_index`);
+  const update = db.prepare("UPDATE books SET printed_isbns = ?, printed_isbns_version = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const book of books) {
+      const text = pages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; label: string | null; text: string }[];
+      update.run(JSON.stringify(findPrintedIsbns(text, book.page_count, BACK_PAGES)), ISBN_SCAN_VERSION, book.id);
+    }
+  })();
 }
 
 function clearContent(db: DB, id: string): void {
@@ -176,6 +207,7 @@ function writeBook(db: DB, id: string, library: string, folder: string, m: BookM
     id, library, folder, ...metadataColumns(m),
     format: null, file_path: null, file_size: null, file_mtime: null, sha256: null,
     extractor_version: EXTRACTOR_VERSION, reflowable: null, page_count: null, error: null,
+    printed_isbns: null, printed_isbns_version: null, text_chars: null,
     indexed_at: new Date().toISOString(), ...fields,
   };
   const columns = Object.keys(row);

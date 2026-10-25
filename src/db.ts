@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS books (
   calibre_citekey TEXT,              -- Calibre identifier "citekey", set by hand
   proposed_citekey TEXT,             -- Concept Clusters' rule applied to the metadata
   citekey_blockers TEXT NOT NULL DEFAULT '[]', -- JSON array of CitekeyBlocker
+  printed_isbns TEXT,                -- JSON array of IsbnCandidate found in the text; null until scanned
+  printed_isbns_version INTEGER,     -- ISBN_SCAN_VERSION that produced printed_isbns
+  text_chars INTEGER,                -- total extracted characters; null until counted
   tags TEXT NOT NULL,                -- JSON array
   description TEXT,
   folder TEXT NOT NULL,              -- relative to the books root
@@ -105,6 +108,9 @@ const ADDED_BOOK_COLUMNS: Record<string, string> = {
   calibre_citekey: "TEXT",
   proposed_citekey: "TEXT",
   citekey_blockers: "TEXT NOT NULL DEFAULT '[]'",
+  printed_isbns: "TEXT",
+  printed_isbns_version: "INTEGER",
+  text_chars: "INTEGER",
 };
 
 function migrate(db: DB): void {

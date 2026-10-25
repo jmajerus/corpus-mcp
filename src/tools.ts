@@ -6,6 +6,9 @@ import { CITEKEY_PATTERN, type CitekeyBlocker } from "./citekey.js";
 import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUuid } from "./data.js";
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
+import { type IsbnCandidate, validIsbn } from "./isbn.js";
+
+export { validIsbn };
 
 /**
  * Tool implementations over the index. Pages are 1-based in every input and output.
@@ -22,7 +25,7 @@ export interface Corpus { db: DB; data: DataStore; booksRoot: string }
 interface BookRow {
   id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;
   publisher: string | null; year: number | null; language: string | null; isbn: string | null;
-  calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; tags: string;
+  calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; printed_isbns: string | null; tags: string;
   format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
   page_count: number | null; status: string; error: string | null;
 }
@@ -301,26 +304,17 @@ function joinAuthors(authors: string[]): string | undefined {
   return `${authors.slice(0, -1).join(", ")}, and ${authors.at(-1)}`;
 }
 
-/** Strips hyphens, spaces, and an "ISBN" prefix; returns the digits if the ISBN-10 or ISBN-13 check digit holds. */
-export function validIsbn(raw: string): string | null {
-  const isbn = raw.replace(/^isbn(-1[03])?:?/i, "").replace(/[\s-]/g, "").toUpperCase();
-  if (/^\d{9}[\dX]$/.test(isbn)) {
-    const sum = [...isbn].reduce((total, c, i) => total + (c === "X" ? 10 : Number(c)) * (10 - i), 0);
-    return sum % 11 === 0 ? isbn : null;
-  }
-  if (/^\d{13}$/.test(isbn)) {
-    const sum = [...isbn].reduce((total, c, i) => total + Number(c) * (i % 2 ? 3 : 1), 0);
-    return sum % 10 === 0 ? isbn : null;
-  }
-  return null;
-}
-
 const BLOCKER_FIXES: Record<CitekeyBlocker, string> = {
   unknown_author: "Calibre has no author for this book.",
   merged_authors: "One Calibre author record names several people (Calibre shows commas inside a name as \"|\"). Split it into separate authors in Calibre.",
   no_year: "Calibre has no publication year for this book.",
   malformed: "The proposed citekey is malformed; check the author and title in Calibre.",
 };
+
+/** The ISBNs the book's own text prints, found at index time. */
+function printedIsbns(book: BookRow): IsbnCandidate[] {
+  return book.printed_isbns ? (JSON.parse(book.printed_isbns) as IsbnCandidate[]) : [];
+}
 
 interface ZoteroFiling { tool: "file_zotero_reference"; arguments: { bibtex: string } | { isbn: string }; source: "calibre-metadata" | "isbn-lookup" }
 
@@ -382,17 +376,23 @@ export function citePassage(c: Corpus, args: CiteArgs) {
     warnings.push(...keys.citekey_blockers.map((b) => BLOCKER_FIXES[b]));
   }
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
+  let isbnCandidates: IsbnCandidate[] | undefined;
   if (isbn) {
     zoteroFiling.push({ tool: "file_zotero_reference", source: "isbn-lookup", arguments: { isbn } });
-  } else if (book.isbn) {
-    warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so file_zotero_reference will reject it. Correct it in Calibre first.`);
+  } else {
+    if (book.isbn) warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so file_zotero_reference will reject it. Correct it in Calibre first.`);
+    // Candidates only: copyright pages often list several editions, and the right one is the edition held.
+    isbnCandidates = printedIsbns(book);
+    if (isbnCandidates.length) {
+      warnings.push(`Calibre has no valid ISBN, but the book prints ${isbnCandidates.length} (isbn_candidates). Confirm the one for this edition (the file is ${book.format?.toUpperCase()}) before filing with file_zotero_reference({ isbn }), and add it to Calibre. ISBNs in the last pages (position "back") are often adverts for other books.`);
+    }
   }
   if (zoteroFiling.length) {
     warnings.push("To file the book in Zotero, try zotero_filing in order. ISBN lookups use Open Library or Google Books, so check the citation Zotero returns. Then call pin_citekey with the citekey file_zotero_reference returns.");
   } else {
     warnings.push("This book cannot be filed in Zotero yet. Fix the metadata in Calibre, or file it by DOI, URL, or item key.");
   }
-  return { citation, locator, ...keys, isbn: book.isbn, zotero_filing: zoteroFiling, warnings };
+  return { citation, locator, ...keys, isbn: book.isbn, isbn_candidates: isbnCandidates, zotero_filing: zoteroFiling, warnings };
 }
 
 export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
@@ -440,8 +440,7 @@ export function corpusStatus(c: Corpus) {
   const lastScan = db.prepare("SELECT value FROM meta WHERE key = 'last_scan'").pluck().get();
   const failed = db.prepare("SELECT id, title, error FROM books WHERE status = 'failed'").all();
   const noText = db.prepare(`
-    SELECT b.id, b.title, b.page_count FROM books b
-    WHERE b.status = 'indexed' AND (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM pages p WHERE p.book_id = b.id) < 20 * b.page_count`).all();
+    SELECT id, title, page_count FROM books WHERE status = 'indexed' AND text_chars < 20 * page_count`).all();
   const noOutline = db.prepare(`
     SELECT id, title, format FROM books b
     WHERE status = 'indexed' AND NOT EXISTS (SELECT 1 FROM outline o WHERE o.book_id = b.id)`).all();
@@ -452,6 +451,23 @@ export function corpusStatus(c: Corpus) {
     little_or_no_text: { note: "Probably scanned images without a text layer; they need OCR.", books: noText },
     no_outline: { note: "No chapter locators. For MOBI books, convert to EPUB in Calibre.", books: noOutline },
     citekeys: citekeyReadiness(c),
+    printed_isbns: printedIsbnReport(c),
+  };
+}
+
+/** Books Calibre has no valid ISBN for whose text prints one: candidates to confirm and add in Calibre. */
+function printedIsbnReport(c: Corpus) {
+  const books = (c.db.prepare("SELECT * FROM books WHERE status = 'indexed' ORDER BY id").all() as BookRow[])
+    .filter((b) => !(b.isbn && validIsbn(b.isbn)));
+  const found = books
+    .map((b) => ({ book_id: b.id, title: b.title, format: b.format, candidates: printedIsbns(b).map((x) => ({ isbn: x.isbn, format: x.format, page: x.page, position: x.position })) }))
+    .filter((b) => b.candidates.length);
+  return {
+    note: "Calibre has no valid ISBN for these books, but their text prints one. Confirm the edition held and add it in Calibre.",
+    books_without_isbn: books.length,
+    books_printing_isbn: found.length,
+    books: found.slice(0, 100),
+    ...(found.length > 100 ? { books_truncated: found.length - 100 } : {}),
   };
 }
 

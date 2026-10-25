@@ -9,6 +9,7 @@ import { calibreCitationData, proposeCitekey, proposedCitationKey } from "../src
 import { type DataStore, backupDataStore, openDataStore } from "../src/data.js";
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
+import { findPrintedIsbns } from "../src/isbn.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, pinCitekey, readBook, renderPage, searchCorpus,
@@ -221,10 +222,14 @@ describe("tools", () => {
     expect(() => renderPage(c, { book_id: "main:2", page: 1 })).toThrow(/no fixed pages/);
   });
 
-  it("reports status", () => {
+  it("reports status, including scans with no text layer", () => {
+    config.libraries.push("scans");
+    makeLibrary(root, "scans", [{ id: 9, title: "Scanned", authors: ["Hal Scan"], files: { pdf: makePdf({ pages: [[], [], []] }) } }]);
+    scanLibraries(config, db);
     const status = corpusStatus(c);
     expect(status.last_scan).not.toBeNull();
     expect(status.failed).toEqual([]);
+    expect(status.little_or_no_text.books).toEqual([{ id: "scans:9", title: "Scanned", page_count: 3 }]);
   });
 });
 
@@ -339,5 +344,62 @@ describe("citekeys", () => {
     const target = await backupDataStore(data, config.backupDir, 2);
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.readdirSync(config.backupDir).sort()).toEqual([path.basename(target), "data-2026-01-03.db"].sort());
+  });
+});
+
+describe("printed ISBNs", () => {
+  const page = (page_index: number, text: string) => ({ page_index, label: null, text });
+
+  it("finds every valid labelled ISBN once, with the binding printed beside it", () => {
+    const found = findPrintedIsbns([
+      page(0, "Title page"),
+      page(3, [
+        "Copyright © 2019 by the author. Printed on acid-free paper.",
+        "ISBN 978-0-306-40615-7 (hardcover) ISBN 978-1-4028-9462-6 (ebk.)",
+        "Paperback ISBN: 0-8044-2957-X",
+        "Library of Congress Control Number 2019123456 · Call 555-0123-4567",
+        "ISBN-13 978-0-306-40615-7 repeated",
+      ].join("\n")),
+    ]);
+    expect(found.map((f) => [f.isbn, f.format, f.page])).toEqual([
+      ["9780306406157", "hardcover", 4],
+      ["9781402894626", "ebook", 4],
+      ["080442957X", "paperback", 4],
+    ]);
+    expect(found[0].context).toContain("978-0-306-40615-7 (hardcover)");
+  });
+
+  it("reads a label printed before its ISBN, as on a list of editions", () => {
+    const found = findPrintedIsbns([page(10, "Hardcover print edition ISBN 978-1-57675-334-7 Paperback print edition ISBN 978-1-57675-584-6 "
+      + "PDF e-book ISBN 978-1-57675-606-8 Amazon Kindle e-book ISBN 978-1-57675-957-8")]);
+    // 606-8 is printed with a wrong check digit, so it is left out.
+    expect(found.map((f) => [f.isbn, f.format])).toEqual([
+      ["9781576753347", "hardcover"], ["9781576755846", "paperback"], ["9781576759578", "ebook"],
+    ]);
+  });
+
+  it("marks ISBNs in the last pages, which are often adverts for other books", () => {
+    const found = findPrintedIsbns([page(2, "ISBN 978-0-306-40615-7"), page(158, "Also available: ISBN 978-1-4028-9462-6")], 160);
+    expect(found.map((f) => f.position)).toEqual(["front", "back"]);
+  });
+
+  it("separates an ISBN from a number printed right after it", () => {
+    expect(findPrintedIsbns([page(1, "ISBN 0-306-40615-2 2019")]).map((f) => f.isbn)).toEqual(["0306406152"]);
+    expect(findPrintedIsbns([page(1, "ISBN-13 978-0-306-40615-7")]).map((f) => f.isbn)).toEqual(["9780306406157"]);
+  });
+
+  it("ignores unlabelled 10-digit runs that happen to pass the checksum", () => {
+    expect(findPrintedIsbns([page(1, "Order number 0306406152 today")])).toEqual([]);
+  });
+
+  it("offers printed ISBNs as candidates when Calibre has none, never as a filing", () => {
+    config.libraries.push("extra");
+    makeLibrary(root, "extra", [{ id: 8, title: "Printed", authors: ["Gil Print"], pubdate: "2019-01-01 00:00:00+00:00",
+      files: { pdf: makePdf({ pages: [["Printed"], ["ISBN 978-0-306-40615-7 (paperback)", "eISBN 978-1-4028-9462-6"], ["Body text"]] }) } }]);
+    scanLibraries(config, db);
+    const cite = citePassage(c, { book_id: "extra:8" });
+    expect(cite.isbn_candidates?.map((x) => [x.isbn, x.format])).toEqual([["9780306406157", "paperback"], ["9781402894626", null]]);
+    expect(cite.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata"]);
+    expect(corpusStatus(c).printed_isbns.books.map((b) => b.book_id)).toContain("extra:8");
   });
 });
