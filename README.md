@@ -285,5 +285,7 @@ The server also answers `GET /health`.
 scripts. [`tools/deploy.mjs`](tools/deploy.mjs) provisions a Debian LXC,
 installs releases with a health check, and rolls back on failure. Both are
 written for the author's own Proxmox network (`*.localdomain` hosts), so adapt
-the hostnames before using them elsewhere. [PLAN.md](PLAN.md) records the
+the hostnames before using them elsewhere. `npm run deploy` and
+`npm run tags:apply` read their settings from a gitignored `.env` (see
+[`.env.example`](.env.example)). [PLAN.md](PLAN.md) records the
 design decisions, the facts about the corpus, and the known issues.

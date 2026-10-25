@@ -155,7 +155,7 @@ A refresh with no changes takes 0.3 seconds.
    through the SDK client.
 3. **LXC deployment.** `tools/deploy.mjs` follows concept-clusters'
    `zotero-deploy`: it logs in over SSH as `authoring`, using
-   `AUTHORING_DEPLOY_PASSWORD` from `../concept-clusters/.env`, and runs one
+   `AUTHORING_DEPLOY_PASSWORD` from corpus-mcp's `.env` (formerly `../concept-clusters/.env`), and runs one
    `sudo -S` per host.
    1. You create a Debian or Ubuntu LXC `corpus-mcp.localdomain` with the
       `authoring` sudo login and a disk of 20 GB or more.
@@ -562,8 +562,11 @@ adapts. Agreed with CC's agent, in order:
    deploy ships its build. Checked against the live catalogue before
    release: the same proposed key and blockers for all 510 books. Options
    added beyond the first draft: `order` (BBT puts the year last).
-4. **Own environment.** corpus-mcp's own `.env`, no longer
-   `../concept-clusters/.env`.
+4. **Own environment** (done 2026-10-25). corpus-mcp's own `.env`
+   (gitignored; `.env.example` lists the settings), no longer
+   `../concept-clusters/.env`. It holds the authoring password and
+   `CORPUS_VOCABULARY_SOURCE`, so every deploy also installs CC's latest
+   export.
 
 ## Admin dashboard (2026-10-25)
 

@@ -8,8 +8,8 @@
     "test": "vitest run",
     "index": "tsx src/cli.ts index",
     "serve": "tsx src/cli.ts serve",
-    "deploy": "node --env-file-if-exists=../concept-clusters/.env tools/deploy.mjs",
-    "tags:apply": "node --env-file-if-exists=../concept-clusters/.env tools/apply-tags.mjs"
+    "deploy": "node --env-file-if-exists=.env tools/deploy.mjs",
+    "tags:apply": "node --env-file-if-exists=.env tools/apply-tags.mjs"
   },
   "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": {

@@ -29,7 +29,7 @@ const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source
                   A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set.
   --skip-tests    deploy without running the test suite first
 
-Needs AUTHORING_DEPLOY_PASSWORD (npm run deploy loads ../concept-clusters/.env when present).`;
+Needs AUTHORING_DEPLOY_PASSWORD (npm run deploy loads .env when present; see .env.example).`;
 
 const password = process.env.AUTHORING_DEPLOY_PASSWORD;
 
