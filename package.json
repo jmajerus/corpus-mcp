@@ -11,7 +11,7 @@
     "deploy": "node --env-file-if-exists=../concept-clusters/.env tools/deploy.mjs",
     "tags:apply": "node --env-file-if-exists=../concept-clusters/.env tools/apply-tags.mjs"
   },
-  "license": "UNLICENSED",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": {
     "@jmajerus/citekey": "1.0.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
