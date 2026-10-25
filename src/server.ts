@@ -152,27 +152,23 @@ export function createServer(c: Corpus): McpServer {
       text: z.string().min(1).max(2000).describe("The passage, as close to the book's wording as possible"),
       page: page.optional().describe("Page or location where the passage starts"),
       note: z.string().max(2000).optional().describe("Why the passage matters"),
-      categories: z.array(z.string()).max(5).optional().describe("Subject categories chosen for this passage: vocabulary categories, slug or title. Give at most one of categories, use_book_categories, and no_category; give none to leave the choice undecided for a person to review later."),
-      use_book_categories: z.boolean().optional().describe("File the quote under its book's categories (and follow them if the book is re-categorized), when the passage is about what the book is about"),
-      no_category: z.boolean().optional().describe("The passage belongs to no subject category (a parable, a reflection on a theme); its tags describe it"),
-      labels: z.array(z.string()).max(20).optional().describe('Free-form tags: themes ("compassion", "overwork"), forms ("parable", "epigraph"), or links ("cc:puzzle:<puzzle id>"). Reuse existing tags (search_quotes lists them).'),
+      labels: z.array(z.string()).max(20).optional().describe('Tags: themes ("compassion", "overwork"), forms ("parable", "epigraph"), or links ("cc:puzzle:<puzzle id>"). Quotes have no categories of their own; the book gives the subject, so tag what is finer. Reuse existing tags (search_quotes lists them).'),
     },
     annotations: { title: "Save a quote", ...writes },
   }, (args, extra) => run(() => json(saveQuote(c, args, accessEmail(extra), "agent"))));
 
   server.registerTool("search_quotes", {
     title: "Search quotes",
-    description: "Find saved quotes by words in their text, note, or labels, and by book, author, category (including subcategories), label, or status.",
+    description: "Find saved quotes by words in their text, note, or tags, and by book, author, their book's category (including subcategories), tag, or status. The result lists every tag in use with its count.",
     inputSchema: {
       query: z.string().optional(), book_id: bookId.optional(), author: z.string().optional(),
-      category: z.string().optional().describe("A vocabulary category, slug or title; includes those below it"),
-      label: z.string().optional(), status: z.enum(["verified", "orphaned"]).optional(),
-      category_mode: z.enum(["undecided", "book", "own", "tags_only"]).optional().describe('"undecided": quotes whose categories still need a decision'),
+      category: z.string().optional().describe("The book's vocabulary category, slug or title; includes those below it"),
+      label: z.string().optional().describe("A tag"), status: z.enum(["verified", "orphaned"]).optional(),
       limit: z.number().int().min(1).max(200).optional(),
     },
     annotations: { title: "Search quotes", ...readOnly },
   }, (args) => run(() => json(searchQuotes(c, {
-    q: args.query, book: args.book_id, author: args.author, category: args.category, label: args.label, status: args.status, category_mode: args.category_mode, limit: args.limit,
+    q: args.query, book: args.book_id, author: args.author, category: args.category, label: args.label, status: args.status, limit: args.limit,
   }))));
 
   server.registerTool("get_quote", {
@@ -184,12 +180,9 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("update_quote", {
     title: "Update a quote",
-    description: "Change a quote's note, categories, or labels. The quoted text cannot change; save a new quote instead.",
+    description: "Change a quote's note or tags. The quoted text cannot change; save a new quote instead.",
     inputSchema: {
       id: z.number().int(), note: z.string().max(2000).nullable().optional(),
-      categories: z.array(z.string()).max(5).optional().describe("Sets the passage's own categories; an empty list makes them undecided again"),
-      use_book_categories: z.boolean().optional().describe("Files the quote under its book's categories instead"),
-      no_category: z.boolean().optional().describe("Marks the quote as belonging to no subject category; its tags describe it"),
       labels: z.array(z.string()).max(20).optional().describe("Replaces the quote's tags"),
     },
     annotations: { title: "Update a quote", ...writes, idempotentHint: true },
@@ -388,19 +381,17 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       sendJson(res, 200, searchQuotes(c, {
         q: text("q"), book: text("book"), author: text("author"), category: text("category"), label: text("label"),
         status: oneOf(p.get("status"), ["verified", "orphaned"] as const), by: text("by"), since: text("since"),
-        category_mode: oneOf(p.get("category_mode"), ["undecided", "book", "own", "tags_only"] as const),
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
       }));
     } else if (req.method === "GET" && quotePath && !quotePath[2]) sendJson(res, 200, getQuote(c, Number(quotePath[1])));
     else if (req.method === "POST" && path === "/api/quotes") {
       const by = await writer();
       if (by === null) return;
-      const body = (await readJson(req)) as { book_id?: string; text?: string; page?: number; note?: string; categories?: unknown; use_book_categories?: boolean; no_category?: boolean; labels?: unknown };
+      const body = (await readJson(req)) as { book_id?: string; text?: string; page?: number; note?: string; labels?: unknown };
       if (!body.book_id || !body.text) throw new ToolError("Send book_id and text.");
       const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
       sendJson(res, 200, saveQuote(c, {
-        book_id: body.book_id, text: body.text, page: body.page, note: body.note, categories: list(body.categories),
-        use_book_categories: body.use_book_categories === true, no_category: body.no_category === true, labels: list(body.labels),
+        book_id: body.book_id, text: body.text, page: body.page, note: body.note, labels: list(body.labels),
       }, by, "admin"));
     } else if (req.method === "POST" && quotePath) {
       const by = await writer();
@@ -408,9 +399,9 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const id = Number(quotePath[1]);
       if (quotePath[2]) sendJson(res, 200, deleteQuote(c, id, by, "admin"));
       else {
-        const body = (await readJson(req)) as { note?: string | null; categories?: unknown; use_book_categories?: boolean; no_category?: boolean; labels?: unknown };
+        const body = (await readJson(req)) as { note?: string | null; labels?: unknown };
         const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
-        sendJson(res, 200, updateQuote(c, { id, note: body.note, categories: list(body.categories), use_book_categories: body.use_book_categories, no_category: body.no_category, labels: list(body.labels) }, by, "admin"));
+        sendJson(res, 200, updateQuote(c, { id, note: body.note, labels: list(body.labels) }, by, "admin"));
       }
     }
     else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);

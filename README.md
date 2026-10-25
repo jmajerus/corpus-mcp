@@ -31,7 +31,7 @@ books that live in Calibre.
 | `tagging_worklist` | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Proposes 1–3 vocabulary tags for a book, for a person to review. |
 | `save_quote` | Saves a passage as a quote after checking it against the book; the book's exact wording is stored. |
-| `search_quotes`, `get_quote`, `update_quote`, `delete_quote` | Find, read, and edit saved quotes (note, categories, tags). |
+| `search_quotes`, `get_quote`, `update_quote`, `delete_quote` | Find, read, and edit saved quotes (note, tags). |
 | `cite_quote` | A quote's verified text and locator with its citation object. |
 | `corpus_status` | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
 
@@ -65,7 +65,7 @@ here too**, not just approve.
 | `/admin/books` | Every book, with filters for library, format, status, shelf, category, citekey, ISBN, and problems | — |
 | `/admin/books/<id>` | Metadata, categories, citekey, shelves, ISBNs, file, outline, quotes, and recent changes | The book's **categories** (complete set) and **citekey** (pin, replace, unpin) |
 | `/admin/books/<id>/read` | The book's text page by page, with saved quotes highlighted | **Select a passage to save it as a quote** |
-| `/admin/quotes`, `/admin/quotes/<id>` | Every quote, filtered by words, category, tag, author, and status; one quote in its surrounding text, with its citation | A quote's **note, categories, tags**; delete |
+| `/admin/quotes`, `/admin/quotes/<id>` | Every quote, filtered by words, tag, book category, author, and status; one quote in its surrounding text, with its citation | A quote's **note and tags**; delete |
 | `/admin/categories` | The vocabulary tree with book counts, and other tags | — |
 | `/admin/citekeys` | Pinned keys, and books ready or blocked | On each book page |
 | `/admin/proposals` | Agent proposals | Approve, edit, reject, reopen |
@@ -94,12 +94,12 @@ returned instead.
 
 Each quote records:
 - an anchor: its pages, offsets, and the text around it
-- categories from the vocabulary (including subcategories more specific than
-  its book's), chosen deliberately: undecided until reviewed, the book's,
-  its own, or none because its tags say enough
 - free-form tags for themes and forms (`overwork`, `parable`) and links
   (`cc:puzzle:<id>`), kept to one spelling each
 - a note
+
+Quotes have no categories of their own: the book gives the subject, and
+searching by category matches the source book's categories.
 
 When a book's file changes, its quotes are found again by their text, or
 marked orphaned; never deleted. Quotes live in `data.db` and are backed up

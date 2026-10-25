@@ -853,10 +853,10 @@ describe("quotes", () => {
   });
 
   it("saves the book's exact wording, found from the given page or anywhere", () => {
-    const saved = saveQuote(c, { book_id: "main:1", page: 3, text: "weak ties carry  novel information", note: "Granovetter's point", categories: ["Sociology"], labels: ["cc:puzzle:weak-ties", " "] }, "me@example.com", "admin");
+    const saved = saveQuote(c, { book_id: "main:1", page: 3, text: "weak ties carry  novel information", note: "Granovetter's point", labels: ["cc:puzzle:weak-ties", " "] }, "me@example.com", "admin");
     expect(saved).toMatchObject({ saved: true, exact: false, quote: {
       text: "Weak ties carry novel information", page: 3, page_label: "1", locator: "p. 1", section: "Part One › Chapter 1",
-      categories: [{ tag: "social-sciences.sociology" }], labels: ["cc:puzzle:weak-ties"], status: "verified", source: "admin",
+      labels: ["cc:puzzle:weak-ties"], status: "verified", source: "admin",
     } });
     // Wrong page: found anyway through the full-text index.
     expect(saveQuote(c, { book_id: "main:1", page: 1, text: "Structural holes separate" }, undefined, "agent")).toMatchObject({ saved: true, quote: { page: 5 } });
@@ -867,60 +867,39 @@ describe("quotes", () => {
     expect(missing).toMatchObject({ saved: false, reason: expect.stringMatching(/not found/) });
     expect((missing as { closest: unknown[] }).closest.length).toBeGreaterThan(0);
     expect(() => saveQuote(c, { book_id: "main:1", text: "x".repeat(2001) }, undefined, "agent")).toThrow(/limited to 2000/);
-    expect(() => saveQuote(c, { book_id: "main:1", text: "Weak ties", categories: ["Made Up"] }, undefined, "agent")).toThrow(/Not in the vocabulary/);
   });
 
   it("searches, edits, deletes, and cites quotes, logging each change", () => {
-    const a = saveQuote(c, { book_id: "main:1", page: 3, text: "Weak ties carry novel information", categories: ["social-sciences.sociology.social-change"], labels: ["Granovetter"] }, "me", "admin");
+    const a = saveQuote(c, { book_id: "main:1", page: 3, text: "Weak ties carry novel information", labels: ["Granovetter"] }, "me", "admin");
     saveQuote(c, { book_id: "main:2", page: 1, text: "The echo chamber amplifies familiar claims." }, "agent@x", "agent");
     const id = (a as { quote: { id: number } }).quote.id;
     expect(searchQuotes(c, {}).total).toBe(2);
     expect(searchQuotes(c, { q: "novel" }).quotes.map((q) => q.id)).toEqual([id]);
-    expect(searchQuotes(c, { category: "Sociology" }).total).toBe(1);
-    expect(searchQuotes(c, { category: "social-sciences" }).total).toBe(1);
     expect(searchQuotes(c, { label: "granovetter" }).total).toBe(1);
     expect(searchQuotes(c, { book: "main:2" }).total).toBe(1);
     expect(searchQuotes(c, { author: "cy writer" }).total).toBe(1);
     expect(quotesOnPages(c, getBookRow("main:1"), 0, 4)).toEqual([{ id, start_page: 3, start_offset: 0, end_page: 3, end_offset: 33, note: null }]);
 
-    expect(updateQuote(c, { id, note: "Strength of weak ties", labels: [] }, "me", "admin")).toMatchObject({ note: "Strength of weak ties", labels: [], categories: [{ tag: "social-sciences.sociology.social-change" }] });
+    expect(updateQuote(c, { id, note: "Strength of weak ties", labels: [] }, "me", "admin")).toMatchObject({ note: "Strength of weak ties", labels: [] });
     expect(citeQuote(c, id)).toMatchObject({ quote: "Weak ties carry novel information", quote_locator: "p. 1", citation: { title: "Networks", pages: "1" } });
     deleteQuote(c, id, "me", "admin");
     expect(searchQuotes(c, {}).total).toBe(1);
     expect(queryChanges(data, { kinds: ["quote_saved", "quote_edited", "quote_deleted"] }).rows.map((r) => (r as Change).kind)).toEqual(["quote_deleted", "quote_edited", "quote_saved", "quote_saved"]);
   });
 
-  it("leaves categories undecided unless chosen: the book's (followed live) or the passage's own", () => {
+  it("files quotes under their book's categories, followed live, with tags for anything finer", () => {
     // main:5 is filed under social-sciences.psychology.social-psychology in Calibre.
-    const saved = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies" }, undefined, "agent") as { quote: { id: number } };
+    const saved = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies", labels: ["Parable", " overwork "] }, "me", "admin") as { quote: { id: number } };
     const id = saved.quote.id;
     expect(searchQuotes(c, { book: "main:5" }).quotes[0]).toMatchObject({
-      category_mode: "undecided", categories: [], book_categories: [{ tag: "social-sciences.psychology.social-psychology" }],
-    });
-    expect(searchQuotes(c, { category_mode: "undecided" }).quotes.map((q) => q.id)).toEqual([id]);
-    expect(searchQuotes(c, { category: "Psychology" }).total).toBe(0);
-
-    expect(updateQuote(c, { id, use_book_categories: true }, "me", "admin")).toMatchObject({
-      category_mode: "book", categories: [{ tag: "social-sciences.psychology.social-psychology" }],
+      book_categories: [{ tag: "social-sciences.psychology.social-psychology" }], labels: ["Parable", "overwork"],
     });
     expect(searchQuotes(c, { category: "Psychology" }).quotes.map((q) => q.id)).toEqual([id]);
-    // Following the book: re-categorizing the book moves the quote with it.
+    expect(searchQuotes(c, { category: "social-sciences" }).total).toBe(1);
+    // Re-categorizing the book moves the quote with it.
     db.prepare("UPDATE books SET tags = ? WHERE id = 'main:5'").run(JSON.stringify(["trivia"]));
     expect(searchQuotes(c, { category: "Trivia" }).quotes.map((q) => q.id)).toEqual([id]);
-
-    expect(updateQuote(c, { id, categories: ["Sociology"] }, "me", "admin")).toMatchObject({ category_mode: "own", categories: [{ tag: "social-sciences.sociology" }] });
-    expect(updateQuote(c, { id, note: "only the note" }, "me", "admin")).toMatchObject({ category_mode: "own" });
-    expect(updateQuote(c, { id, categories: [] }, "me", "admin")).toMatchObject({ category_mode: "undecided", categories: [] });
-    expect(() => updateQuote(c, { id, categories: ["Trivia"], use_book_categories: true }, "me", "admin")).toThrow(/only one of categories/);
-    expect(saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", use_book_categories: true }, undefined, "agent")).toMatchObject({ quote: { category_mode: "book" } });
-  });
-
-  it("lets tags alone describe a quote, and keeps one spelling per tag", () => {
-    const a = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies", no_category: true, labels: ["Parable", " overwork "] }, "me", "admin") as { quote: { id: number } };
-    expect(searchQuotes(c, { book: "main:5" }).quotes[0]).toMatchObject({ category_mode: "tags_only", categories: [], labels: ["Parable", "overwork"] });
-    expect(searchQuotes(c, { category_mode: "undecided" }).total).toBe(0);
-    expect(searchQuotes(c, { category_mode: "tags_only" }).quotes.map((q) => q.id)).toEqual([a.quote.id]);
-    expect(() => saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", no_category: true, categories: ["Sociology"] }, "me", "admin")).toThrow(/only one of/);
+    expect(searchQuotes(c, { category: "Psychology" }).total).toBe(0);
     // A second quote reuses the existing spelling, and duplicates collapse.
     const b = saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", labels: ["parable", "PARABLE", "compassion"] }, "me", "admin") as { quote: { labels: string[] } };
     expect(b.quote.labels).toEqual(["Parable", "compassion"]);

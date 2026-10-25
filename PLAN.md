@@ -312,22 +312,21 @@ books. `corpus_status` lists the books to fix.
 
 Implemented as designed below, with these decisions:
 
-- **Categories are always an explicit choice** (`category_mode`). Free-form
-  tags are separate (stored in the `labels` column).
-  - *Undecided* (`undecided`) is the default and means "review later". An
-    epigraph or a personal story can be quotable without matching its
-    book's subject, and these tools may serve authoring beyond Concept
-    Clusters. The quotes list filters on it, and the dashboard counts it.
-  - *The book's categories* (`book`) is chosen deliberately and followed
-    live, so re-categorizing the book carries the quote along.
-  - *Own categories* (`own`) are chosen for the passage.
-  - *No category* (`tags_only`) is a decision, not a deferral: many quotes
-    sit on a finer axis than the subject taxonomy (a parable, a reflection
-    on overwork or compassion), and their tags describe them. They leave the
-    review queue.
-  - Search uses each quote's effective categories.
-  - An automatic default to the book's categories was tried and dropped on
-    2026-10-25.
+- **Quotes have no categories of their own** (data schema 8 dropped
+  `category_mode` and `categories`). The book gives the subject: search's
+  `category` filter matches the source book's categories, followed live, and
+  the pages show them greyed for context. Tags carry everything finer.
+  - Why: most quotes would have taken their book's categories anyway, and the
+    exceptions (an epigraph off the book's subject, a parable, a reflection
+    on overwork or compassion) sit on a finer axis than the subject taxonomy,
+    which is what tags are for. Dropping the choice removes work for agents
+    and people, and the review queue it created.
+  - What's given up: filing a passage under a more specific subcategory than
+    its book. Tag it instead (`social-change`), and revisit if a real need
+    appears.
+  - The third decision, all on 2026-10-25: an automatic default to the
+    book's categories, then an explicit four-way choice (undecided, book's,
+    own, none), then this.
 - **Tags are first-class.** A new tag reuses an existing tag's spelling
   (case-insensitive), so one theme keeps one name. Search returns every tag
   with its count. The quotes list shows them as a cloud that filters on
@@ -337,7 +336,7 @@ Implemented as designed below, with these decisions:
   the text with saved quotes highlighted. Selecting a passage saves it
   through the same check `save_quote` uses.
 - **Admin pages.** `/admin/quotes` (list) and `/admin/quotes/<id>`
-  (context, citation, and editing of note, categories, and tags; delete).
+  (context, citation, and editing of note and tags; delete).
   Each book page lists its quotes.
 - **Re-anchoring** runs after every scan (`reanchorQuotes`). A quote is
   retried only when its book's file changes.

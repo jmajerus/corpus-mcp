@@ -53,11 +53,10 @@ export const QUOTES_HTML = page({
 <h1>Quotes</h1>
 <p class="sub" id="summary">Passages saved from the books, checked against the text. Save new ones from a book's reader view.</p>
 <form class="filters" id="filters" role="search">
-  <input type="search" name="q" placeholder="Words in the quote, note, or labels" aria-label="Search quotes">
-  <input type="search" name="category" placeholder="Category" list="vocab" aria-label="Category">
+  <input type="search" name="q" placeholder="Words in the quote, note, or tags" aria-label="Search quotes">
+  <input type="search" name="category" placeholder="Book's category" list="vocab" aria-label="Book's category">
   <input type="search" name="label" placeholder="Tag" list="usedtags" aria-label="Tag">
   <input type="search" name="author" placeholder="Author" aria-label="Author">
-  <select name="category_mode" aria-label="Categorization"><option value="">Any categorization</option><option value="undecided">Undecided (to review)</option><option value="book">Book's categories</option><option value="own">Own categories</option><option value="tags_only">No category (tags only)</option></select>
   <select name="status" aria-label="Status"><option value="">Any status</option><option value="verified">Verified</option><option value="orphaned">Orphaned</option></select>
   <button type="button" id="clear">Clear</button>
 </form>
@@ -67,14 +66,9 @@ export const QUOTES_HTML = page({
 <button type="button" class="more" id="more">Load more</button>`,
   script: `
 const form = document.getElementById("filters");
-const FIELDS = ["q", "category", "label", "author", "category_mode", "status"];
-// A quote's categories: undecided (to review), its book's (followed live), or its own.
-function categoriesHtml(q) {
-  if (q.category_mode === "undecided") return '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Categories undecided</span>';
-  if (q.category_mode === "tags_only") return '<span class="note">No category</span>';
-  if (q.category_mode === "book") return q.categories.length ? q.categories.map((t) => '<span class="chip inherited" title="Book’s category: ' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("") : '<span class="note">Book’s categories (none yet)</span>';
-  return q.categories.map((t) => tagChip(t.tag)).join("");
-}
+const FIELDS = ["q", "category", "label", "author", "status"];
+// The book's categories, greyed: the subject comes from the source; the tags say what is finer.
+const bookCats = (q) => q.book_categories.map((t) => '<span class="chip inherited" title="Book’s category: ' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("");
 let offset = 0;
 function query() {
   const p = new URLSearchParams();
@@ -85,7 +79,8 @@ function card(q) {
   return '<article class="card qcard"><a class="open" href="/admin/quotes/' + q.id + '">#' + q.id + " →</a><blockquote>" + esc(q.text.length > 500 ? q.text.slice(0, 500) + "…" : q.text) + "</blockquote>" +
     '<div class="qmeta">' + bookLink(q.book_id, q.title) + " · " + esc(q.locator) + (q.status === "orphaned" ? ' · <span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</div>" +
     (q.note ? '<p class="note">' + esc(q.note) + "</p>" : "") +
-    "<div>" + categoriesHtml(q) + " " + q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</div>" +
+    "<div>" + q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</div>" +
+    (q.book_categories.length ? '<div class="qmeta">' + bookCats(q) + "</div>" : "") +
     '<div class="qmeta">Saved ' + esc(ago(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " · " + esc(q.source) + "</div></article>";
 }
 async function load(reset) {
@@ -102,7 +97,6 @@ async function load(reset) {
   list.insertAdjacentHTML("beforeend", d.quotes.map(card).join(""));
   offset += d.quotes.length;
   document.getElementById("summary").innerHTML = esc(num(d.total) + " quote" + (d.total === 1 ? "" : "s")) +
-    ((d.category_modes.undecided || 0) ? ' · <a href="/admin/quotes?category_mode=undecided">' + num(d.category_modes.undecided) + " with categories undecided</a>" : "") +
     ((d.counts.orphaned || 0) ? " · " + num(d.counts.orphaned) + " orphaned" : "") + (offset < d.total ? " · showing " + num(offset) : "");
   document.getElementById("more").style.display = offset < d.total ? "block" : "none";
 }
@@ -124,7 +118,7 @@ VOCAB.then((labels) => {
 });`,
 });
 
-/** /admin/quotes/<id>: one quote in context, its citation, and editors for its note, categories, and tags. */
+/** /admin/quotes/<id>: one quote in context, its citation, and editors for its note and tags. */
 export const QUOTE_HTML = page({
   title: "Quote",
   nav: "quotes",
@@ -141,7 +135,7 @@ textarea { width: 100%; min-height: 90px; }
 <div id="quote"><p class="note">Loading…</p></div>`,
   script: TAG_EDITOR + `
 const id = Number(location.pathname.split("/").pop());
-let q, canWrite = false, cats = [], mode = "undecided", tagsEd;
+let q, canWrite = false, tagsEd;
 function citationText(c) {
   if (!c) return "";
   return [c.author, c.title ? "<em>" + esc(c.title) + "</em>" : "", c.publisher, c.year, c.pages ? "pp. " + c.pages : ""].filter(Boolean).map((x, i) => (i === 1 ? x : esc(x))).join(", ") + ".";
@@ -155,50 +149,22 @@ function render() {
     (q.current_book_id ? '<p class="note"><a href="/admin/books/' + encodeURIComponent(q.current_book_id) + "/read?page=" + q.page + "#quote-" + q.id + '">Open in the reader</a></p>' : "") + "</div>" +
     '<div class="cols"><div class="card"><h2>Citation</h2><p>' + citationText(q.citation) + "</p>" + (q.citekey ? '<p class="note">Citekey ' + esc(q.citekey) + "</p>" : "") +
     '<p class="note">Saved ' + esc(when(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " (" + esc(q.source) + ")" + (q.updated_at ? " · edited " + esc(ago(q.updated_at)) + (q.updated_by ? " by " + esc(q.updated_by) : "") : "") + "</p></div>" +
-    '<div class="card"><h2>Note, categories, labels</h2><textarea id="note" aria-label="Note"' + dis + ">" + esc(q.note || "") + "</textarea>" +
-    '<fieldset style="border:0;padding:0;margin:10px 0 0"><legend class="note">Categories</legend>' +
-    '<label><input type="radio" name="catmode" value="undecided"' + (mode === "undecided" ? " checked" : "") + dis + "> Undecided — review later</label><br>" +
-    '<label><input type="radio" name="catmode" value="book"' + (mode === "book" ? " checked" : "") + dis + "> The book’s categories</label> " +
-      (q.book_categories.length ? q.book_categories.map((t) => '<span class="chip inherited" title="' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("") : '<span class="note">(the book has none yet)</span>') + "<br>" +
-    '<label><input type="radio" name="catmode" value="own"' + (mode === "own" ? " checked" : "") + dis + "> Categories for this passage</label><br>" +
-    '<label><input type="radio" name="catmode" value="tags_only"' + (mode === "tags_only" ? " checked" : "") + dis + "> No category — the tags describe it</label></fieldset>" +
-    '<div id="owncats"' + (mode === "own" ? "" : " hidden") + '><div id="cats" style="margin-top:6px"></div><div class="row"><input type="text" id="addcat" list="vocab" placeholder="Add a category" aria-label="Add a category"' + dis + '><button type="button" id="addbtn"' + dis + ">Add</button></div></div>" +
+    '<div class="card"><h2>Note and tags</h2><textarea id="note" aria-label="Note"' + dis + ">" + esc(q.note || "") + "</textarea>" +
     '<div style="margin-top:10px"><span class="note">Tags</span><div id="tags"></div></div>' +
     '<div class="row"><button type="button" class="primary" id="save"' + dis + '>Save</button><button type="button" class="danger" id="delete"' + dis + ">Delete quote</button></div>" +
+    (q.book_categories.length ? '<p class="note">From a book filed under ' + q.book_categories.map((t) => '<span class="chip inherited" title="' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("") + "</p>" : "") +
     (canWrite ? "" : '<p class="note">Sign in through Cloudflare Access to edit.</p>') + "</div></div>";
-  renderCats();
   tagsEd = tagEditor(document.getElementById("tags"), q.labels, canWrite);
-}
-function renderCats() {
-  document.getElementById("cats").innerHTML = cats.length ? cats.map((t) => tagChip(t, canWrite ? '<button type="button" data-remove="' + esc(t) + '" aria-label="Remove">×</button>' : "")).join("") : '<span class="note">No categories.</span>';
 }
 async function load() {
   try { q = await api("/api/quotes/" + id); } catch (e) { document.getElementById("quote").innerHTML = '<p class="empty">' + esc(e.message) + "</p>"; return; }
-  mode = q.category_mode;
-  cats = mode === "own" ? q.categories.map((t) => t.tag) : [];
   render();
 }
-document.getElementById("quote").addEventListener("change", (e) => {
-  if (e.target.name !== "catmode") return;
-  mode = e.target.value;
-  document.getElementById("owncats").hidden = mode !== "own";
-  renderCats();
-});
 document.getElementById("quote").addEventListener("click", async (e) => {
   const t = e.target;
-  if (t.dataset.remove) { cats = cats.filter((x) => x !== t.dataset.remove); renderCats(); return; }
   try {
-    if (t.id === "addbtn") {
-      const value = document.getElementById("addcat").value.trim().toLowerCase();
-      const match = [...LABELS].find(([tag, label]) => tag === value || label.toLowerCase() === value);
-      if (!match) { toast("Not in the vocabulary."); return; }
-      if (!cats.includes(match[0])) cats.push(match[0]);
-      document.getElementById("addcat").value = ""; renderCats();
-    } else if (t.id === "save") {
-      if (mode === "own" && !cats.length) { toast("Add a category, or choose another option."); return; }
-      await post("/api/quotes/" + id, { note: document.getElementById("note").value,
-        ...(mode === "book" ? { use_book_categories: true } : mode === "tags_only" ? { no_category: true } : { categories: mode === "own" ? cats : [] }),
-        labels: tagsEd.get() });
+    if (t.id === "save") {
+      await post("/api/quotes/" + id, { note: document.getElementById("note").value, labels: tagsEd.get() });
       toast("Saved."); load();
     } else if (t.id === "delete") {
       if (!confirm("Delete quote #" + id + "?")) return;
@@ -207,11 +173,8 @@ document.getElementById("quote").addEventListener("click", async (e) => {
     }
   } catch (err) { toast(err.message); }
 });
-Promise.all([ME, VOCAB]).then(([me, labels]) => {
+ME.then((me) => {
   canWrite = me.can_write;
-  const list = document.createElement("datalist"); list.id = "vocab";
-  list.innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag) + "</option>").join("");
-  document.body.appendChild(list);
   load();
 });`,
 });
@@ -247,16 +210,8 @@ mark { background: color-mix(in srgb, var(--bar) 22%, transparent); color: inher
 <div id="pages"></div>
 <div class="savebar" id="savebar" role="dialog" aria-label="Save quote"><div class="inner">
   <div class="sel" id="selected"></div>
-  <div class="row"><input type="text" id="qnote" placeholder="Note (optional)" aria-label="Note">
-
-    </div>
+  <div class="row"><input type="text" id="qnote" placeholder="Note (optional)" aria-label="Note"></div>
   <div class="row"><span class="note">Tags</span><div id="qtags"></div></div>
-  <div class="row note" id="qcatline">Categories:
-    <label><input type="radio" name="qmode" value="undecided" checked> Decide later</label>
-    <label><input type="radio" name="qmode" value="book"> The book’s <span id="bookcats"></span></label>
-    <label><input type="radio" name="qmode" value="own"> Choose</label>
-    <label><input type="radio" name="qmode" value="tags_only"> None — tags are enough</label>
-    <input type="text" id="qcats" list="vocab" placeholder="Categories for this passage, comma-separated" aria-label="Categories for this passage" hidden></div>
   <div class="row"><button type="button" class="primary" id="qsave">Save as quote</button><button type="button" id="qcancel">Cancel</button><span class="note" id="qmsg"></span></div>
 </div></div>`,
   script: TAG_EDITOR + `
@@ -289,9 +244,6 @@ async function load() {
   document.getElementById("goto").value = start;
   document.getElementById("prev").disabled = start <= 1;
   document.getElementById("next").disabled = data.end >= data.page_count;
-  document.getElementById("bookcats").innerHTML = data.categories.length
-    ? data.categories.map((t) => '<span class="chip inherited" title="' + esc(t) + '">' + esc(LABELS.get(t) || t) + "</span>").join("")
-    : "(none yet)";
   const chapter = document.getElementById("chapter");
   if (chapter.options.length <= 1) chapter.insertAdjacentHTML("beforeend", data.outline.map((o) => '<option value="' + o.page + '">' + (o.level ? "  " : "") + esc(o.title) + "</option>").join(""));
   document.getElementById("pages").innerHTML = data.pages.map((p) => '<section class="pg" data-page="' + p.page + '"><h2>' + kind + " " + p.page + (p.label ? " · printed " + esc(p.label) : "") + (p.section ? " · " + esc(p.section) : "") +
@@ -321,43 +273,28 @@ document.addEventListener("selectionchange", () => {
   if (!canWrite) document.getElementById("qmsg").textContent = "Sign in through Cloudflare Access to save quotes.";
   document.getElementById("savebar").style.display = "block";
 });
-document.getElementById("qcatline").addEventListener("change", (e) => {
-  if (e.target.name !== "qmode") return;
-  const input = document.getElementById("qcats");
-  input.hidden = e.target.value !== "own";
-  if (!input.hidden) input.focus();
-});
 document.getElementById("qcancel").addEventListener("click", () => { document.getElementById("savebar").style.display = "none"; window.getSelection().removeAllRanges(); });
 document.getElementById("qsave").addEventListener("click", async () => {
   if (!selection) return;
-  const split = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
-  const qmode = document.querySelector("input[name=qmode]:checked").value;
-  const cats = (qmode === "own" ? split(document.getElementById("qcats").value) : []).map((v) => { const m = [...LABELS].find(([tag, label]) => tag === v.toLowerCase() || label.toLowerCase() === v.toLowerCase()); return m ? m[0] : v; });
   try {
-    if (qmode === "own" && !cats.length) { document.getElementById("qmsg").textContent = "Name a category, or choose Decide later."; return; }
-    const out = await post("/api/quotes", { book_id: data.book_id, text: selection.text, page: selection.page, note: document.getElementById("qnote").value,
-      categories: cats, use_book_categories: qmode === "book", no_category: qmode === "tags_only", labels: qtags.get() });
+    const out = await post("/api/quotes", { book_id: data.book_id, text: selection.text, page: selection.page, note: document.getElementById("qnote").value, labels: qtags.get() });
     if (!out.saved) {
       document.getElementById("qmsg").textContent = out.reason + (out.closest && out.closest.length ? " Closest: page " + out.closest.map((c) => c.page).join(", ") + "." : "");
       return;
     }
     toast("Saved quote #" + out.quote.id + (out.exact ? "." : " (the book's exact wording was used)."));
     document.getElementById("savebar").style.display = "none";
-    for (const f of ["qnote", "qcats"]) document.getElementById(f).value = "";
+    document.getElementById("qnote").value = "";
     qtags.set([]);
-    document.querySelector("input[name=qmode][value=undecided]").checked = true; document.getElementById("qcats").hidden = true;
     window.getSelection().removeAllRanges();
     load();
   } catch (e) { document.getElementById("qmsg").textContent = e.message; }
 });
 
-Promise.all([ME, VOCAB]).then(([me, labels]) => {
+ME.then((me) => {
   canWrite = me.can_write;
   document.getElementById("hint").textContent = canWrite ? "Select text to save it as a quote." : "Read-only: sign in through Cloudflare Access to save quotes.";
   qtags = tagEditor(document.getElementById("qtags"), [], canWrite);
-  const list = document.createElement("datalist"); list.id = "vocab";
-  list.innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag) + "</option>").join("");
-  document.body.appendChild(list);
   load();
 });`,
 });
