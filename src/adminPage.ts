@@ -54,6 +54,12 @@ input[type=text] { width: 100%; margin-bottom: 8px; border: 1px solid var(--bord
 pre { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 0.8rem; line-height: 1.4; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .jobhead { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 0.9rem; }
 .history button { padding: 2px 8px; font-size: 0.82rem; }
+dialog { width: min(920px, 94vw); max-height: 88vh; border: 1px solid var(--border); border-radius: 12px; padding: 0; background: var(--surface); color: var(--text); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.dialog-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; max-height: 88vh; }
+.dialog-body h3 { margin: 0; font-size: 1.05rem; }
+.dialog-body pre { flex: 1; min-height: 120px; max-height: 60vh; }
+.dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; }
 .note { font-size: 0.85rem; color: var(--muted); }
 </style>
 </head>
@@ -69,18 +75,24 @@ pre { background: var(--code); border: 1px solid var(--border); border-radius: 8
   <p id="readonly" class="note" hidden></p>
   <div id="actions" class="actions"></div>
 
-  <h2>Job</h2>
-  <div class="card">
-    <div id="jobhead" class="jobhead note">No job selected.</div>
-    <pre id="joblog" hidden></pre>
-  </div>
-
   <h2>Recent jobs</h2>
   <div class="scroll"><table class="history"><thead><tr><th>#</th><th>Job</th><th>Mode</th><th>Status</th><th>By</th><th>Started</th><th></th></tr></thead><tbody id="jobs"></tbody></table></div>
 
   <h2>Refresh history</h2>
   <div class="scroll"><table><thead><tr><th>Finished</th><th>Seconds</th><th>Extracted</th><th>Unchanged</th><th>Failed</th><th>Removed</th><th>Shelves</th></tr></thead><tbody id="runs"></tbody></table></div>
 </main>
+<dialog id="jobdialog" aria-labelledby="jobtitle">
+  <div class="dialog-body">
+    <h3 id="jobtitle">Job</h3>
+    <div id="jobhead" class="jobhead note"></div>
+    <pre id="joblog"></pre>
+    <div class="dialog-actions">
+      <span id="jobnote" class="note"></span>
+      <button type="button" id="jobapply" class="primary" hidden>Apply this preview</button>
+      <button type="button" id="jobclose">Close</button>
+    </div>
+  </div>
+</dialog>
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const num = (n) => (n === null || n === undefined ? "–" : Number(n).toLocaleString());
@@ -162,30 +174,52 @@ async function loadJobs() {
   return data;
 }
 
+// A job opens in a dialog with its live log; a preview offers its apply there.
+const dialog = document.getElementById("jobdialog");
 async function showJob(id) {
   current = id;
   const j = await (await fetch("api/admin/jobs/" + id)).json();
-  document.getElementById("jobhead").innerHTML = "<strong>#" + j.id + " " + esc(kinds[j.kind]?.title || j.kind) + "</strong> · " + esc(j.mode) +
-    ' · <span class="' + (j.status === "succeeded" ? "good" : j.status === "running" ? "warn" : "bad") + '">' + esc(j.status) + "</span>" +
-    (j.requested_by ? " · " + esc(j.requested_by) : "") + " · started " + esc(when(j.created_at));
+  if (!dialog.open) dialog.showModal();
+  if (location.hash !== "#job-" + id) history.replaceState(null, "", "#job-" + id);
+  document.getElementById("jobtitle").textContent = "#" + j.id + " " + (kinds[j.kind]?.title || j.kind) + (j.mode === "preview" ? " — preview" : "");
+  document.getElementById("jobhead").innerHTML = '<span class="' + (j.status === "succeeded" ? "good" : j.status === "running" ? "warn" : "bad") + '">' + esc(j.status) + "</span>" +
+    (j.requested_by ? " · " + esc(j.requested_by) : "") + " · started " + esc(when(j.created_at)) + (j.finished_at ? " · finished " + esc(when(j.finished_at)) : "") +
+    (j.preview_of ? " · applies preview #" + j.preview_of : "");
   const log = document.getElementById("joblog");
-  log.hidden = false; log.textContent = j.log || "(no output yet)"; log.scrollTop = log.scrollHeight;
-  if (j.mode === "preview" && j.status === "succeeded" && lastPreview[j.kind] !== j.id) { lastPreview[j.kind] = j.id; renderActions(); }
-  if (j.status === "running") setTimeout(() => current === id && showJob(id), 1500);
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = j.log || (j.status === "running" ? "Waiting for output…" : "(no output)");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  // A preview can be applied when it succeeded and, for tag jobs, its plan changes something.
+  const plan = j.params && j.params.plan;
+  const nothing = plan && Array.isArray(plan.books) && plan.books.length === 0;
+  const apply = document.getElementById("jobapply");
+  const note = document.getElementById("jobnote");
+  apply.hidden = !(j.mode === "preview" && j.status === "succeeded" && !nothing && canWrite);
+  apply.dataset.kind = j.kind; apply.dataset.preview = j.id;
+  note.textContent = j.mode === "preview" && j.status === "succeeded" && nothing ? "Nothing to apply." : j.status === "running" ? "Running…" : "";
+  if (j.mode === "preview" && j.status === "succeeded" && !nothing && lastPreview[j.kind] !== j.id) { lastPreview[j.kind] = j.id; renderActions(); }
+  if (j.status === "running") setTimeout(() => current === id && dialog.open && showJob(id), 1500);
   else { loadJobs(); loadMetrics(); }
 }
+document.getElementById("jobclose").addEventListener("click", () => dialog.close());
+dialog.addEventListener("close", () => { current = null; history.replaceState(null, "", location.pathname); });
+document.getElementById("jobapply").addEventListener("click", (e) => startJob(e.target.dataset.kind, "apply", Number(e.target.dataset.preview)));
 
-document.getElementById("actions").addEventListener("click", async (e) => {
-  const b = e.target.closest("button[data-kind]"); if (!b) return;
-  const body = { kind: b.dataset.kind, mode: b.dataset.mode };
-  if (b.dataset.preview) body.preview_of = Number(b.dataset.preview);
-  if (body.kind === "cleanup" && body.mode === "preview") body.also = (document.getElementById("also").value || "").split(",").map((t) => t.trim()).filter(Boolean);
-  if (body.mode === "apply" && b.dataset.preview && !confirm("Apply preview #" + b.dataset.preview + " to Calibre? metadata.db is backed up first.")) return;
+async function startJob(kind, mode, previewOf) {
+  const body = { kind, mode };
+  if (previewOf) body.preview_of = previewOf;
+  if (kind === "cleanup" && mode === "preview") body.also = (document.getElementById("also").value || "").split(",").map((t) => t.trim()).filter(Boolean);
+  if (mode === "apply" && previewOf && !confirm("Apply preview #" + previewOf + " to Calibre? metadata.db is backed up first, and the index refreshes afterwards.")) return;
   const res = await fetch("api/admin/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const out = await res.json().catch(() => ({}));
   if (!res.ok) { alert(out.error || "Failed."); return; }
-  if (body.mode === "apply") { delete lastPreview[body.kind]; renderActions(); }
+  if (mode === "apply") { delete lastPreview[kind]; renderActions(); }
   await loadJobs(); showJob(out.id);
+}
+
+document.getElementById("actions").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-kind]"); if (!b) return;
+  startJob(b.dataset.kind, b.dataset.mode, b.dataset.preview ? Number(b.dataset.preview) : undefined);
 });
 document.getElementById("jobs").addEventListener("click", (e) => { const b = e.target.closest("button[data-job]"); if (b) showJob(Number(b.dataset.job)); });
 
@@ -200,7 +234,9 @@ document.getElementById("jobs").addEventListener("click", (e) => { const b = e.t
   renderActions();
   loadMetrics();
   setInterval(loadMetrics, 30000);
-  if (jobs.running) showJob(jobs.running);
+  const linked = location.hash.match(/^#job-([0-9]+)$/);
+  if (linked) showJob(Number(linked[1]));
+  else if (jobs.running) showJob(jobs.running);
 })();
 </script>
 </body>

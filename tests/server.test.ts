@@ -166,3 +166,14 @@ it("runs jobs: local ones directly, Calibre changes only as an apply of their ow
   expect(jobs.jobs.map((j: { kind: string; mode: string }) => `${j.kind}:${j.mode}`).slice(0, 4))
     .toEqual(["convert:preview", "tags:apply", "tags:preview", "backup:apply"]);
 });
+
+it("serves page scripts that parse, with no escapes lost to the TypeScript template literal", async () => {
+  for (const page of ["admin", "review"]) {
+    const html = await (await fetch(`${base}/${page}`)).text();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)![1];
+    expect(() => new Function(script)).not.toThrow();
+  }
+  const admin = await (await fetch(`${base}/admin`)).text();
+  expect(admin).toContain('<dialog id="jobdialog"');
+  expect(admin).toContain("location.hash.match(/^#job-([0-9]+)$/)");
+});
