@@ -164,6 +164,8 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
       authors: JSON.parse(row.authors) as string[],
       year: row.year,
       page: row.page_index + 1,
+      // "location" pages are positions in a reflowable book, not citable page numbers.
+      page_kind: row.reflowable ? "location" : "pdf_page",
       page_label: row.label,
       section: row.section_path,
       snippet: row.snippet,
@@ -259,7 +261,8 @@ export function readBook(c: Corpus, args: ReadArgs) {
   let lastRead = start - 1;
   let truncated = false;
   for (const page of pages) {
-    const header = `--- page ${page.page_index + 1}${page.label ? ` (printed ${page.label})` : ""}${page.section_path ? ` · ${page.section_path}` : ""} ---`;
+    const kind = book.reflowable ? "location" : "page";
+    const header = `--- ${kind} ${page.page_index + 1}${page.label ? ` (printed ${page.label})` : ""}${page.section_path ? ` · ${page.section_path}` : ""} ---`;
     const block = `${header}\n${page.text}`;
     if (used + block.length > maxChars && parts.length) {
       truncated = true;
@@ -272,7 +275,10 @@ export function readBook(c: Corpus, args: ReadArgs) {
   const continuation = truncated || lastRead < end
     ? `\n\n[Read pages ${start}–${lastRead} of ${start}–${end}. Continue with start_page ${lastRead + 1}.]`
     : "";
-  return `${book.title} (${book.id})\n\n${parts.join("\n\n")}${continuation}`;
+  const note = book.reflowable
+    ? `\n[${book.format?.toUpperCase()}: these are reading locations, not page numbers; cite this book by chapter.]`
+    : "";
+  return `${book.title} (${book.id})${note}\n\n${parts.join("\n\n")}${continuation}`;
 }
 
 export interface RenderArgs { book_id: string; page: number; scale?: number }

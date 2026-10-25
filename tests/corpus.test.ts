@@ -199,6 +199,11 @@ describe("tools", () => {
     const partial = readBook(c, { book_id: "main:1", start_page: 1, end_page: 5, max_chars: 500 });
     expect(partial).toMatch(/Continue with start_page \d/);
     expect(() => readBook(c, { book_id: "main:1", start_page: 9 })).toThrow(/pages 1–5/);
+    const epubText = readBook(c, { book_id: "main:2", start_page: 1 });
+    expect(epubText).toContain("--- location 1 · Alpha ---");
+    expect(epubText).toMatch(/reading locations, not page numbers/);
+    expect(searchCorpus(c, { query: "amplifies", book_id: "main:2" }).results[0].page_kind).toBe("location");
+    expect(searchCorpus(c, { query: "weak ties" }).results[0].page_kind).toBe("pdf_page");
   });
 
   it("cites PDFs with printed page ranges and EPUBs without pages", () => {

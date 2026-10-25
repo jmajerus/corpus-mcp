@@ -41,7 +41,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("search_corpus", {
     title: "Search book text",
-    description: "Full-text search over the text of every indexed book. Returns ranked passages with book id, page, printed page label (PDF), section, and a snippet with matches in «». Words are ANDed; put a phrase in double quotes; end a word with * for a prefix match.",
+    description: "Full-text search over the text of every indexed book. Returns ranked passages with book id, page, page_kind (\"pdf_page\", or \"location\" for EPUB/MOBI, which is not a citable page number), printed page label (PDF), section, and a snippet with matches in «». Words are ANDed; put a phrase in double quotes; end a word with * for a prefix match.",
     inputSchema: {
       query: z.string().min(1).describe('Words or "quoted phrases" to find'),
       book_id: bookId.optional().describe("Search within one book"),
