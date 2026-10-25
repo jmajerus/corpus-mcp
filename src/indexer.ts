@@ -4,7 +4,7 @@ import path from "node:path";
 import { type BookMetadata, type CatalogueEntry, readCatalogue } from "./calibre.js";
 import { chunkPage } from "./chunk.js";
 import type { Change, ChangeKind } from "./data.js";
-import { proposeCitekey } from "./citekey.js";
+import { type PresetName, proposeCitekey } from "./citekey.js";
 import { ISBN_SCAN_VERSION, findPrintedIsbns } from "./isbn.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
@@ -106,7 +106,7 @@ export function scanLibraries(config: Config, db: DB, {
       if (!choice) {
         db.transaction(() => {
           clearContent(db, id);
-          writeBook(db, id, library, relFolder, metadata, { status: "no_file" });
+          writeBook(db, config.citekeyPreset, id, library, relFolder, metadata, { status: "no_file" });
         })();
         if (!existing) change("book_added", "no readable file");
         summary.noFile++;
@@ -120,7 +120,7 @@ export function scanLibraries(config: Config, db: DB, {
       const file = { format: choice.format, file_path: relFile, file_size: stat.size, file_mtime: mtime };
 
       if (!force && sameVersion && existing.file_path === relFile && existing.file_size === stat.size && existing.file_mtime === mtime) {
-        updateMetadata(db, id, metadata, relFolder);
+        updateMetadata(db, config.citekeyPreset, id, metadata, relFolder);
         summary.unchanged++;
         continue;
       }
@@ -128,7 +128,7 @@ export function scanLibraries(config: Config, db: DB, {
       const data = fs.readFileSync(choice.file);
       const hash = sha256(data);
       if (!force && sameVersion && existing.file_path === relFile && existing.sha256 === hash) {
-        updateMetadata(db, id, metadata, relFolder);
+        updateMetadata(db, config.citekeyPreset, id, metadata, relFolder);
         db.prepare("UPDATE books SET file_size = ?, file_mtime = ? WHERE id = ?").run(stat.size, mtime, id);
         summary.unchanged++;
         continue;
@@ -139,7 +139,7 @@ export function scanLibraries(config: Config, db: DB, {
         const sections = sectionPaths(book.outline, book.pages.length);
         db.transaction(() => {
           clearContent(db, id);
-          writeBook(db, id, library, relFolder, metadata, {
+          writeBook(db, config.citekeyPreset, id, library, relFolder, metadata, {
             ...file, sha256: hash, status: "indexed", reflowable: book.reflowable ? 1 : 0, page_count: book.pages.length,
           });
           const insertOutline = db.prepare(
@@ -164,7 +164,7 @@ export function scanLibraries(config: Config, db: DB, {
       } catch (error) {
         db.transaction(() => {
           clearContent(db, id);
-          writeBook(db, id, library, relFolder, metadata, { ...file, sha256: hash, status: "failed", error: String((error as Error).message ?? error) });
+          writeBook(db, config.citekeyPreset, id, library, relFolder, metadata, { ...file, sha256: hash, status: "failed", error: String((error as Error).message ?? error) });
         })();
         summary.failed++;
         // A failing book is retried every scan; log it once per file.
@@ -259,8 +259,8 @@ function clearContent(db: DB, id: string): void {
   db.prepare("DELETE FROM outline WHERE book_id = ?").run(id);
 }
 
-function metadataColumns(m: BookMetadata) {
-  const proposal = proposeCitekey(m);
+function metadataColumns(m: BookMetadata, preset: PresetName) {
+  const proposal = proposeCitekey(m, preset);
   return {
     calibre_id: m.calibreId, uuid: m.uuid, title: m.title, authors: JSON.stringify(m.authors),
     author_sorts: JSON.stringify(m.authorSorts), publisher: m.publisher, year: m.year, language: m.language,
@@ -269,9 +269,9 @@ function metadataColumns(m: BookMetadata) {
   };
 }
 
-function writeBook(db: DB, id: string, library: string, folder: string, m: BookMetadata, fields: Record<string, unknown>): void {
+function writeBook(db: DB, preset: PresetName, id: string, library: string, folder: string, m: BookMetadata, fields: Record<string, unknown>): void {
   const row: Record<string, unknown> = {
-    id, library, folder, ...metadataColumns(m),
+    id, library, folder, ...metadataColumns(m, preset),
     format: null, file_path: null, file_size: null, file_mtime: null, sha256: null,
     extractor_version: EXTRACTOR_VERSION, reflowable: null, page_count: null, error: null,
     printed_isbns: null, printed_isbns_version: null, text_chars: null,
@@ -281,8 +281,8 @@ function writeBook(db: DB, id: string, library: string, folder: string, m: BookM
   db.prepare(`INSERT OR REPLACE INTO books (${columns.join(", ")}) VALUES (${columns.map((c) => `@${c}`).join(", ")})`).run(row);
 }
 
-function updateMetadata(db: DB, id: string, m: BookMetadata, folder: string): void {
-  const row = { id, folder, ...metadataColumns(m) };
+function updateMetadata(db: DB, preset: PresetName, id: string, m: BookMetadata, folder: string): void {
+  const row = { id, folder, ...metadataColumns(m, preset) };
   const sets = Object.keys(row).filter((k) => k !== "id").map((k) => `${k} = @${k}`);
   db.prepare(`UPDATE books SET ${sets.join(", ")} WHERE id = @id`).run(row);
 }

@@ -1,0 +1,18 @@
+{
+  "name": "@jmajerus/citekey",
+  "version": "1.0.0",
+  "description": "Citekeys from CSL JSON items by a configurable Better BibTeX-style rule",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./cases.json": "./cases.json"
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "cases.json", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "license": "UNLICENSED",
+  "repository": { "type": "git", "url": "git+https://github.com/jmajerus/corpus-mcp.git", "directory": "packages/citekey" },
+  "engines": { "node": ">=18" }
+}

@@ -149,9 +149,9 @@ If the export fails, the previous membership is kept.
 
 Every book gets a proposed citekey (author + year + first significant title
 word, as in `nye2011future`), built from its Calibre metadata by
-[Concept Clusters](https://github.com/jmajerus/concept-clusters)' Better
-BibTeX–style rule. The two implementations share the cases in
-[`tests/citekey-cases.json`](tests/citekey-cases.json).
+[`@jmajerus/citekey`](packages/citekey), a Better BibTeX–style rule packaged
+for reuse (other projects install it from a GitHub release). The preset is
+`CORPUS_CITEKEY_PRESET`: `author-year-word` (the default) or `bbt-default`.
 
 To file a cited book in a reference manager, `cite_passage` returns a BibTeX
 `@book` entry built from Calibre's own metadata (`bibtex`) and the book's

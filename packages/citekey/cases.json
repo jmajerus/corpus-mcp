@@ -1,0 +1,250 @@
+{
+  "description": "Citekey rule cases for @jmajerus/citekey. Input is a CSL JSON item; key is proposeCitekey(input, preset).",
+  "cases": [
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "The Future of Power",
+        "author": [
+          {
+            "family": "Nye",
+            "given": "Joseph S., Jr."
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2011
+            ]
+          ]
+        }
+      },
+      "key": "nye2011future"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "Inquiry into the Treatment of Detainees",
+        "author": [
+          {
+            "literal": "U.S. Senate Committee on Armed Services"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2008
+            ]
+          ]
+        }
+      },
+      "key": "ussenate2008inquiry"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "Advanced Encryption Standard",
+        "author": [
+          {
+            "literal": "National Institute of Standards and Technology"
+          }
+        ],
+        "publisher": "NIST",
+        "issued": {
+          "date-parts": [
+            [
+              2001
+            ]
+          ]
+        }
+      },
+      "key": "nist2001advanced"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "The Feynman Lectures on Physics",
+        "author": [
+          {
+            "family": "Feynman"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              1963
+            ]
+          ]
+        }
+      },
+      "key": "feynman1963lectures"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "Macbeth",
+        "author": [
+          {
+            "family": "Shakespeare"
+          }
+        ]
+      },
+      "key": "shakespearemacbeth"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "Test-Enhanced Learning",
+        "author": [
+          {
+            "family": "Roediger"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2006
+            ]
+          ]
+        }
+      },
+      "key": "roediger2006testenhanced"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "Philosophiæ Naturalis Principia Mathematica",
+        "author": [
+          {
+            "family": "Newton"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              1687
+            ]
+          ]
+        }
+      },
+      "key": "newton1687philosophiae"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "The Severity of an Earthquake",
+        "author": [
+          {
+            "literal": "U.S. Geological Survey"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2000
+            ]
+          ]
+        }
+      },
+      "key": "usgs2000severity"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "Biology 2e",
+        "author": [
+          {
+            "literal": "OpenStax"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2018
+            ]
+          ]
+        }
+      },
+      "key": "openstax2018biology"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "The Rites of Passage",
+        "author": [
+          {
+            "family": "Gennep",
+            "given": "Arnold van"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              1960
+            ]
+          ]
+        }
+      },
+      "key": "gennep1960rites"
+    },
+    {
+      "preset": "author-year-word",
+      "input": {
+        "title": "iPhone User Guide",
+        "author": [
+          {
+            "literal": "Apple Inc."
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2020
+            ]
+          ]
+        }
+      },
+      "key": "appleinc2020iphone"
+    },
+    {
+      "preset": "bbt-default",
+      "input": {
+        "title": "The Future of Power",
+        "author": [
+          {
+            "family": "Nye",
+            "given": "Joseph S., Jr."
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              2011
+            ]
+          ]
+        }
+      },
+      "key": "nyeFuturePower2011"
+    },
+    {
+      "preset": "bbt-default",
+      "input": {
+        "title": "The Rites of Passage",
+        "author": [
+          {
+            "family": "Gennep",
+            "given": "Arnold van"
+          }
+        ],
+        "issued": {
+          "date-parts": [
+            [
+              1960
+            ]
+          ]
+        }
+      },
+      "key": "gennepRitesPassage1960"
+    }
+  ]
+}

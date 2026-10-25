@@ -7,7 +7,8 @@ import { readCatalogue } from "../src/calibre.js";
 import { chunkPage } from "../src/chunk.js";
 import type { Config } from "../src/config.js";
 import { bookBibtex } from "../src/bibtex.js";
-import { calibreCitationData, proposeCitekey, proposedCitationKey } from "../src/citekey.js";
+import { type CslItem, type PresetName, proposeCitekey as ruleKey, citekeyWellFormed } from "@jmajerus/citekey";
+import { calibreCsl, proposeCitekey } from "../src/citekey.js";
 import { type Change, type DataStore, backupDataStore, notYetLogged, openDataStore, queryChanges, recordChanges } from "../src/data.js";
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
@@ -75,7 +76,7 @@ beforeEach(() => {
     booksRoot: root, libraries: ["main", "library"], excludeTags: ["private"], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
-    vocabularyPath: path.join(root, "vocabulary.json"),
+    citekeyPreset: "author-year-word", vocabularyPath: path.join(root, "vocabulary.json"),
   };
   db = openDatabase(config.dbPath);
   data = openDataStore(config.dataDbPath);
@@ -260,12 +261,22 @@ describe("tools", () => {
 });
 
 describe("citekeys", () => {
-  const shared = JSON.parse(fs.readFileSync(new URL("./citekey-cases.json", import.meta.url), "utf8")) as {
-    cases: { input: Parameters<typeof proposedCitationKey>[0]; key: string }[];
+  const shared = JSON.parse(fs.readFileSync(new URL("../packages/citekey/cases.json", import.meta.url), "utf8")) as {
+    cases: { preset: PresetName; input: CslItem; key: string }[];
   };
 
-  it.each(shared.cases)("matches the shared Concept Clusters case $key", ({ input, key }) => {
-    expect(proposedCitationKey(input)).toBe(key);
+  it.each(shared.cases)("matches the package case $key ($preset)", ({ preset, input, key }) => {
+    expect(ruleKey(input, preset)).toBe(key);
+    expect(citekeyWellFormed(key, input, preset)).toBe(true);
+    expect(citekeyWellFormed(`${key}b`, input, preset)).toBe(true);
+  });
+
+  it("takes options over the default preset, and rejects an unknown preset", () => {
+    const nye = shared.cases[0].input;
+    expect(ruleKey(nye, { titleWords: 2, separator: "_" })).toBe("nye_2011_futurepower");
+    expect(citekeyWellFormed("nye_2011_futurepower", nye, { titleWords: 2, separator: "_" })).toBe(true);
+    expect(citekeyWellFormed("nyeFuturePower2011", nye)).toBe(false);
+    expect(() => ruleKey(nye, "nope" as PresetName)).toThrow(/Unknown citekey preset/);
   });
 
   const metadata = (overrides: Partial<Parameters<typeof proposeCitekey>[0]>) => ({
@@ -275,7 +286,8 @@ describe("citekeys", () => {
 
   it("builds keys from Calibre metadata and names what blocks them", () => {
     expect(proposeCitekey(metadata({}))).toEqual({ key: "nye2011future", blockers: [] });
-    expect(calibreCitationData(metadata({ authors: ["FAA"], authorSorts: ["FAA"] })).creators).toEqual([{ creatorType: "author", name: "FAA" }]);
+    expect(calibreCsl(metadata({ authors: ["FAA"], authorSorts: ["FAA"] })).author).toEqual([{ literal: "FAA" }]);
+    expect(proposeCitekey(metadata({}), "bbt-default").key).toBe("nyeFuturePower2011");
     expect(proposeCitekey(metadata({ authors: ["Unknown"], authorSorts: ["Unknown"] })).blockers).toEqual(["unknown_author"]);
     expect(proposeCitekey(metadata({ authors: ["James Gough| Daniel Bryant"], authorSorts: ["James Gough, Daniel Bryant"] })).blockers)
       .toEqual(["merged_authors"]);

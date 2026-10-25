@@ -26,7 +26,7 @@ beforeAll(async () => {
   const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
-    vocabularyPath: path.join(import.meta.dirname, "vocabulary.json"),
+    citekeyPreset: "author-year-word", vocabularyPath: path.join(import.meta.dirname, "vocabulary.json"),
     admin: { access: { teamDomain: team, audience: "corpus-aud" }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
       refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json") } };
   const db = openDatabase(config.dbPath);

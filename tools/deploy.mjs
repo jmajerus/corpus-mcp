@@ -153,7 +153,8 @@ async function deploy({ skipTests }) {
 
   const id = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
   const tarball = path.join(os.tmpdir(), `corpus-mcp-${id}.tgz`);
-  execFileSync("tar", ["czf", tarball, "-C", root, "dist", "deploy", "package.json", "package-lock.json"]);
+  execFileSync("tar", ["czf", tarball, "-C", root, "dist", "deploy", "package.json", "package-lock.json",
+    "packages/citekey/package.json", "packages/citekey/dist", "packages/citekey/cases.json"]);
   execFileSync("scp", [...sshOptions, tarball, `${CORPUS_HOST}:/tmp/`], { env: sshEnv(), stdio: "inherit" });
   fs.rmSync(tarball);
 

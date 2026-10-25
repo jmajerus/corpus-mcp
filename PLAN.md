@@ -552,13 +552,16 @@ adapts. Agreed with CC's agent, in order:
    project's camelCase keys survive. The old `locator` (page, section,
    label) became `position`; `isbn` is now the valid ISBN or null rather
    than Calibre's raw value.
-3. **Citekey package** `@jmajerus/citekey` in `packages/citekey`: pure ESM,
+3. **Citekey package** (done 2026-10-25, `citekey-v1.0.0`) `@jmajerus/citekey` in `packages/citekey`: pure ESM,
    no dependencies, released as a GitHub release tarball (`citekey-v<semver>`)
    because npm can't install a git subdirectory. `proposeCitekey(csl,
    preset | options)`; presets `author-year-word` (today's rule, the default)
    and `bbt-default` (Better BibTeX's `auth.lower + shorttitle(3,3) + year`).
    The cases file moves into the package, with CSL input and a preset per
-   case.
+   case. corpus-mcp uses it as an npm workspace (`packages/citekey`), and the
+   deploy ships its build. Checked against the live catalogue before
+   release: the same proposed key and blockers for all 510 books. Options
+   added beyond the first draft: `order` (BBT puts the year last).
 4. **Own environment.** corpus-mcp's own `.env`, no longer
    `../concept-clusters/.env`.
 

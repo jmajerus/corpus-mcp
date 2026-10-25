@@ -292,7 +292,10 @@ function openCorpus(config: Config): Corpus {
     const normalized = normalizeProposalTags({ db, data, booksRoot: config.booksRoot, vocabulary });
     if (normalized) console.error(`rewrote ${normalized} tag proposal(s) into the vocabulary's terms`);
   });
-  return { db, data, booksRoot: config.booksRoot, vocabularySource: source, get vocabulary() { return source.current(); } };
+  return {
+    db, data, booksRoot: config.booksRoot, citekeyPreset: config.citekeyPreset, vocabularySource: source,
+    get vocabulary() { return source.current(); },
+  };
 }
 
 export async function serveStdio(config: Config): Promise<void> {

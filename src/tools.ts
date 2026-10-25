@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import * as mupdf from "mupdf";
 import { bookBibtex } from "./bibtex.js";
-import { CITEKEY_PATTERN, type CitekeyBlocker } from "./citekey.js";
+import type { CslName } from "@jmajerus/citekey";
+import { type CitekeyBlocker, DEFAULT_PRESET, type PresetName, calibreNames, followsRule } from "./citekey.js";
 import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUuid, recordChanges } from "./data.js";
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
@@ -25,6 +26,8 @@ export interface Corpus {
   db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary;
   /** Where the vocabulary comes from, when it is a file (the server); tests pass a Vocabulary alone. */
   vocabularySource?: VocabularySource;
+  /** The citekey preset the index was built with (default "author-year-word"). */
+  citekeyPreset?: PresetName;
 }
 
 export interface BookRow {
@@ -434,28 +437,14 @@ function joinAuthors(authors: string[]): string | undefined {
   return `${authors.slice(0, -1).join(", ")}, and ${authors.at(-1)}`;
 }
 
-/** A CSL JSON name: Calibre's sort form "Nye, Joseph S., Jr." is family and given; a name without a comma is literal. */
-export interface CslName { family?: string; given?: string; literal?: string }
-
 export interface CslItem {
   id: string; "citation-key"?: string; type: "book"; title: string; author?: CslName[]; publisher?: string;
   issued?: { "date-parts": number[][] }; ISBN?: string;
 }
 
-function cslName(name: string, sort: string | undefined): CslName {
-  if (sort?.includes(",")) {
-    const [family, ...rest] = sort.split(",");
-    const given = rest.join(",").trim();
-    return given ? { family: family.trim(), given } : { family: family.trim() };
-  }
-  return { literal: name };
-}
-
 /** The book as a CSL JSON item; empty fields are left out. */
 export function cslItem(book: BookRow, citekey: string | null): CslItem {
-  const authors = JSON.parse(book.authors) as string[];
-  const sorts = JSON.parse(book.author_sorts) as string[];
-  const names = authors.map((name, i) => (name && name !== "Unknown" ? cslName(name, sorts[i]) : null)).filter((n): n is CslName => n !== null);
+  const names = calibreNames(JSON.parse(book.authors) as string[], JSON.parse(book.author_sorts) as string[]);
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
   return {
     id: citekey ?? `calibre:${book.uuid ?? book.id}`,
@@ -581,8 +570,10 @@ export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: 
   if (book.calibre_citekey && book.calibre_citekey !== citekey.toLowerCase()) {
     warnings.push(`Calibre's citekey identifier "${book.calibre_citekey}" overrides this pin until it is removed in Calibre.`);
   }
-  if (!CITEKEY_PATTERN.test(citekey)) {
-    warnings.push(`"${citekey}" does not follow this server's citekey rule (author + year + title word, e.g. "nye2011future"). Pinned as given.`);
+  const metadata = { title: book.title, authors: JSON.parse(book.authors) as string[], authorSorts: JSON.parse(book.author_sorts) as string[], publisher: book.publisher, year: book.year };
+  const preset = c.citekeyPreset ?? DEFAULT_PRESET;
+  if (!followsRule(citekey, metadata, preset)) {
+    warnings.push(`"${citekey}" does not follow this server's citekey rule (${preset}; proposed "${book.proposed_citekey ?? ""}"). Pinned as given.`);
   }
   const proposed = book.proposed_citekey;
   const lower = citekey.toLowerCase();

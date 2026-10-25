@@ -1,4 +1,5 @@
 import path from "node:path";
+import { DEFAULT_PRESET, type PresetName, isPreset } from "./citekey.js";
 import type { AccessConfig } from "./access.js";
 
 /** Settings for the /admin dashboard; every field has a default, so tests and older configs can omit it. */
@@ -34,6 +35,8 @@ export interface Config {
   /** Calibre-Web's shelf export (see deploy/corpus-source.sh), and the library its book ids belong to. */
   shelvesFile: string;
   shelvesLibrary: string;
+  /** The @jmajerus/citekey preset for proposed citekeys. */
+  citekeyPreset: PresetName;
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
   admin?: AdminConfig;
@@ -43,6 +46,12 @@ export interface Config {
 
 /** The library Calibre-Web serves on calibre-web.localdomain (/mnt/Calibre/main). */
 const DEFAULT_LIBRARIES = ["main"];
+
+function citekeyPreset(name: string | undefined): PresetName {
+  if (!name) return DEFAULT_PRESET;
+  if (!isPreset(name)) throw new Error(`CORPUS_CITEKEY_PRESET "${name}" is not a citekey preset (author-year-word, bbt-default).`);
+  return name;
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const libraries = env.CORPUS_LIBRARIES
@@ -58,6 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backupDir: path.resolve(env.CORPUS_BACKUP_DIR ?? "/var/lib/corpus-mcp/backups"),
     shelvesFile: path.resolve(env.CORPUS_SHELVES_FILE ?? "/var/lib/corpus-mcp/shelves.json"),
     shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
+    citekeyPreset: citekeyPreset(env.CORPUS_CITEKEY_PRESET),
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
       access: { teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined },
