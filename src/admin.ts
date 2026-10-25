@@ -104,7 +104,7 @@ export async function adminMetrics(c: Corpus, config: Config, version: string) {
     shelves: listShelves(c).shelves,
     quotes: Object.fromEntries((c.data.prepare(`
       SELECT 'total' AS k, COUNT(*) AS n FROM quotes UNION ALL
-      SELECT 'undecided', COUNT(*) FROM quotes WHERE category_mode = 'none' UNION ALL
+      SELECT 'undecided', COUNT(*) FROM quotes WHERE category_mode = 'undecided' UNION ALL
       SELECT 'orphaned', COUNT(*) FROM quotes WHERE status = 'orphaned'`).all() as { k: string; n: number }[]).map((r) => [r.k, r.n])),
     disk: [disk(path.dirname(config.dbPath)), disk(config.booksRoot)],
     neighbors: await probeNeighbors(admin.neighbors),

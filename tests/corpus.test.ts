@@ -895,9 +895,9 @@ describe("quotes", () => {
     const saved = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies" }, undefined, "agent") as { quote: { id: number } };
     const id = saved.quote.id;
     expect(searchQuotes(c, { book: "main:5" }).quotes[0]).toMatchObject({
-      category_mode: "none", categories: [], book_categories: [{ tag: "social-sciences.psychology.social-psychology" }],
+      category_mode: "undecided", categories: [], book_categories: [{ tag: "social-sciences.psychology.social-psychology" }],
     });
-    expect(searchQuotes(c, { category_mode: "none" }).quotes.map((q) => q.id)).toEqual([id]);
+    expect(searchQuotes(c, { category_mode: "undecided" }).quotes.map((q) => q.id)).toEqual([id]);
     expect(searchQuotes(c, { category: "Psychology" }).total).toBe(0);
 
     expect(updateQuote(c, { id, use_book_categories: true }, "me", "admin")).toMatchObject({
@@ -910,9 +910,22 @@ describe("quotes", () => {
 
     expect(updateQuote(c, { id, categories: ["Sociology"] }, "me", "admin")).toMatchObject({ category_mode: "own", categories: [{ tag: "social-sciences.sociology" }] });
     expect(updateQuote(c, { id, note: "only the note" }, "me", "admin")).toMatchObject({ category_mode: "own" });
-    expect(updateQuote(c, { id, categories: [] }, "me", "admin")).toMatchObject({ category_mode: "none", categories: [] });
-    expect(() => updateQuote(c, { id, categories: ["Trivia"], use_book_categories: true }, "me", "admin")).toThrow(/either categories or use_book_categories/);
+    expect(updateQuote(c, { id, categories: [] }, "me", "admin")).toMatchObject({ category_mode: "undecided", categories: [] });
+    expect(() => updateQuote(c, { id, categories: ["Trivia"], use_book_categories: true }, "me", "admin")).toThrow(/only one of categories/);
     expect(saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", use_book_categories: true }, undefined, "agent")).toMatchObject({ quote: { category_mode: "book" } });
+  });
+
+  it("lets tags alone describe a quote, and keeps one spelling per tag", () => {
+    const a = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies", no_category: true, labels: ["Parable", " overwork "] }, "me", "admin") as { quote: { id: number } };
+    expect(searchQuotes(c, { book: "main:5" }).quotes[0]).toMatchObject({ category_mode: "tags_only", categories: [], labels: ["Parable", "overwork"] });
+    expect(searchQuotes(c, { category_mode: "undecided" }).total).toBe(0);
+    expect(searchQuotes(c, { category_mode: "tags_only" }).quotes.map((q) => q.id)).toEqual([a.quote.id]);
+    expect(() => saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", no_category: true, categories: ["Sociology"] }, "me", "admin")).toThrow(/only one of/);
+    // A second quote reuses the existing spelling, and duplicates collapse.
+    const b = saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", labels: ["parable", "PARABLE", "compassion"] }, "me", "admin") as { quote: { labels: string[] } };
+    expect(b.quote.labels).toEqual(["Parable", "compassion"]);
+    expect(searchQuotes(c, {}).tags).toEqual([{ tag: "Parable", n: 2 }, { tag: "compassion", n: 1 }, { tag: "overwork", n: 1 }]);
+    expect(searchQuotes(c, { label: "parable" }).total).toBe(2);
   });
 
   it("re-anchors quotes when their book's file changes, and orphans those that are gone", () => {

@@ -91,10 +91,11 @@ function render() {
 function quotesSection() {
   const read = book.status === "indexed" ? '<a href="/admin/books/' + encodeURIComponent(book.book_id) + '/read">Open the reader</a> and select a passage to save a quote.' : "";
   if (!book.quotes.length) return '<p class="note">No quotes from this book. ' + read + "</p>";
-  return '<div class="scroll"><table><thead><tr><th>Quote</th><th>Where</th><th>Categories and labels</th></tr></thead><tbody>' +
+  return '<div class="scroll"><table><thead><tr><th>Quote</th><th>Where</th><th>Categories and tags</th></tr></thead><tbody>' +
     book.quotes.map((q) => '<tr><td><a href="/admin/quotes/' + q.id + '">#' + q.id + "</a> " + esc(q.text.length > 220 ? q.text.slice(0, 220) + "…" : q.text) + "</td><td>" + esc(q.locator) +
-      (q.status === "orphaned" ? " " + '<span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</td><td>" + (q.category_mode === "none" ? '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Undecided</span> '
-        : q.category_mode === "book" ? '<span class="note">Book’s categories</span> ' : q.categories.map((t) => tagChip(t.tag)).join("")) +
+      (q.status === "orphaned" ? " " + '<span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</td><td>" + (q.category_mode === "undecided" ? '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Undecided</span> '
+        : q.category_mode === "book" ? '<span class="note">Book’s categories</span> ' : q.category_mode === "tags_only" ? '<span class="note">No category</span> '
+        : q.categories.map((t) => tagChip(t.tag)).join("")) +
       q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</td></tr>").join("") + '</tbody></table></div><p class="note">' + read + "</p>";
 }
 

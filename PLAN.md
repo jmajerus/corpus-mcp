@@ -313,22 +313,31 @@ books. `corpus_status` lists the books to fix.
 Implemented as designed below, with these decisions:
 
 - **Categories are always an explicit choice** (`category_mode`). Free-form
-  labels (`cc:puzzle:<id>`) are separate.
-  - *Undecided* (`none`) is the default and means "review later". An
+  tags are separate (stored in the `labels` column).
+  - *Undecided* (`undecided`) is the default and means "review later". An
     epigraph or a personal story can be quotable without matching its
     book's subject, and these tools may serve authoring beyond Concept
     Clusters. The quotes list filters on it, and the dashboard counts it.
   - *The book's categories* (`book`) is chosen deliberately and followed
     live, so re-categorizing the book carries the quote along.
   - *Own categories* (`own`) are chosen for the passage.
+  - *No category* (`tags_only`) is a decision, not a deferral: many quotes
+    sit on a finer axis than the subject taxonomy (a parable, a reflection
+    on overwork or compassion), and their tags describe them. They leave the
+    review queue.
   - Search uses each quote's effective categories.
   - An automatic default to the book's categories was tried and dropped on
     2026-10-25.
+- **Tags are first-class.** A new tag reuses an existing tag's spelling
+  (case-insensitive), so one theme keeps one name. Search returns every tag
+  with its count. The quotes list shows them as a cloud that filters on
+  click, and the editors suggest existing tags as you type. Tags hold themes
+  (`overwork`), forms (`parable`, `epigraph`), and links (`cc:puzzle:<id>`).
 - **Creating, for people.** A reader view (`/admin/books/<id>/read`) shows
   the text with saved quotes highlighted. Selecting a passage saves it
   through the same check `save_quote` uses.
 - **Admin pages.** `/admin/quotes` (list) and `/admin/quotes/<id>`
-  (context, citation, and editing of note, categories, and labels; delete).
+  (context, citation, and editing of note, categories, and tags; delete).
   Each book page lists its quotes.
 - **Re-anchoring** runs after every scan (`reanchorQuotes`). A quote is
   retried only when its book's file changes.
