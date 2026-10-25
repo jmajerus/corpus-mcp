@@ -12,7 +12,7 @@ import { type DataStore, backupDataStore, openDataStore } from "../src/data.js";
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
-import { listProposals, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "../src/tagging.js";
+import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "../src/tagging.js";
 import { Vocabulary, buildVocabulary } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
@@ -68,7 +68,7 @@ function build(): void {
     { id: 2, title: "Echoes", authors: ["Cy Writer"], tags: ["Social Science.Media Studies", "MEAP V08"], files: { epub } },
     { id: 3, title: "Cover Only", authors: ["Nobody"] },
     { id: 4, title: "Diary", authors: ["Me"], tags: ["Private"], files: { epub } },
-    { id: 5, title: "Weak Ties Revisited", authors: ["Dee One| Eve Two"], sorts: ["Dee One, Eve Two"], pubdate: "2001-01-01 00:00:00+00:00", files: { epub } },
+    { id: 5, title: "Weak Ties Revisited", authors: ["Dee One| Eve Two"], sorts: ["Dee One, Eve Two"], pubdate: "2001-01-01 00:00:00+00:00", tags: ["social-sciences.psychology.social-psychology"], files: { epub } },
     { id: 6, title: "Strength in Numbers", authors: ["Fay Fixed"], pubdate: "2000-01-01 00:00:00+00:00", citekey: "Fixed2000Strength", tags: ["Social Science.Sociology"], files: { epub } },
   ]);
   makeLibrary(root, "library", [{ id: 7, title: "Networks", authors: ["Ann Author", "Bo Second"], files: { pdf } }]);
@@ -512,6 +512,9 @@ describe("tags", () => {
     expect(social.children.map((t) => [t.tag, t.books])).toEqual([["Social Science.Media Studies", 1], ["Social Science.Sociology", 1]]);
     expect(listTags(c, { under: "social science.sociology" }).tags.map((t) => t.tag)).toEqual(["Social Science.Sociology"]);
     expect(listTags(c, { min_books: 2 }).tags.map((t) => t.name)).toEqual(["Social Science"]);
+    const vocab = listTags(c, { under: "Social Sciences" }).tags[0];
+    expect(vocab).toMatchObject({ tag: "social-sciences", label: "Social Sciences", books: 1 });
+    expect(vocab.children[0]).toMatchObject({ tag: "social-sciences.psychology", label: "Social Sciences › Psychology" });
     expect(() => listTags(c, { under: "Nope" })).toThrow(/No tag "Nope"/);
   });
 
@@ -522,6 +525,10 @@ describe("tags", () => {
     // main:1 carries a plain "sociology" tag, main:6 "Social Science.Sociology".
     expect(listBooks(c, { tag: "sociology" }).books.map((b) => b.book_id)).toEqual(["main:1", "main:6"]);
     expect(listBooks(c, { tag: "Media Studies" }).books.map((b) => b.book_id)).toEqual(["main:2"]);
+    // Vocabulary titles are translated to slugs, at any level.
+    expect(listBooks(c, { tag: "Psychology" }).books.map((b) => b.book_id)).toEqual(["main:5"]);
+    expect(listBooks(c, { tag: "Social Sciences › Psychology › Social Psychology" }).books.map((b) => b.book_id)).toEqual(["main:5"]);
+    expect(listBooks(c, { tag: "social-sciences" }).books.map((b) => b.book_id)).toEqual(["main:5"]);
     expect(searchCorpus(c, { query: "amplifies", tag: "Social Science.Media Studies" }).results.every((r) => r.book_id === "main:2")).toBe(true);
     expect(() => listBooks(c, { tag: "Social" })).toThrow(/No book is tagged "Social". Similar tags: Social Science.Media Studies, Social Science.Sociology/);
     expect(listBooks(c, { query: "Echoes" }).books[0].tags).toEqual(["MEAP V08", "Social Science.Media Studies"]);
@@ -529,25 +536,46 @@ describe("tags", () => {
 
   it("flags tags that are not subjects", () => {
     const { tags } = corpusStatus(c);
-    expect(tags).toMatchObject({ distinct: 4, hierarchical: 2 });
+    expect(tags).toMatchObject({ distinct: 5, hierarchical: 3 });
     expect(tags.suspect).toEqual([{ tag: "MEAP V08", books: 1, reason: "status or format, not a subject" }]);
   });
 });
 
 describe("tag vocabulary and proposals", () => {
-  it("builds hierarchical tags from the taxonomy, dropping commas and keeping slugs", () => {
+  it("builds slug tags with title labels, and finds tags by slug or title", () => {
     expect(buildVocabulary(taxonomy).map((t) => t.tag)).toEqual([
-      "Interdisciplinary Studies.Science Technology & Society",
-      "Interdisciplinary Studies.Science Technology & Society.Technology Work & Control",
-      "Social Sciences.Psychology",
-      "Social Sciences.Psychology.Social Psychology",
-      "Social Sciences.Sociology",
-      "Social Sciences.Sociology.Social Change",
-      "Trivia",
+      "interdisciplinary-studies.science-technology-society",
+      "interdisciplinary-studies.science-technology-society.technology-work-control",
+      "social-sciences.psychology",
+      "social-sciences.psychology.social-psychology",
+      "social-sciences.sociology",
+      "social-sciences.sociology.social-change",
+      "trivia",
     ]);
-    expect(c.vocabulary.find("social sciences.sociology.social change")).toEqual({
-      tag: "Social Sciences.Sociology.Social Change", domain: "social-sciences", category: "sociology", subcategory: "social-change",
+    const v = c.vocabulary;
+    expect(v.find("Social-Sciences.Sociology.Social-Change")).toEqual({
+      tag: "social-sciences.sociology.social-change", label: "Social Sciences › Sociology › Social Change",
+      domain: "social-sciences", category: "sociology", subcategory: "social-change",
     });
+    // Titles with their commas, without them (the earlier tag form), and with " › " all resolve.
+    for (const title of ["Interdisciplinary Studies › Science, Technology & Society › Technology, Work & Control",
+      "Interdisciplinary Studies.Science Technology & Society.Technology Work & Control"]) {
+      expect(v.find(title)?.tag).toBe("interdisciplinary-studies.science-technology-society.technology-work-control");
+    }
+    expect(v.toSlugPath("Science, Technology & Society")).toBe("science-technology-society");
+    expect(v.toSlugPath("misinformation")).toBe("misinformation");
+    expect(v.labelFor("interdisciplinary-studies")).toBe("Interdisciplinary Studies");
+  });
+
+  it("rewrites stored proposal tags into slug form, once", () => {
+    data.prepare(`INSERT INTO tag_proposals (calibre_uuid, book_id, title, tags, rationale, status, approved_tags, proposed_at)
+      VALUES ('u', 'main:1', 'Networks', ?, 'r', 'approved', ?, '2026-10-25')`)
+      .run(JSON.stringify(["Social Sciences.Sociology", "social-sciences.sociology", "Gone.Tag"]), JSON.stringify(["Trivia"]));
+    expect(normalizeProposalTags(c)).toBe(1);
+    expect(data.prepare("SELECT tags, approved_tags FROM tag_proposals").get()).toEqual({
+      tags: JSON.stringify(["social-sciences.sociology", "Gone.Tag"]), approved_tags: JSON.stringify(["trivia"]),
+    });
+    expect(normalizeProposalTags(c)).toBe(0);
   });
 
   describe("in the index", () => {
@@ -559,6 +587,9 @@ describe("tag vocabulary and proposals", () => {
       const first = taggingWorklist(c, { limit: 2 });
       expect(first.books.map((b) => b.book_id)).toEqual(["library:7", "main:1"]);
       expect(first.books[1]).toMatchObject({ title: "Networks", chapters: ["Preface", "Part One"], tags: ["sociology"] });
+      // main:5 already carries a vocabulary tag, so it is left out by default.
+      expect(taggingWorklist(c, { limit: 25 }).books.map((b) => b.book_id)).not.toContain("main:5");
+      expect(taggingWorklist(c, { limit: 25, include_tagged: true }).books.map((b) => b.book_id)).toContain("main:5");
       proposeTags(c, { book_id: "main:1", tags: ["social sciences.sociology"], rationale: "About social networks." });
       expect(taggingWorklist(c, { limit: 25 }).books.map((b) => b.book_id)).not.toContain("main:1");
     });
@@ -566,7 +597,7 @@ describe("tag vocabulary and proposals", () => {
     it("accepts only vocabulary tags, canonicalized, and never overwrites a reviewed proposal", () => {
       expect(() => proposeTags(c, { book_id: "main:1", tags: ["Networks"], rationale: "x" })).toThrow(/Not in the vocabulary: "Networks"/);
       expect(proposeTags(c, { book_id: "main:1", tags: ["social sciences.sociology", "Social Sciences.Sociology"], rationale: "x" }))
-        .toMatchObject({ status: "proposed", tags: ["Social Sciences.Sociology"] });
+        .toMatchObject({ status: "proposed", tags: ["social-sciences.sociology"] });
       expect(proposeTags(c, { book_id: "main:1", tags: ["Social Sciences.Sociology.Social Change"], rationale: "y" }).status).toBe("replaced");
       const uuid = "uuid-1";
       reviewProposal(c, uuid, { action: "reject" });
@@ -578,12 +609,12 @@ describe("tag vocabulary and proposals", () => {
       const pending = listProposals(c).proposals[0];
       expect(pending).toMatchObject({ book_id: "main:1", status: "pending", calibre_tags: ["sociology"], in_calibre: false });
       expect(() => reviewProposal(c, "uuid-1", { action: "approve", tags: ["Made Up"] })).toThrow(/Not in the vocabulary/);
-      reviewProposal(c, "uuid-1", { action: "approve", tags: ["Social Sciences.Sociology", "Social Sciences.Psychology.Social Psychology"] }, "me@example.com");
+      reviewProposal(c, "uuid-1", { action: "approve", tags: ["social-sciences.sociology", "Social Sciences › Psychology › Social Psychology"] }, "me@example.com");
       expect(listProposals(c, { status: "approved" }).proposals[0]).toMatchObject({
-        approved_tags: ["Social Sciences.Sociology", "Social Sciences.Psychology.Social Psychology"], reviewed_by: "me@example.com",
+        approved_tags: ["social-sciences.sociology", "social-sciences.psychology.social-psychology"], reviewed_by: "me@example.com",
       });
       expect(tagPlan(c, "main").books).toEqual([{
-        calibre_id: 1, uuid: "uuid-1", title: "Networks", add: ["Social Sciences.Sociology", "Social Sciences.Psychology.Social Psychology"],
+        calibre_id: 1, uuid: "uuid-1", title: "Networks", add: ["social-sciences.sociology", "social-sciences.psychology.social-psychology"],
       }]);
       expect(reviewProposal(c, "uuid-1", { action: "reopen" }).status).toBe("pending");
       expect(tagPlan(c, "main").books).toEqual([]);
@@ -592,15 +623,15 @@ describe("tag vocabulary and proposals", () => {
 
   it("lists the merged tags calibre-tags.sh would write, and skips a book whose id moved", () => {
     const plan = { books: [
-      { calibre_id: 1, uuid: "uuid-1", title: "Networks", add: ["Social Sciences.Sociology"] },
-      { calibre_id: 2, uuid: "someone-else", title: "Echoes", add: ["Trivia"] },
+      { calibre_id: 1, uuid: "uuid-1", title: "Networks", add: ["social-sciences.sociology"] },
+      { calibre_id: 2, uuid: "someone-else", title: "Echoes", add: ["trivia"] },
     ] };
     const result = spawnSync("bash", [new URL("../tools/calibre-tags.sh", import.meta.url).pathname, path.join(root, "main")], {
       env: { ...process.env, TAG_PLAN: Buffer.from(JSON.stringify(plan)).toString("base64") }, encoding: "utf8",
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("1 book(s)");
-    expect(result.stdout).toMatch(/1\s+Networks\n\s+\+ Social Sciences\.Sociology/);
+    expect(result.stdout).toMatch(/1\s+Networks\n\s+\+ social-sciences\.sociology/);
     expect(result.stderr).toMatch(/skip 2 Echoes: that Calibre id no longer belongs to this book/);
   });
 });

@@ -64,7 +64,7 @@ nav button[aria-pressed="true"] { background: var(--accent); color: var(--accent
 </main>
 <script>
 const STATUSES = ["pending", "approved", "rejected"];
-let status = "pending", offset = 0, counts = {}, vocabulary = new Set();
+let status = "pending", offset = 0, counts = {}, labels = new Map();
 const list = document.getElementById("list");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -77,8 +77,13 @@ document.getElementById("tabs").addEventListener("click", (e) => {
   if (s && s !== status) { status = s; load(true); }
 });
 
+// Vocabulary tags are slugs; show their titles, with the slug on hover.
 function chips(tags, editable) {
-  return tags.map((t) => '<span class="chip" data-tag="' + esc(t) + '">' + esc(t) + (editable ? '<button type="button" class="remove" aria-label="Remove ' + esc(t) + '">×</button>' : "") + "</span>").join("");
+  return tags.map((t) => {
+    const label = labels.get(t) ?? t;
+    return '<span class="chip" data-tag="' + esc(t) + '" title="' + esc(t) + '">' + esc(label) +
+      (editable ? '<button type="button" class="remove" aria-label="Remove ' + esc(label) + '">×</button>' : "") + "</span>";
+  }).join("");
 }
 
 function card(p) {
@@ -119,7 +124,8 @@ function addTag(article) {
   const input = article.querySelector(".add input");
   const value = input.value.trim();
   const msg = article.querySelector(".msg");
-  const match = [...vocabulary].find((t) => t.toLowerCase() === value.toLowerCase());
+  const lower = value.toLowerCase();
+  const match = [...labels].find(([tag, label]) => tag === lower || label.toLowerCase() === lower)?.[0];
   if (!match) { msg.className = "status msg err"; msg.textContent = "Not in the vocabulary."; return; }
   if (![...article.querySelectorAll(".tags .chip")].some((c) => c.dataset.tag === match)) {
     article.querySelector(".tags").insertAdjacentHTML("beforeend", chips([match], true));
@@ -154,10 +160,10 @@ list.addEventListener("keydown", (e) => {
 });
 
 fetch("api/vocabulary").then((r) => r.json()).then((v) => {
-  vocabulary = new Set(v.tags);
-  document.getElementById("vocabulary").innerHTML = v.tags.map((t) => '<option value="' + esc(t) + '">').join("");
+  labels = new Map(v.tags.map((t) => [t.tag, t.label]));
+  document.getElementById("vocabulary").innerHTML = v.tags.map((t) => '<option value="' + esc(t.label) + '">' + esc(t.tag) + "</option>").join("");
+  load(true);
 });
-load(true);
 </script>
 </body>
 </html>

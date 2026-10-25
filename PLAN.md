@@ -418,7 +418,7 @@ below the given one, and a tag-hygiene report in `corpus_status`.
 
 **Status (2026-10-25).** Built and deployed. The vocabulary is
 `data/cc-taxonomy.json` (concept-clusters `authoring:taxonomy:export`, 175
-tags). The tools are `get_tag_vocabulary`, `tagging_worklist`, and
+slug tags). The tools are `get_tag_vocabulary`, `tagging_worklist`, and
 `propose_tags`. The review page is `/review` on the corpus server, with
 `/api/tag-proposals`, `/api/vocabulary`, and `/api/tag-plan`; those routes
 send no CORS headers, and their POST requires JSON. Apply with
@@ -438,12 +438,19 @@ domain › category › subcategory (about 62 categories across 15 domains), so
    off it. Open item: Concept Clusters provides the export (a command or
    MCP resource). Domain display names are not in `list_categories`, which
    gives only slugs such as `social-sciences`.
-2. **Tag form.** `Domain.Category.Subcategory` in display names, e.g.
-   `Social Sciences.Psychology.Social Psychology`. A category with no
-   domain (Vocabulary, Trivia) sits at the top level. The `tag` filter will
-   also match at any level boundary, so `Psychology` finds
-   `Social Sciences.Psychology.*` without knowing the domain. No name in the
-   current taxonomy contains a `.`.
+2. **Tag form: slugs** (changed from titles on 2026-10-25). For example,
+   `social-sciences.psychology.social-psychology`; a category with no
+   domain (`trivia`, `vocabulary`) sits at the top level.
+   - Slugs are Concept Clusters' stable join ids, so a renamed category
+     or subcategory leaves Calibre's tags valid. With titles it would have
+     needed a re-tag pass.
+   - Slugs need no workaround for the comma in names such as "Science,
+     Technology & Society".
+   - Titles are kept as labels ("Social Sciences › Psychology › Social
+     Psychology") in `list_tags`, the vocabulary, and the review page.
+   - Lookups and filters accept slugs or titles, at any level: `Psychology`
+     and `psychology` both find `social-sciences.psychology.*`.
+   - The cost: Calibre-Web's Categories list shows the slugs.
 3. **Proposals.** A worklist tool hands an agent batches of books with
    context: title, authors, description, top-level outline titles, shelves,
    existing tags including BISAC, and the vocabulary. The agent records one

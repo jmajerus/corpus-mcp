@@ -32,7 +32,7 @@ function canonicalTags(c: Corpus, tags: string[], max: number): string[] {
     else if (!canonical.includes(found.tag)) canonical.push(found.tag);
   }
   if (unknown.length) {
-    throw new ToolError(`Not in the vocabulary: ${unknown.map((t) => `"${t}"`).join(", ")}. Use get_tag_vocabulary for the exact tags.`);
+    throw new ToolError(`Not in the vocabulary: ${unknown.map((t) => `"${t}"`).join(", ")}. Use get_tag_vocabulary for the tags (slug or title form).`);
   }
   if (canonical.length < 1 || canonical.length > max) throw new ToolError(`Give 1 to ${max} vocabulary tags.`);
   return canonical;
@@ -41,15 +41,42 @@ function canonicalTags(c: Corpus, tags: string[], max: number): string[] {
 export interface VocabularyArgs { under?: string }
 
 export function getTagVocabulary(c: Corpus, args: VocabularyArgs = {}) {
-  const under = args.under?.toLowerCase();
+  const under = args.under ? c.vocabulary.toSlugPath(args.under).toLowerCase() : undefined;
   const tags = c.vocabulary.tags
-    .filter((t) => !under || t.tag.toLowerCase() === under || t.tag.toLowerCase().startsWith(`${under}.`))
-    .map((t) => t.tag);
+    .filter((t) => !under || t.tag === under || t.tag.startsWith(`${under}.`))
+    .map((t) => ({ tag: t.tag, label: t.label }));
   return {
-    note: "Concept Clusters' taxonomy as Calibre tags (Domain.Category.Subcategory). Propose the most specific tag that fits; a category tag is fine when no subcategory does.",
+    note: "Concept Clusters' taxonomy as Calibre tags: slugs \"domain.category.subcategory\", with titles in label. propose_tags takes either form. Propose the most specific tag that fits; a category tag is fine when no subcategory does.",
     count: tags.length,
     tags,
   };
+}
+
+/**
+ * Rewrites stored proposal tags into the vocabulary's current slug form (from title paths, or tags
+ * saved before the switch to slugs). Idempotent; a tag the vocabulary no longer knows is left as is.
+ */
+export function normalizeProposalTags(c: Corpus): number {
+  const rows = c.data.prepare("SELECT calibre_uuid, tags, approved_tags FROM tag_proposals").all() as
+    { calibre_uuid: string; tags: string; approved_tags: string | null }[];
+  const normalize = (json: string | null) => {
+    if (!json) return json;
+    const tags = (JSON.parse(json) as string[]).map((t) => c.vocabulary.find(t)?.tag ?? t);
+    return JSON.stringify([...new Set(tags)]);
+  };
+  const update = c.data.prepare("UPDATE tag_proposals SET tags = ?, approved_tags = ? WHERE calibre_uuid = ?");
+  let changed = 0;
+  c.data.transaction(() => {
+    for (const r of rows) {
+      const tags = normalize(r.tags)!;
+      const approved = normalize(r.approved_tags);
+      if (tags !== r.tags || approved !== r.approved_tags) {
+        update.run(tags, approved, r.calibre_uuid);
+        changed++;
+      }
+    }
+  })();
+  return changed;
 }
 
 export interface WorklistArgs { limit?: number; shelf?: string; include_tagged?: boolean }

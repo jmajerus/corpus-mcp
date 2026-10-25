@@ -110,15 +110,20 @@ function shelfFilter(c: Corpus, shelf: string): string {
 }
 
 /**
- * The SQL condition for books carrying a tag or any tag below it. Calibre (and Calibre-Web's
- * "Categories") nest tags with ".": "Social Sciences" matches "Social Sciences.Psychology". The tag may
- * also start at any level, so "Psychology" matches "Social Sciences.Psychology.Social Psychology"
- * without naming the domain. Case-insensitive.
+ * The SQL condition for books carrying a tag or any tag below it, with the value bound as @tag. Calibre
+ * (and Calibre-Web's "Categories") nest tags with ".": "social-sciences" matches
+ * "social-sciences.psychology". The tag may start at any level, so "psychology" matches
+ * "social-sciences.psychology.social-psychology". Vocabulary titles work too ("Psychology",
+ * "Social Sciences › Psychology"); they are translated to slugs. Case-insensitive.
  */
+export function tagFilterValue(c: Corpus, tag: string): string {
+  return c.vocabulary.toSlugPath(tag);
+}
+
 function tagFilter(c: Corpus, tag: string): string {
   const condition = `EXISTS (SELECT 1 FROM json_each(b.tags) t
     WHERE ('.' || lower(t.value) || '.') LIKE '%.' || replace(replace(replace(lower(@tag), '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '.%' ESCAPE '\\')`;
-  const any = c.db.prepare(`SELECT 1 FROM books b WHERE ${condition} LIMIT 1`).get({ tag });
+  const any = c.db.prepare(`SELECT 1 FROM books b WHERE ${condition} LIMIT 1`).get({ tag: tagFilterValue(c, tag) });
   if (!any) {
     const similar = c.db.prepare(`
       SELECT DISTINCT t.value FROM books b, json_each(b.tags) t WHERE instr(lower(t.value), lower(?)) > 0 ORDER BY 1 LIMIT 10`)
@@ -188,7 +193,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
       WHERE ${where.join(" AND ")}
       ORDER BY bm25(passages_fts)
       LIMIT @fetch`).all({
-      match, book_id: bookId, library: args.library, shelf: args.shelf, tag: args.tag,
+      match, book_id: bookId, library: args.library, shelf: args.shelf, tag: args.tag && tagFilterValue(c, args.tag),
       author: args.author ? `%${args.author}%` : undefined, fetch: limit * 4,
     }) as typeof rows;
   } catch (error) {
@@ -241,7 +246,8 @@ export function listBooks(c: Corpus, args: ListArgs) {
   const rows = c.db.prepare(`
     SELECT * FROM books b ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
     ORDER BY title COLLATE NOCASE, id LIMIT @limit`).all({
-    library: args.library, shelf: args.shelf, tag: args.tag, q: query ? `%${query}%` : undefined, exact: args.query, limit,
+    library: args.library, shelf: args.shelf, tag: args.tag && tagFilterValue(c, args.tag), q: query ? `%${query}%` : undefined,
+    exact: args.query, limit,
     pinned: JSON.stringify(pinnedMatches),
   }) as BookRow[];
   const shelves = shelvesByBook(c, rows.map((b) => b.id));
@@ -284,7 +290,7 @@ export function listShelves(c: Corpus) {
   return { exported_at: exportedAt ?? null, shelves };
 }
 
-interface TagNode { name: string; tag: string; books: number; children: TagNode[] }
+interface TagNode { name: string; tag: string; label?: string; books: number; children: TagNode[] }
 
 export interface ListTagsArgs { under?: string; min_books?: number }
 
@@ -313,12 +319,14 @@ export function listTags(c: Corpus, args: ListTagsArgs = {}) {
   }
   const minBooks = args.min_books ?? 1;
   const finish = (node: TagNode): TagNode => ({
-    name: node.name, tag: node.tag, books: booksAt.get(node)?.size ?? 0,
+    name: node.name, tag: node.tag,
+    ...(c.vocabulary.labelFor(node.tag) ? { label: c.vocabulary.labelFor(node.tag) } : {}),
+    books: booksAt.get(node)?.size ?? 0,
     children: node.children.map(finish).filter((n) => n.books >= minBooks).sort((a, b) => a.name.localeCompare(b.name)),
   });
   let top = finish(root).children;
   if (args.under) {
-    const path = args.under.split(".").map((p) => p.trim().toLowerCase());
+    const path = c.vocabulary.toSlugPath(args.under).split(".").map((p) => p.trim().toLowerCase());
     let nodes = top;
     let found: TagNode | undefined;
     for (const part of path) {
@@ -329,7 +337,7 @@ export function listTags(c: Corpus, args: ListTagsArgs = {}) {
     top = [found!];
   }
   return {
-    note: "Calibre tags, shown as Categories in Calibre-Web. \".\" nests them; filtering by a tag includes the tags below it.",
+    note: "Calibre tags, shown as Categories in Calibre-Web. \".\" nests them; filtering by a tag includes the tags below it. Vocabulary tags are Concept Clusters slugs, with their titles in label.",
     tags: top,
   };
 }

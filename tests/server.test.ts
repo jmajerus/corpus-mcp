@@ -66,7 +66,9 @@ it("serves the tag review page and its API", async () => {
   const page = await fetch(`${base}/review`);
   expect(page.headers.get("content-type")).toContain("text/html");
   expect(await page.text()).toContain("<title>Tag Review</title>");
-  expect((await (await fetch(`${base}/api/vocabulary`)).json()).tags).toContain("Social Sciences.Psychology.Social Psychology");
+  expect((await (await fetch(`${base}/api/vocabulary`)).json()).tags).toContainEqual({
+    tag: "social-sciences.psychology.social-psychology", label: "Social Sciences › Psychology › Social Psychology",
+  });
 
   const client = new Client({ name: "test", version: "0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
@@ -81,9 +83,9 @@ it("serves the tag review page and its API", async () => {
   const notJson = await fetch(`${base}/api/tag-proposals/${uuid}`, { method: "POST", body: "action=approve" });
   expect(notJson.status).toBe(400);
   const approved = await fetch(`${base}/api/tag-proposals/${uuid}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approve", tags: ["Social Sciences.Sociology"] }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approve", tags: ["social-sciences.sociology"] }),
   });
-  expect(await approved.json()).toEqual({ status: "approved", tags: ["Social Sciences.Sociology"] });
+  expect(await approved.json()).toEqual({ status: "approved", tags: ["social-sciences.sociology"] });
   expect(approved.headers.get("access-control-allow-origin")).toBeNull();
-  expect((await (await fetch(`${base}/api/tag-plan`)).json()).books[0].add).toEqual(["Social Sciences.Sociology"]);
+  expect((await (await fetch(`${base}/api/tag-plan`)).json()).books[0].add).toEqual(["social-sciences.sociology"]);
 });

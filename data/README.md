@@ -9,6 +9,8 @@ to the authoring database:
 npm run authoring:taxonomy:export -- --out ../corpus-mcp/data/cc-taxonomy.json
 ```
 
-The export fails if any name contains ".", so its names are safe to split into Calibre's
-hierarchical tags. Three names contain a comma, which Calibre treats as a tag separator;
-corpus-mcp drops the comma when it builds the tag and keeps the slugs for the mapping.
+Calibre tags are built from the slugs (`social-sciences.psychology.social-psychology`), which
+are Concept Clusters' stable ids: a renamed category leaves Calibre's tags valid, and slugs hold no
+commas (Calibre's tag separator) or dots (its hierarchy marker). Titles are kept as labels for
+display, and every lookup accepts either form. The export warns about names containing a comma
+and fails on names containing ".".

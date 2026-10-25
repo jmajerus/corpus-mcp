@@ -8,7 +8,7 @@ import type { Config } from "./config.js";
 import { openDataStore } from "./data.js";
 import { openDatabase } from "./db.js";
 import { REVIEW_HTML } from "./reviewPage.js";
-import { getTagVocabulary, listProposals, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "./tagging.js";
+import { getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, tagPlan, taggingWorklist } from "./tagging.js";
 import { Vocabulary } from "./vocabulary.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
@@ -51,7 +51,7 @@ export function createServer(c: Corpus): McpServer {
       book_id: bookId.optional().describe("Search within one book"),
       library: z.string().optional().describe("Limit to one Calibre library"),
       shelf: z.string().optional().describe("Limit to one Calibre-Web shelf, by name (see list_shelves)"),
-      tag: z.string().optional().describe('Limit to books with this Calibre tag or any tag below it ("Social Science" includes "Social Science.Sociology"; see list_tags)'),
+      tag: z.string().optional().describe('Limit to books with this Calibre tag or any tag below it, at any level; vocabulary titles work too ("psychology" or "Psychology" both find social-sciences.psychology.*; see list_tags)'),
       author: z.string().optional().describe("Limit to books whose author contains this text"),
       limit: z.number().int().min(1).max(50).optional().describe("Results to return (default 10)"),
       advanced: z.boolean().optional().describe("Pass query to SQLite FTS5 unchanged (OR, NOT, NEAR(), column filters)"),
@@ -92,8 +92,8 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("get_tag_vocabulary", {
     title: "Get tag vocabulary",
-    description: "Concept Clusters' taxonomy as Calibre tags (Domain.Category.Subcategory), the only tags propose_tags accepts.",
-    inputSchema: { under: z.string().optional().describe('Only tags at or below this one, e.g. "Social Sciences.Psychology"') },
+    description: "Concept Clusters' taxonomy as Calibre tags: slug paths (\"social-sciences.psychology.social-psychology\") with their titles as labels. propose_tags accepts only these, in either form.",
+    inputSchema: { under: z.string().optional().describe('Only tags at or below this one, e.g. "social-sciences.psychology" or "Psychology"') },
     annotations: { title: "Get tag vocabulary", ...readOnly },
   }, (args) => run(() => json(getTagVocabulary(c, args))));
 
@@ -113,7 +113,7 @@ export function createServer(c: Corpus): McpServer {
     description: "Propose 1-3 vocabulary tags for a book, with a one- or two-sentence rationale. Proposals wait for a person's review on the /review page; nothing is written to Calibre until approved tags are applied.",
     inputSchema: {
       book_id: bookId,
-      tags: z.array(z.string()).min(1).max(3).describe("Exact tags from get_tag_vocabulary, most specific first"),
+      tags: z.array(z.string()).min(1).max(3).describe("Tags from get_tag_vocabulary, as slugs or titles, most specific first"),
       rationale: z.string().min(1).max(600).describe("Why these tags fit the book"),
     },
     annotations: { title: "Propose tags for a book", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -198,12 +198,15 @@ export function createServer(c: Corpus): McpServer {
 }
 
 function openCorpus(config: Config): Corpus {
-  return {
+  const corpus = {
     db: openDatabase(config.dbPath, { readonly: true }),
     data: openDataStore(config.dataDbPath),
     booksRoot: config.booksRoot,
     vocabulary: Vocabulary.load(config.vocabularyPath),
   };
+  const normalized = normalizeProposalTags(corpus);
+  if (normalized) console.error(`rewrote ${normalized} tag proposal(s) into the vocabulary's slug form`);
+  return corpus;
 }
 
 export async function serveStdio(config: Config): Promise<void> {

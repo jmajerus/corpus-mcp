@@ -38,7 +38,10 @@ All tools except `pin_citekey` and `propose_tags` are read-only, and corpus-mcp 
 
 Calibre tags (Calibre-Web's *Categories*) follow a controlled vocabulary:
 [Concept Clusters](https://github.com/jmajerus/concept-clusters)' taxonomy as
-`Domain.Category.Subcategory` (snapshot in [`data/`](data/)). An agent takes
+slug paths such as `social-sciences.psychology.social-psychology` (snapshot in
+[`data/`](data/)). Slugs are Concept Clusters' stable ids, so a renamed category
+leaves Calibre's tags valid. Tools and the review page show the titles
+("Social Sciences › Psychology › Social Psychology") and accept either form. An agent takes
 books from `tagging_worklist` and calls `propose_tags`. A person approves,
 edits, or rejects each proposal on the review page at `/review`. Then
 `npm run tags:apply -- --apply` runs [`tools/calibre-tags.sh`](tools/calibre-tags.sh)
