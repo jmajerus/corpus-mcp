@@ -58,3 +58,7 @@ BibTeX assigned when you have one.
 
 [`cases.json`](cases.json) (also exported as `@jmajerus/citekey/cases.json`) holds the rule's test
 cases: a CSL input, a preset, and the expected key. A rule change ships as a new release.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md), as for corpus-mcp.
