@@ -17,7 +17,7 @@ import { Vocabulary, buildVocabulary } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
-  toFtsQuery, validIsbn,
+  tagCleanupPlan, toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
@@ -633,5 +633,55 @@ describe("tag vocabulary and proposals", () => {
     expect(result.stdout).toContain("1 book(s)");
     expect(result.stdout).toMatch(/1\s+Networks\n\s+\+ social-sciences\.sociology/);
     expect(result.stderr).toMatch(/skip 2 Echoes: that Calibre id no longer belongs to this book/);
+  });
+});
+
+describe("tag cleanup", () => {
+  beforeEach(() => {
+    scanLibraries(config, db);
+  });
+
+  it("plans removal of suspect tags and named extras, never vocabulary tags", () => {
+    expect(tagCleanupPlan(c, "main").books).toEqual([{ calibre_id: 2, uuid: "uuid-2", title: "Echoes", remove: ["MEAP V08"] }]);
+    expect(tagCleanupPlan(c, "main", ["sociology"]).books.map((b) => [b.calibre_id, b.remove])).toEqual([
+      [1, ["sociology"]], [2, ["MEAP V08"]],
+    ]);
+  });
+
+  it("keeps one-word subjects that only appear inside a publisher name, and subject headings", () => {
+    config.libraries.push("maps");
+    makeLibrary(root, "maps", [{
+      id: 3, title: "Boating Guide", authors: ["Dee Enar"], publisher: "Minnesota Department of Natural Resources",
+      tags: ["Minnesota", "Department of Natural Resources", "Lakes -- Minnesota -- Guidebooks and boating regulations", "Sample Book"],
+      files: { epub },
+    }]);
+    scanLibraries(config, db);
+    expect(tagCleanupPlan(c, "maps").books[0].remove).toEqual(["Department of Natural Resources", "Sample Book"]);
+  });
+
+  it("writes an empty tag list when a book loses all its tags, never the change summary", () => {
+    // A stand-in calibredb that records the tags it is asked to set.
+    const bin = path.join(root, "bin");
+    const log = path.join(root, "calibredb.log");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "calibredb"), `#!/bin/sh\nfor a in "$@"; do case "$a" in tags:*) printf '%s\\n' "$a" >> "${log}";; esac; done\n`, { mode: 0o755 });
+    const plan = { books: [
+      { calibre_id: 2, uuid: "uuid-2", title: "Echoes", remove: ["MEAP V08", "Social Science.Media Studies"] },
+      { calibre_id: 1, uuid: "uuid-1", title: "Networks", add: ["trivia"] },
+    ] };
+    const result = spawnSync("bash", [new URL("../tools/calibre-tags.sh", import.meta.url).pathname, "--apply", path.join(root, "main")], {
+      env: { ...process.env, CALIBRE_BIN: bin, TAG_PLAN: Buffer.from(JSON.stringify(plan)).toString("base64") }, encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(fs.readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["tags:", "tags:sociology,trivia"]);
+  });
+
+  it("removes tags with calibre-tags.sh, keeping the rest", () => {
+    const plan = { books: [{ calibre_id: 2, uuid: "uuid-2", title: "Echoes", remove: ["meap v08"], add: ["trivia"] }] };
+    const result = spawnSync("bash", [new URL("../tools/calibre-tags.sh", import.meta.url).pathname, path.join(root, "main")], {
+      env: { ...process.env, TAG_PLAN: Buffer.from(JSON.stringify(plan)).toString("base64") }, encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/2\s+Echoes\n\s+\+ trivia \| - MEAP V08/);
   });
 });

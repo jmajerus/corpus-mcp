@@ -423,7 +423,24 @@ slug tags). The tools are `get_tag_vocabulary`, `tagging_worklist`, and
 `/api/tag-proposals`, `/api/vocabulary`, and `/api/tag-plan`; those routes
 send no CORS headers, and their POST requires JSON. Apply with
 `npm run tags:apply [-- --apply]`. The tag filter matches at any level.
-First batch: 24 pending proposals for the Misinformation shelf.
+First batch: 24 proposals for the Misinformation shelf, approved and
+applied on 2026-10-25.
+
+**Cleanup (2026-10-25).** `/api/tag-cleanup-plan` plus `misinformation` (a
+duplicate of the Misinformation shelf) removed 137 non-subject tags from 91
+books: BISAC codes, `Pragmatic Bookshelf`, MEAP statuses, `Sample Book`, and
+pasted subtitles. Two false positives were kept by hand: `Minnesota` and a
+Library of Congress subject heading. The rules were then tightened so
+neither is flagged again.
+
+That run hit a bug. For the 64 books whose tags were all removed,
+`calibre-tags.sh` wrote its change summary in as a tag (e.g.
+`- MEAP V03`). Tab-separated fields merged in bash's `read` when the
+tag list was empty. A repair plan removed those 64 tags; nothing else was
+affected. The script now separates fields with `\x1f`, and a test with a
+stand-in `calibredb` covers the empty list. Each run backed up
+`metadata.db` (`metadata.db.before-tags-*` on CT 115). After it: 85
+distinct tags, no suspect tags.
 
 **Plan: Concept Clusters taxonomy as the vocabulary** (chosen 2026-10-25).
 Shelves stay as a few broad, curated collections. Tags become the granular,

@@ -580,19 +580,50 @@ export function corpusStatus(c: Corpus) {
   };
 }
 
+/**
+ * Why a tag is probably not a subject (a BISAC code, a publisher's name, a status or format, a
+ * description pasted into the tag field), or null. Vocabulary tags are never suspect.
+ */
+function suspectTagReason(c: Corpus): (tag: string) => string | null {
+  const publishers = (c.db.prepare("SELECT DISTINCT lower(publisher) FROM books WHERE publisher IS NOT NULL").pluck().all() as string[]);
+  return (tag) => {
+    const lower = tag.toLowerCase();
+    if (c.vocabulary.has(tag)) return null;
+    if (/^[A-Z]{3}\d{6}\b/.test(tag)) return "BISAC subject code";
+    // A publisher's name, or two or more words of one ("Pragmatic Bookshelf" against "The Pragmatic
+    // Bookshelf, LLC"). One word alone must match exactly: "Minnesota" is a subject even though the
+    // publisher is "Minnesota Department of Natural Resources".
+    const multiWord = /\s/.test(lower.trim());
+    if (publishers.some((p) => p === lower || (multiWord && p.includes(lower)))) return "publisher name";
+    if (/\b(?:MEAP|sample|review copy|draft|v\d+(?:\.\d+)?|ebook|kindle)\b/i.test(tag)) return "status or format, not a subject";
+    // Library of Congress subject headings ("Russia -- Social life and customs -- Fiction") are subjects.
+    if (tag.length > 40 && !tag.includes(".") && !tag.includes(" -- ")) return "reads like a description";
+    return null;
+  };
+}
+
+/**
+ * A calibre-tags.sh plan removing suspect tags (see suspectTagReason), plus any tags named in `also`,
+ * from every book in the library that carries them.
+ */
+export function tagCleanupPlan(c: Corpus, library: string, also: string[] = []) {
+  const reason = suspectTagReason(c);
+  const extra = new Set(also.map((t) => t.toLowerCase()));
+  const books = c.db.prepare("SELECT * FROM books WHERE library = ? AND uuid IS NOT NULL AND tags != '[]' ORDER BY id").all(library) as BookRow[];
+  const plan = [];
+  for (const b of books) {
+    const remove = (JSON.parse(b.tags) as string[]).filter((t) => reason(t) || extra.has(t.toLowerCase()));
+    if (remove.length) plan.push({ calibre_id: Number(b.id.split(":")[1]), uuid: b.uuid!, title: b.title, remove });
+  }
+  return { library, generated_at: new Date().toISOString(), books: plan };
+}
+
 /** Tags that are probably not subjects: BISAC codes, publisher names, statuses, descriptions, one-offs. */
 function tagHygiene(c: Corpus) {
   const tags = c.db.prepare(`
     SELECT t.value AS tag, COUNT(*) AS books FROM books b, json_each(b.tags) t WHERE b.status = 'indexed' GROUP BY 1`)
     .all() as { tag: string; books: number }[];
-  const publishers = new Set((c.db.prepare("SELECT DISTINCT lower(publisher) FROM books WHERE publisher IS NOT NULL").pluck().all() as string[]));
-  const reason = (tag: string): string | null => {
-    if (/^[A-Z]{3}\d{6}\b/.test(tag)) return "BISAC subject code";
-    if (publishers.has(tag.toLowerCase())) return "publisher name";
-    if (/\b(?:MEAP|sample|review copy|draft|v\d+(?:\.\d+)?|ebook|kindle)\b/i.test(tag)) return "status or format, not a subject";
-    if (tag.length > 40 && !tag.includes(".")) return "reads like a description";
-    return null;
-  };
+  const reason = suspectTagReason(c);
   const suspect = tags.map((t) => ({ ...t, reason: reason(t.tag) })).filter((t) => t.reason)
     .sort((a, b) => b.books - a.books || a.tag.localeCompare(b.tag));
   return {

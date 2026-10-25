@@ -12,7 +12,7 @@ import { getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, re
 import { Vocabulary } from "./vocabulary.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
-  searchCorpus,
+  searchCorpus, tagCleanupPlan,
 } from "./tools.js";
 
 const VERSION = "0.2.0";
@@ -254,6 +254,9 @@ async function serveReview(c: Corpus, config: Config, req: http.IncomingMessage,
       sendJson(res, 200, reviewProposal(c, uuid, { action: body.action as "approve", tags }, typeof reviewer === "string" ? reviewer : undefined));
     } else if (req.method === "GET" && url.pathname === "/api/tag-plan") {
       sendJson(res, 200, tagPlan(c, url.searchParams.get("library") ?? config.shelvesLibrary));
+    } else if (req.method === "GET" && url.pathname === "/api/tag-cleanup-plan") {
+      // ?also=<tag> (repeatable) removes further tags the hygiene rules do not flag.
+      sendJson(res, 200, tagCleanupPlan(c, url.searchParams.get("library") ?? config.shelvesLibrary, url.searchParams.getAll("also")));
     } else {
       sendJson(res, 404, { error: "Not found." });
     }
