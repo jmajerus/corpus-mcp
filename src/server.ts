@@ -8,7 +8,8 @@ import type { Config } from "./config.js";
 import { openDataStore } from "./data.js";
 import { openDatabase } from "./db.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
+  searchCorpus,
 } from "./tools.js";
 
 const VERSION = "0.2.0";
@@ -47,6 +48,7 @@ export function createServer(c: Corpus): McpServer {
       book_id: bookId.optional().describe("Search within one book"),
       library: z.string().optional().describe("Limit to one Calibre library"),
       shelf: z.string().optional().describe("Limit to one Calibre-Web shelf, by name (see list_shelves)"),
+      tag: z.string().optional().describe('Limit to books with this Calibre tag or any tag below it ("Social Science" includes "Social Science.Sociology"; see list_tags)'),
       author: z.string().optional().describe("Limit to books whose author contains this text"),
       limit: z.number().int().min(1).max(50).optional().describe("Results to return (default 10)"),
       advanced: z.boolean().optional().describe("Pass query to SQLite FTS5 unchanged (OR, NOT, NEAR(), column filters)"),
@@ -56,11 +58,12 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("list_books", {
     title: "List books",
-    description: "Look up books by title, author, tag, publisher, ISBN, id, or citekey, optionally on one shelf. Returns metadata, shelves, format, page count, citekey (pinned or set in Calibre) and proposed_citekey, and other ids that hold the same file.",
+    description: "Look up books by title, author, tag, publisher, ISBN, id, or citekey, optionally on one shelf or under one tag. Returns metadata, shelves, tags, format, page count, citekey (pinned or set in Calibre) and proposed_citekey, and other ids that hold the same file.",
     inputSchema: {
       query: z.string().optional().describe("Text to match; omit to list everything"),
       library: z.string().optional(),
       shelf: z.string().optional().describe("Only books on this Calibre-Web shelf, by name (see list_shelves)"),
+      tag: z.string().optional().describe("Only books with this Calibre tag or any tag below it (see list_tags)"),
       include_unindexed: z.boolean().optional().describe("Also list catalogue entries with no readable ebook file"),
       limit: z.number().int().min(1).max(200).optional().describe("Default 25"),
     },
@@ -73,6 +76,16 @@ export function createServer(c: Corpus): McpServer {
     inputSchema: {},
     annotations: { title: "List shelves", ...readOnly },
   }, () => run(() => json(listShelves(c))));
+
+  server.registerTool("list_tags", {
+    title: "List tags",
+    description: "Calibre tags (Calibre-Web's Categories) on indexed books, as a tree: \".\" nests tags, and each node counts books with that tag or any tag below it. Use a tag to filter search_corpus or list_books.",
+    inputSchema: {
+      under: z.string().optional().describe('Show only this tag and the tags below it, e.g. "Social Science"'),
+      min_books: z.number().int().min(1).optional().describe("Hide tags on fewer books (default 1)"),
+    },
+    annotations: { title: "List tags", ...readOnly },
+  }, (args) => run(() => json(listTags(c, args))));
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",

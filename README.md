@@ -20,6 +20,7 @@ books that live in Calibre.
 |---|---|
 | `search_corpus` | Full-text search (SQLite FTS5, BM25 ranking) over every indexed book. Returns ranked snippets with book, page, printed page label, and section. Supports phrases, prefixes, and filters by book, library, or author. |
 | `list_books` | Looks up books by title, author, tag, publisher, ISBN, citekey, or shelf. |
+| `list_tags` | Lists Calibre tags (Calibre-Web's *Categories*) as a tree; `.` nests them, and any tag filters `search_corpus` and `list_books` together with the tags below it. |
 | `list_shelves` | Lists Calibre-Web's public shelves (topic collections) with book counts; any shelf name can filter `search_corpus` and `list_books`. |
 | `get_book_outline` | Returns metadata and the table of contents with the page where each section starts. |
 | `read_book` | Returns contiguous text for a page range or a named section, within a character budget, and says where to continue. |

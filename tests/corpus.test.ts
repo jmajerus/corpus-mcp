@@ -14,7 +14,7 @@ import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
   toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -51,11 +51,11 @@ let c: Corpus;
 function build(): void {
   makeLibrary(root, "main", [
     { id: 1, title: "Networks", authors: ["Ann Author", "Bo Second"], publisher: "Free Press", pubdate: "1986-05-01 00:00:00+00:00", isbn: "978-0-00-000000-2", tags: ["sociology"], files: { pdf, mobi: Buffer.from("ignored") } },
-    { id: 2, title: "Echoes", authors: ["Cy Writer"], files: { epub } },
+    { id: 2, title: "Echoes", authors: ["Cy Writer"], tags: ["Social Science.Media Studies", "MEAP V08"], files: { epub } },
     { id: 3, title: "Cover Only", authors: ["Nobody"] },
     { id: 4, title: "Diary", authors: ["Me"], tags: ["Private"], files: { epub } },
     { id: 5, title: "Weak Ties Revisited", authors: ["Dee One| Eve Two"], sorts: ["Dee One, Eve Two"], pubdate: "2001-01-01 00:00:00+00:00", files: { epub } },
-    { id: 6, title: "Strength in Numbers", authors: ["Fay Fixed"], pubdate: "2000-01-01 00:00:00+00:00", citekey: "Fixed2000Strength", files: { epub } },
+    { id: 6, title: "Strength in Numbers", authors: ["Fay Fixed"], pubdate: "2000-01-01 00:00:00+00:00", citekey: "Fixed2000Strength", tags: ["Social Science.Sociology"], files: { epub } },
   ]);
   makeLibrary(root, "library", [{ id: 7, title: "Networks", authors: ["Ann Author", "Bo Second"], files: { pdf } }]);
   makeLibrary(root, "private", [{ id: 1, title: "Secret", authors: ["Me"], files: { epub } }]);
@@ -483,5 +483,35 @@ describe("shelves", () => {
     const refused = run("cat /etc/passwd");
     expect(refused.status).toBe(1);
     expect(refused.stderr).toMatch(/only read-only rsync and 'shelves'/);
+  });
+});
+
+describe("tags", () => {
+  beforeEach(() => {
+    scanLibraries(config, db);
+  });
+
+  it("lists tags as a tree, counting books at or below each tag", () => {
+    const { tags } = listTags(c);
+    const social = tags.find((t) => t.name === "Social Science")!;
+    expect(social).toMatchObject({ tag: "Social Science", books: 2 });
+    expect(social.children.map((t) => [t.tag, t.books])).toEqual([["Social Science.Media Studies", 1], ["Social Science.Sociology", 1]]);
+    expect(listTags(c, { under: "social science.sociology" }).tags.map((t) => t.tag)).toEqual(["Social Science.Sociology"]);
+    expect(listTags(c, { min_books: 2 }).tags.map((t) => t.name)).toEqual(["Social Science"]);
+    expect(() => listTags(c, { under: "Nope" })).toThrow(/No tag "Nope"/);
+  });
+
+  it("filters by a tag and everything below it, case-insensitively", () => {
+    expect(listBooks(c, { tag: "social science" }).books.map((b) => b.book_id)).toEqual(["main:2", "main:6"]);
+    expect(listBooks(c, { tag: "Social Science.Sociology" }).books.map((b) => b.book_id)).toEqual(["main:6"]);
+    expect(searchCorpus(c, { query: "amplifies", tag: "Social Science.Media Studies" }).results.every((r) => r.book_id === "main:2")).toBe(true);
+    expect(() => listBooks(c, { tag: "Social" })).toThrow(/No book is tagged "Social". Similar tags: Social Science.Media Studies, Social Science.Sociology/);
+    expect(listBooks(c, { query: "Echoes" }).books[0].tags).toEqual(["MEAP V08", "Social Science.Media Studies"]);
+  });
+
+  it("flags tags that are not subjects", () => {
+    const { tags } = corpusStatus(c);
+    expect(tags).toMatchObject({ distinct: 4, hierarchical: 2 });
+    expect(tags.suspect).toEqual([{ tag: "MEAP V08", books: 1, reason: "status or format, not a subject" }]);
   });
 });

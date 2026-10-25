@@ -401,6 +401,56 @@ library.
 - **Tools.** `list_shelves`, a `shelf` filter on `search_corpus` and
   `list_books`, and `shelves` in book summaries.
 
+## Categories (Calibre tags)
+
+Calibre-Web's *Categories* are Calibre tags. Calibre nests them with `.`.
+corpus-mcp offers `list_tags` (a tree with book counts at each level), a
+`tag` filter on `search_corpus` and `list_books` that includes the tags
+below the given one, and a tag-hygiene report in `corpus_status`.
+
+**State (2026-10-25).** Tags are too sparse to filter by yet:
+
+- 107 of 507 indexed books have any tag.
+- There are 127 distinct tags; 105 are used once.
+- 44 are BISAC codes from publisher metadata.
+- Several are not subjects at all: publisher names, `MEAP V08`, `Sample Book`.
+- `misinformation` (26 books) mirrors the Misinformation shelf.
+
+**Plan: Concept Clusters taxonomy as the vocabulary** (chosen 2026-10-25).
+Shelves stay as a few broad, curated collections. Tags become the granular,
+many-to-many subject classification, mirroring Concept Clusters'
+domain › category › subcategory (about 62 categories across 15 domains), so
+"books for this puzzle's category" is an exact filter.
+
+1. **Vocabulary snapshot.** A JSON export of Concept Clusters' taxonomy
+   (domain names, category names, subcategory titles, and slugs), stored in
+   corpus-mcp and refreshed when the taxonomy changes. corpus-mcp does not
+   query the authoring database: the authoring brief keeps second programs
+   off it. Open item: Concept Clusters provides the export (a command or
+   MCP resource). Domain display names are not in `list_categories`, which
+   gives only slugs such as `social-sciences`.
+2. **Tag form.** `Domain.Category.Subcategory` in display names, e.g.
+   `Social Sciences.Psychology.Social Psychology`. A category with no
+   domain (Vocabulary, Trivia) sits at the top level. The `tag` filter will
+   also match at any level boundary, so `Psychology` finds
+   `Social Sciences.Psychology.*` without knowing the domain. No name in the
+   current taxonomy contains a `.`.
+3. **Proposals.** A worklist tool hands an agent batches of books with
+   context: title, authors, description, top-level outline titles, shelves,
+   existing tags including BISAC, and the vocabulary. The agent records one
+   to three vocabulary tags per book, with a short rationale. Proposals go
+   in `data.db` (`tag_proposals`: Calibre UUID, tags, rationale, status), and
+   any tag outside the vocabulary is rejected.
+4. **Review.** You approve or edit proposals, as an exported plan file or a
+   small review page.
+5. **Apply.** `tools/calibre-tags.sh --apply <plan>` runs on CT 115 as the
+   library owner, like `calibre-convert.sh`. It backs up `metadata.db`, then
+   adds the approved tags with `calibredb set_metadata --field tags`, keeping
+   existing tags. corpus-mcp itself stays read-only toward Calibre, and the
+   next refresh picks the tags up.
+6. **Cleanup.** The hygiene report lists BISAC, publisher, and status tags
+   for removal once the vocabulary tags are in.
+
 ## Remote access (Claude web)
 
 Claude web reaches the server through Cloudflare. The path is a Cloudflare

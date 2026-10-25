@@ -50,7 +50,7 @@ it("serves the tools over Streamable HTTP", async () => {
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "cite_passage", "corpus_status", "get_book_outline", "list_books", "list_shelves", "pin_citekey", "read_book", "render_page", "search_corpus",
+    "cite_passage", "corpus_status", "get_book_outline", "list_books", "list_shelves", "list_tags", "pin_citekey", "read_book", "render_page", "search_corpus",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });

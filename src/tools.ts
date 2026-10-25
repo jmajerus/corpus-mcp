@@ -108,12 +108,30 @@ function shelfFilter(c: Corpus, shelf: string): string {
   return "b.id IN (SELECT bs.book_id FROM book_shelves bs JOIN shelves s ON s.id = bs.shelf_id WHERE s.name = @shelf COLLATE NOCASE)";
 }
 
+/**
+ * The SQL condition for books carrying a tag or any tag below it. Calibre (and Calibre-Web's
+ * "Categories") nest tags with ".": "Social Science" matches "Social Science.Sociology". Case-insensitive.
+ */
+function tagFilter(c: Corpus, tag: string): string {
+  const condition = `EXISTS (SELECT 1 FROM json_each(b.tags) t
+    WHERE lower(t.value) = lower(@tag) OR lower(substr(t.value, 1, length(@tag) + 1)) = lower(@tag) || '.')`;
+  const any = c.db.prepare(`SELECT 1 FROM books b WHERE ${condition} LIMIT 1`).get({ tag });
+  if (!any) {
+    const similar = c.db.prepare(`
+      SELECT DISTINCT t.value FROM books b, json_each(b.tags) t WHERE instr(lower(t.value), lower(?)) > 0 ORDER BY 1 LIMIT 10`)
+      .pluck().all(tag.split(".").at(-1)) as string[];
+    throw new ToolError(`No book is tagged "${tag}".${similar.length ? ` Similar tags: ${similar.join(", ")}.` : " See list_tags."}`);
+  }
+  return condition;
+}
+
 function bookSummary(book: BookRow, pin: PinnedCitekey | undefined, shelves: string[] = []) {
   return {
     book_id: book.id,
     title: book.title,
     authors: JSON.parse(book.authors) as string[],
     shelves,
+    tags: JSON.parse(book.tags) as string[],
     year: book.year,
     publisher: book.publisher,
     isbn: book.isbn,
@@ -140,7 +158,9 @@ export function toFtsQuery(query: string): string {
     .join(" ");
 }
 
-export interface SearchArgs { query: string; book_id?: string; library?: string; shelf?: string; author?: string; limit?: number; advanced?: boolean }
+export interface SearchArgs {
+  query: string; book_id?: string; library?: string; shelf?: string; tag?: string; author?: string; limit?: number; advanced?: boolean;
+}
 
 export function searchCorpus(c: Corpus, args: SearchArgs) {
   const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
@@ -150,6 +170,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
   if (bookId) where.push("b.id = @book_id");
   if (args.library) where.push("b.library = @library");
   if (args.shelf) where.push(shelfFilter(c, args.shelf));
+  if (args.tag) where.push(tagFilter(c, args.tag));
   if (args.author) where.push("b.authors LIKE @author");
 
   let rows: (PageRow & BookRow & { ord: number; snippet: string })[];
@@ -164,7 +185,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
       WHERE ${where.join(" AND ")}
       ORDER BY bm25(passages_fts)
       LIMIT @fetch`).all({
-      match, book_id: bookId, library: args.library, shelf: args.shelf,
+      match, book_id: bookId, library: args.library, shelf: args.shelf, tag: args.tag,
       author: args.author ? `%${args.author}%` : undefined, fetch: limit * 4,
     }) as typeof rows;
   } catch (error) {
@@ -197,7 +218,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
   return { query: match, count: results.length, results };
 }
 
-export interface ListArgs { query?: string; library?: string; shelf?: string; include_unindexed?: boolean; limit?: number }
+export interface ListArgs { query?: string; library?: string; shelf?: string; tag?: string; include_unindexed?: boolean; limit?: number }
 
 export function listBooks(c: Corpus, args: ListArgs) {
   const limit = Math.min(Math.max(args.limit ?? 25, 1), 200);
@@ -209,6 +230,7 @@ export function listBooks(c: Corpus, args: ListArgs) {
   if (!args.include_unindexed) where.push("status = 'indexed'");
   if (args.library) where.push("library = @library");
   if (args.shelf) where.push(shelfFilter(c, args.shelf));
+  if (args.tag) where.push(tagFilter(c, args.tag));
   if (query) {
     where.push(`(title LIKE @q OR authors LIKE @q OR tags LIKE @q OR isbn LIKE @q OR publisher LIKE @q OR id = @exact
       OR calibre_citekey LIKE @q OR proposed_citekey LIKE @q OR uuid IN (SELECT value FROM json_each(@pinned)))`);
@@ -216,7 +238,7 @@ export function listBooks(c: Corpus, args: ListArgs) {
   const rows = c.db.prepare(`
     SELECT * FROM books b ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
     ORDER BY title COLLATE NOCASE, id LIMIT @limit`).all({
-    library: args.library, shelf: args.shelf, q: query ? `%${query}%` : undefined, exact: args.query, limit,
+    library: args.library, shelf: args.shelf, tag: args.tag, q: query ? `%${query}%` : undefined, exact: args.query, limit,
     pinned: JSON.stringify(pinnedMatches),
   }) as BookRow[];
   const shelves = shelvesByBook(c, rows.map((b) => b.id));
@@ -238,7 +260,6 @@ export function getBookOutline(c: Corpus, bookId: string) {
     WHERE o.book_id = ? ORDER BY o.ord`).all(book.id) as { level: number; title: string; start_page: number | null; label: string | null }[];
   return {
     ...bookSummary(book, pinnedByUuid(c.data, book.uuid), shelvesByBook(c, [book.id]).get(book.id)),
-    tags: JSON.parse(book.tags) as string[],
     outline: outline.map((o) => ({
       level: o.level,
       title: o.title,
@@ -258,6 +279,56 @@ export function listShelves(c: Corpus) {
     GROUP BY s.id ORDER BY s.name`).all();
   const exportedAt = c.db.prepare("SELECT value FROM meta WHERE key = 'shelves_exported_at'").pluck().get();
   return { exported_at: exportedAt ?? null, shelves };
+}
+
+interface TagNode { name: string; tag: string; books: number; children: TagNode[] }
+
+export interface ListTagsArgs { under?: string; min_books?: number }
+
+/**
+ * Calibre tags (Calibre-Web's "Categories") on indexed books as a tree, split on ".". A node's
+ * `books` counts books carrying that tag or any tag below it.
+ */
+export function listTags(c: Corpus, args: ListTagsArgs = {}) {
+  const rows = c.db.prepare(`
+    SELECT b.id, t.value AS tag FROM books b, json_each(b.tags) t WHERE b.status = 'indexed'`).all() as { id: string; tag: string }[];
+  const root: TagNode = { name: "", tag: "", books: 0, children: [] };
+  const booksAt = new Map<TagNode, Set<string>>();
+  for (const { id, tag } of rows) {
+    let node = root;
+    const parts = tag.split(".").map((p) => p.trim()).filter(Boolean);
+    parts.forEach((part, i) => {
+      let child = node.children.find((n) => n.name.toLowerCase() === part.toLowerCase());
+      if (!child) {
+        child = { name: part, tag: parts.slice(0, i + 1).join("."), books: 0, children: [] };
+        node.children.push(child);
+      }
+      if (!booksAt.has(child)) booksAt.set(child, new Set());
+      booksAt.get(child)!.add(id);
+      node = child;
+    });
+  }
+  const minBooks = args.min_books ?? 1;
+  const finish = (node: TagNode): TagNode => ({
+    name: node.name, tag: node.tag, books: booksAt.get(node)?.size ?? 0,
+    children: node.children.map(finish).filter((n) => n.books >= minBooks).sort((a, b) => a.name.localeCompare(b.name)),
+  });
+  let top = finish(root).children;
+  if (args.under) {
+    const path = args.under.split(".").map((p) => p.trim().toLowerCase());
+    let nodes = top;
+    let found: TagNode | undefined;
+    for (const part of path) {
+      found = nodes.find((n) => n.name.toLowerCase() === part);
+      if (!found) throw new ToolError(`No tag "${args.under}". See list_tags without "under".`);
+      nodes = found.children;
+    }
+    top = [found!];
+  }
+  return {
+    note: "Calibre tags, shown as Categories in Calibre-Web. \".\" nests them; filtering by a tag includes the tags below it.",
+    tags: top,
+  };
 }
 
 export interface ReadArgs { book_id: string; start_page?: number; end_page?: number; section?: string; max_chars?: number }
@@ -494,6 +565,33 @@ export function corpusStatus(c: Corpus) {
     no_outline: { note: "No chapter locators. For MOBI books, convert to EPUB in Calibre.", books: noOutline },
     citekeys: citekeyReadiness(c),
     printed_isbns: printedIsbnReport(c),
+    tags: tagHygiene(c),
+  };
+}
+
+/** Tags that are probably not subjects: BISAC codes, publisher names, statuses, descriptions, one-offs. */
+function tagHygiene(c: Corpus) {
+  const tags = c.db.prepare(`
+    SELECT t.value AS tag, COUNT(*) AS books FROM books b, json_each(b.tags) t WHERE b.status = 'indexed' GROUP BY 1`)
+    .all() as { tag: string; books: number }[];
+  const publishers = new Set((c.db.prepare("SELECT DISTINCT lower(publisher) FROM books WHERE publisher IS NOT NULL").pluck().all() as string[]));
+  const reason = (tag: string): string | null => {
+    if (/^[A-Z]{3}\d{6}\b/.test(tag)) return "BISAC subject code";
+    if (publishers.has(tag.toLowerCase())) return "publisher name";
+    if (/\b(?:MEAP|sample|review copy|draft|v\d+(?:\.\d+)?|ebook|kindle)\b/i.test(tag)) return "status or format, not a subject";
+    if (tag.length > 40 && !tag.includes(".")) return "reads like a description";
+    return null;
+  };
+  const suspect = tags.map((t) => ({ ...t, reason: reason(t.tag) })).filter((t) => t.reason)
+    .sort((a, b) => b.books - a.books || a.tag.localeCompare(b.tag));
+  return {
+    note: "Calibre tags (Categories in Calibre-Web). Fix or remove suspect tags in Calibre-Web.",
+    tagged_books: c.db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed' AND tags != '[]'").pluck().get(),
+    distinct: tags.length,
+    used_once: tags.filter((t) => t.books === 1).length,
+    hierarchical: tags.filter((t) => t.tag.includes(".")).length,
+    suspect: suspect.slice(0, 50),
+    ...(suspect.length > 50 ? { suspect_truncated: suspect.length - 50 } : {}),
   };
 }
 
