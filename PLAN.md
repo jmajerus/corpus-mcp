@@ -164,7 +164,16 @@ A refresh with no changes takes 0.3 seconds.
       units, and starts the first pull and index. On later deploys it
       health-checks `/health` and rolls back to the previous release on
       failure.
-4. **Concept Clusters demonstration.** Register the server with the authoring
+4. **Concept Clusters demonstration.** First run 2026-10-25, in ZCode through
+   the shared Cloudflare portal (three servers, one URL). It went from search
+   ("confirmation bias") to *Suspicious Minds* (`main:53`, MOBI), then
+   read_book, cite_passage, and BibTeX filing (Zotero item 39NZUGQQ), then
+   `pin_citekey brotherton2015suspicious`. `file_zotero_reference` timed out
+   at 30 seconds in Zotero web API mode, but had committed. The agent
+   checked by citekey before retrying, which is the right recovery. The run
+   also showed that EPUB/MOBI locations were easy to misreport as pages, so
+   results now label them `location`.
+   Original scope: Register the server with the authoring
    clients. Author one puzzle whose citation comes from a Calibre book, from
    search through to a validated draft. On the Concept Clusters side,
    `file_zotero_reference` now accepts an `isbn` (concept-clusters 9bbde28,
