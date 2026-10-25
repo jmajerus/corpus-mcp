@@ -1,6 +1,6 @@
 import { page } from "./layout.js";
 
-/** /admin/categories: the Concept Clusters vocabulary as a tree, with book counts, and the other tags. */
+/** /admin/categories: the vocabulary as a tree, with book counts, how Calibre's tags stand against it, and the other tags. */
 export const CATEGORIES_HTML = page({
   title: "Categories",
   nav: "categories",
@@ -16,6 +16,9 @@ export const CATEGORIES_HTML = page({
 <h1>Categories</h1>
 <p class="sub" id="summary">Loading…</p>
 <div class="card tree" id="tree" style="padding:0"></div>
+<h2>Against the vocabulary</h2>
+<p class="note" id="vocab"></p>
+<div id="report"></div>
 <h2>Other tags</h2>
 <p class="note">Tags outside the vocabulary. Edit them in Calibre-Web; the dashboard's cleanup job removes the ones flagged ⚠.</p>
 <div class="scroll"><table><thead><tr><th>Tag</th><th class="num">Books</th><th>Flag</th></tr></thead><tbody id="free"></tbody></table></div>`,
@@ -35,6 +38,21 @@ api("/api/categories").then((d) => {
   document.getElementById("tree").innerHTML = d.tree.map((n) => node(n, 0)).join("");
   document.getElementById("free").innerHTML = d.free.length ? d.free.map((t) => '<tr><td><a href="/admin/books?tag=' + encodeURIComponent(t.tag) + '">' + esc(t.tag) + '</a></td><td class="num">' + num(t.books) + "</td><td>" + (t.suspect ? "⚠ " + esc(t.suspect) : "") + "</td></tr>").join("")
     : '<tr><td colspan="3" class="empty">None.</td></tr>';
+}).catch((e) => toast(e.message));
+const bookList = (books) => books.slice(0, 12).map((b) => bookLink(b.book_id, b.title)).join(", ") + (books.length > 12 ? " and " + num(books.length - 12) + " more" : "");
+api("/api/vocabulary/report").then((r) => {
+  const v = r.vocabulary;
+  document.getElementById("vocab").innerHTML = (v.error ? '<span class="badge bad"><span class="sign">!</span>' + esc(v.error) + "</span> " : "") +
+    "Vocabulary " + esc(v.version || "(no version)") + (v.generated_at ? ", generated " + esc(when(v.generated_at)) : "") + ": " + num(v.assignable) + " assignable terms of " + num(v.terms) + ". corpus-mcp reads it and never edits it.";
+  const table = (title, note, head, rows) => "<h3>" + esc(title) + '</h3><p class="note">' + esc(note) + '</p><div class="scroll"><table><thead><tr>' + head.map((h) => "<th>" + h + "</th>").join("") + "</tr></thead><tbody>" +
+    (rows.length ? rows.join("") : '<tr><td colspan="' + head.length + '" class="empty">None.</td></tr>') + "</tbody></table></div>";
+  document.getElementById("report").innerHTML =
+    table("Retired terms still in Calibre", "Automatic: the tags job swaps in the replacement. Review: the term was split or dropped; choose on each book's page.", ["Tag", "Replaced by", "Action", "Books"],
+      r.retired_in_use.map((t) => "<tr><td>" + esc(t.tag) + "</td><td>" + (t.replaced_by.map((x) => tagChip(x)).join("") || '<span class="note">nothing</span>') + "</td><td>" + esc(t.action) + "</td><td>" + bookList(t.books) + "</td></tr>")) +
+    table("Unknown terms", "Calibre tags shaped like vocabulary ids that the vocabulary does not have.", ["Tag", "Why", "Books"],
+      r.unknown_terms.map((t) => "<tr><td>" + esc(t.tag) + "</td><td>" + esc(t.reason) + "</td><td>" + bookList(t.books) + "</td></tr>")) +
+    table("Tagged only broadly", "Books tagged at a term with narrower terms below it: candidates for a narrower tag, and, when many stop at one term, a hint that the taxonomy needs another.", ["Term", "Narrower terms", "Books"],
+      r.tagged_only_broadly.map((t) => "<tr><td>" + tagChip(t.tag) + '</td><td class="num">' + num(t.narrower) + "</td><td>" + num(t.books.length) + ": " + bookList(t.books) + "</td></tr>"));
 }).catch((e) => toast(e.message));`,
 });
 

@@ -13,7 +13,7 @@ const CORPUS_HOST = process.env.CORPUS_DEPLOY_HOST ?? "authoring@corpus-mcp.loca
 const SOURCE_HOST = process.env.CORPUS_SOURCE_ADMIN_HOST ?? "authoring@calibre-web.localdomain";
 const ASKPASS = path.join(root, "tools", "askpass.mjs");
 
-const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --skip-tests]
+const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --vocabulary[=file] | --skip-tests]
 
   (no flag)       build, test, install a new release, restart, health-check, roll back on failure
   --provision     one-time setup of the corpus LXC (Node 22, corpus user, sync key); prints the key
@@ -23,6 +23,10 @@ const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source
                   the same without root on calibre-web: adds the sync key to authoring's own
                   authorized_keys, forced to read-only rsync of /mnt/Calibre/main, and points
                   the corpus LXC's env at it
+  --vocabulary[=file]
+                  validate the tag vocabulary (default CORPUS_VOCABULARY_SOURCE) and install it as
+                  /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
+                  A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set.
   --skip-tests    deploy without running the test suite first
 
 Needs AUTHORING_DEPLOY_PASSWORD (npm run deploy loads ../concept-clusters/.env when present).`;
@@ -128,13 +132,28 @@ echo "env updated"`);
   console.log("\nSource key installed. Next: npm run deploy");
 }
 
+/** Validates a vocabulary file with the built loader, then installs it where the server reads it. */
+async function pushVocabulary(file) {
+  if (!file) throw new Error(`No vocabulary file: pass --vocabulary=<file> or set CORPUS_VOCABULARY_SOURCE.\n\n${USAGE}`);
+  const { Vocabulary } = await import(path.join(root, "dist", "vocabulary.js"));
+  const vocabulary = Vocabulary.load(path.resolve(file));
+  const encoded = fs.readFileSync(file).toString("base64");
+  await runAsRoot(CORPUS_HOST, `
+set -euo pipefail
+printf %s ${shellQuote(encoded)} | base64 -d > /var/lib/corpus-mcp/vocabulary.json.new
+chown corpus:corpus /var/lib/corpus-mcp/vocabulary.json.new && chmod 0644 /var/lib/corpus-mcp/vocabulary.json.new
+mv /var/lib/corpus-mcp/vocabulary.json.new /var/lib/corpus-mcp/vocabulary.json
+echo "vocabulary=${vocabulary.version ?? "(no version)"} (${vocabulary.tags.length} assignable terms)"`);
+}
+
 async function deploy({ skipTests }) {
   execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
   if (!skipTests) execFileSync("npm", ["test"], { cwd: root, stdio: "inherit" });
+  if (process.env.CORPUS_VOCABULARY_SOURCE) await pushVocabulary(process.env.CORPUS_VOCABULARY_SOURCE);
 
   const id = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
   const tarball = path.join(os.tmpdir(), `corpus-mcp-${id}.tgz`);
-  execFileSync("tar", ["czf", tarball, "-C", root, "dist", "deploy", "data", "package.json", "package-lock.json"]);
+  execFileSync("tar", ["czf", tarball, "-C", root, "dist", "deploy", "package.json", "package-lock.json"]);
   execFileSync("scp", [...sshOptions, tarball, `${CORPUS_HOST}:/tmp/`], { env: sshEnv(), stdio: "inherit" });
   fs.rmSync(tarball);
 
@@ -196,13 +215,18 @@ ls -1dt /opt/corpus-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
-  const known = new Set(["--provision", "--source-setup", "--source-setup-user-key", "--skip-tests"]);
-  const unknown = argv.find((a) => !known.has(a));
+  const known = new Set(["--provision", "--source-setup", "--source-setup-user-key", "--skip-tests", "--vocabulary"]);
+  const unknown = argv.find((a) => !known.has(a.split("=")[0]));
   if (unknown) throw new Error(`Unknown argument ${unknown}.\n\n${USAGE}`);
   if (!password) throw new Error(`AUTHORING_DEPLOY_PASSWORD is not set.\n\n${USAGE}`);
   if (argv.includes("--provision")) return provision();
   if (argv.includes("--source-setup")) return sourceSetup();
   if (argv.includes("--source-setup-user-key")) return sourceSetupUserKey();
+  const vocabularyArg = argv.find((a) => a.split("=")[0] === "--vocabulary");
+  if (vocabularyArg) {
+    execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
+    return pushVocabulary(vocabularyArg.split("=")[1] || process.env.CORPUS_VOCABULARY_SOURCE);
+  }
   return deploy({ skipTests: argv.includes("--skip-tests") });
 }
 

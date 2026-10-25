@@ -21,9 +21,9 @@ import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
 import { PROPOSALS_HTML } from "./web/proposals.js";
 import { QUOTE_HTML, QUOTES_HTML, READER_HTML } from "./web/quotes.js";
 import {
-  getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist,
+  getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport,
 } from "./tagging.js";
-import { Vocabulary } from "./vocabulary.js";
+import { VocabularySource } from "./vocabulary.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
@@ -107,10 +107,17 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("get_tag_vocabulary", {
     title: "Get tag vocabulary",
-    description: "Concept Clusters' taxonomy as Calibre tags: slug paths (\"social-sciences.psychology.social-psychology\") with their titles as labels. propose_tags accepts only these, in either form.",
+    description: "The vocabulary's terms as Calibre tags: ids nested with \".\" (\"social-sciences.psychology.social-psychology\") with their title paths as labels. propose_tags accepts only these, in either form.",
     inputSchema: { under: z.string().optional().describe('Only tags at or below this one, e.g. "social-sciences.psychology" or "Psychology"') },
     annotations: { title: "Get tag vocabulary", ...readOnly },
   }, (args) => run(() => json(getTagVocabulary(c, args))));
+
+  server.registerTool("vocabulary_report", {
+    title: "Vocabulary report",
+    description: "How Calibre's tags stand against the vocabulary: retired terms still in use (and whether the tags job replaces them automatically), tags shaped like terms that the vocabulary lacks, and books tagged only at a term with narrower terms below it, grouped by term. Use it after a taxonomy change, and to suggest where the taxonomy needs a narrower term; the vocabulary itself is edited only by its owner.",
+    inputSchema: {},
+    annotations: { title: "Vocabulary report", ...readOnly },
+  }, () => run(() => json(vocabularyReport(c))));
 
   server.registerTool("tagging_worklist", {
     title: "Get books to tag",
@@ -278,15 +285,14 @@ export function createServer(c: Corpus): McpServer {
 }
 
 function openCorpus(config: Config): Corpus {
-  const corpus = {
-    db: openDatabase(config.dbPath, { readonly: true }),
-    data: openDataStore(config.dataDbPath),
-    booksRoot: config.booksRoot,
-    vocabulary: Vocabulary.load(config.vocabularyPath),
-  };
-  const normalized = normalizeProposalTags(corpus);
-  if (normalized) console.error(`rewrote ${normalized} tag proposal(s) into the vocabulary's slug form`);
-  return corpus;
+  const db = openDatabase(config.dbPath, { readonly: true });
+  const data = openDataStore(config.dataDbPath);
+  // Each new vocabulary rewrites stored proposals into its terms (titles to ids, retired ids to their replacement).
+  const source = new VocabularySource(config.vocabularyPath, (vocabulary) => {
+    const normalized = normalizeProposalTags({ db, data, booksRoot: config.booksRoot, vocabulary });
+    if (normalized) console.error(`rewrote ${normalized} tag proposal(s) into the vocabulary's terms`);
+  });
+  return { db, data, booksRoot: config.booksRoot, vocabularySource: source, get vocabulary() { return source.current(); } };
 }
 
 export async function serveStdio(config: Config): Promise<void> {
@@ -431,6 +437,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const bookId = decodeURIComponent(bookPath[1]);
       sendJson(res, 200, body.citekey ? pinCitekey(c, { book_id: bookId, citekey: body.citekey, replace: body.replace }, by, "admin") : unpinCitekey(c, bookId, by));
     } else if (req.method === "GET" && path === "/api/categories") sendJson(res, 200, adminCategories(c));
+    else if (req.method === "GET" && path === "/api/vocabulary/report") sendJson(res, 200, vocabularyReport(c));
     else if (req.method === "GET" && path === "/api/citekeys") sendJson(res, 200, adminCitekeys(c));
     else if (req.method === "GET" && path === "/api/shelves") sendJson(res, 200, listShelves(c));
     else if (req.method === "GET" && path === "/api/changes") {

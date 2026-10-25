@@ -34,8 +34,8 @@ export interface Config {
   /** Calibre-Web's shelf export (see deploy/corpus-source.sh), and the library its book ids belong to. */
   shelvesFile: string;
   shelvesLibrary: string;
-  /** Concept Clusters taxonomy snapshot used as the tag vocabulary; defaults to data/cc-taxonomy.json. */
-  vocabularyPath?: string;
+  /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
+  vocabularyPath: string;
   admin?: AdminConfig;
   host: string;
   port: number;
@@ -58,7 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backupDir: path.resolve(env.CORPUS_BACKUP_DIR ?? "/var/lib/corpus-mcp/backups"),
     shelvesFile: path.resolve(env.CORPUS_SHELVES_FILE ?? "/var/lib/corpus-mcp/shelves.json"),
     shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
-    vocabularyPath: env.CORPUS_VOCABULARY ? path.resolve(env.CORPUS_VOCABULARY) : undefined,
+    vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
       access: { teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined },
       neighbors: (env.CORPUS_NEIGHBORS ?? DEFAULT_NEIGHBORS).split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {

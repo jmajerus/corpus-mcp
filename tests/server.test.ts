@@ -26,6 +26,7 @@ beforeAll(async () => {
   const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
+    vocabularyPath: path.join(import.meta.dirname, "vocabulary.json"),
     admin: { access: { teamDomain: team, audience: "corpus-aud" }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
       refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json") } };
   const db = openDatabase(config.dbPath);
@@ -82,7 +83,7 @@ it("serves the tools over Streamable HTTP", async () => {
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
     "cite_passage", "cite_quote", "corpus_status", "delete_quote", "get_book_outline", "get_quote", "get_tag_vocabulary", "list_books", "list_shelves",
-    "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "save_quote", "search_corpus", "search_quotes", "tagging_worklist", "update_quote",
+    "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "save_quote", "search_corpus", "search_quotes", "tagging_worklist", "update_quote", "vocabulary_report",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });

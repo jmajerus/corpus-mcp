@@ -453,9 +453,10 @@ below the given one, and a tag-hygiene report in `corpus_status`.
 - Several are not subjects at all: publisher names, `MEAP V08`, `Sample Book`.
 - `misinformation` (26 books) mirrors the Misinformation shelf.
 
-**Status (2026-10-25).** Built and deployed. The vocabulary is
+**Status (2026-10-25).** Built and deployed. The vocabulary was first
 `data/cc-taxonomy.json` (concept-clusters `authoring:taxonomy:export`, 175
-slug tags). The tools are `get_tag_vocabulary`, `tagging_worklist`, and
+slug tags); it is now a deployment file (see *Independence from Concept
+Clusters*). The tools are `get_tag_vocabulary`, `tagging_worklist`, and
 `propose_tags`. The review page is `/review` on the corpus server, with
 `/api/tag-proposals`, `/api/vocabulary`, and `/api/tag-plan`; those routes
 send no CORS headers, and their POST requires JSON. Apply with
@@ -520,6 +521,39 @@ domain › category › subcategory (about 62 categories across 15 domains), so
    next refresh picks the tags up.
 6. **Cleanup.** The hygiene report lists BISAC, publisher, and status tags
    for removal once the vocabulary tags are in.
+
+## Independence from Concept Clusters (agreed 2026-10-25)
+
+A one-way dependency: Concept Clusters (CC) depends on corpus-mcp, and
+corpus-mcp knows nothing about CC. Any project can reuse it with its own
+vocabulary and citekey preset. corpus-mcp owns the formats (README); CC
+adapts. Agreed with CC's agent, in order:
+
+1. **Vocabulary** (done 2026-10-25). The `corpus-vocabulary/1` file, loaded
+   from a configured path and reloaded on change; validation; retired terms
+   (one replacement re-tags automatically, a split or drop goes to a
+   person); `vocabulary_report`. `data/cc-taxonomy.json` left the repo. Until
+   CC's export writes the new format, the live file is a one-time conversion
+   of that snapshot (version `cc-snapshot-2026-10-25`, 175 assignable terms
+   of 187). CC's export must handle `interdisciplinary-studies`, which is
+   both a domain and a domainless category: one term, assignable, with
+   children.
+2. **Neutral citations.** `cite_passage` and `cite_quote` return a CSL JSON
+   item, a CSL locator (`{ label, locator }`, null for EPUB and MOBI), and
+   corpus-mcp's reading `position`; filing becomes plain data (`bibtex`,
+   `isbn`, `isbn_candidates`) with no tool names. One release carries the
+   old `citation` and `zotero_filing` fields too, until CC switches.
+   `pin_citekey` accepts any BibTeX-safe key and warns when it doesn't fit
+   the preset.
+3. **Citekey package** `@jmajerus/citekey` in `packages/citekey`: pure ESM,
+   no dependencies, released as a GitHub release tarball (`citekey-v<semver>`)
+   because npm can't install a git subdirectory. `proposeCitekey(csl,
+   preset | options)`; presets `author-year-word` (today's rule, the default)
+   and `bbt-default` (Better BibTeX's `auth.lower + shorttitle(3,3) + year`).
+   The cases file moves into the package, with CSL input and a preset per
+   case.
+4. **Own environment.** corpus-mcp's own `.env`, no longer
+   `../concept-clusters/.env`.
 
 ## Admin dashboard (2026-10-25)
 

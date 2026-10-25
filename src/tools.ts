@@ -7,7 +7,7 @@ import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUui
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
-import type { Vocabulary } from "./vocabulary.js";
+import type { Vocabulary, VocabularySource } from "./vocabulary.js";
 
 export { validIsbn };
 
@@ -21,7 +21,11 @@ export { validIsbn };
 export class ToolError extends Error {}
 
 /** The read-only index, the read-write primary data, the mirrored book files, and the tag vocabulary. */
-export interface Corpus { db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary }
+export interface Corpus {
+  db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary;
+  /** Where the vocabulary comes from, when it is a file (the server); tests pass a Vocabulary alone. */
+  vocabularySource?: VocabularySource;
+}
 
 export interface BookRow {
   id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;

@@ -3,7 +3,7 @@ import type { BookRow, Corpus } from "./tools.js";
 import { ToolError, getBook, shelvesByBook } from "./tools.js";
 
 /**
- * Tagging books with the Concept Clusters vocabulary: an agent takes books from the worklist and
+ * Tagging books with the vocabulary: an agent takes books from the worklist and
  * proposes tags, a person approves or edits them on the /review page, and tools/calibre-tags.sh
  * writes approved tags into Calibre. Proposals live in data.db.
  */
@@ -47,15 +47,16 @@ export function getTagVocabulary(c: Corpus, args: VocabularyArgs = {}) {
     .filter((t) => !under || t.tag === under || t.tag.startsWith(`${under}.`))
     .map((t) => ({ tag: t.tag, label: t.label }));
   return {
-    note: "Concept Clusters' taxonomy as Calibre tags: slugs \"domain.category.subcategory\", with titles in label. propose_tags takes either form. Propose the most specific tag that fits; a category tag is fine when no subcategory does.",
+    note: "The vocabulary's terms as Calibre tags: ids nested with \".\" (\"parent.child\"), with their title paths in label. propose_tags takes either form. Propose the most specific tag that fits; a broader tag is fine when no narrower one does.",
+    version: c.vocabulary.version,
     count: tags.length,
     tags,
   };
 }
 
 /**
- * Rewrites stored proposal tags into the vocabulary's current slug form (from title paths, or tags
- * saved before the switch to slugs). Idempotent; a tag the vocabulary no longer knows is left as is.
+ * Rewrites stored proposal tags into the vocabulary's ids: title paths become ids, and a retired id with a
+ * single replacement becomes that replacement. Idempotent; a tag the vocabulary does not know is left as is.
  */
 export function normalizeProposalTags(c: Corpus): number {
   const rows = c.data.prepare("SELECT calibre_uuid, tags, approved_tags FROM tag_proposals").all() as
@@ -232,27 +233,56 @@ export function reviewProposal(c: Corpus, calibreUuid: string, args: ReviewArgs,
  * never touched.
  */
 export function categoryDiff(c: Corpus, book: BookRow, approved: string[]): { add: string[]; remove: string[] } {
-  const calibre = (JSON.parse(book.tags) as string[]).filter((t) => c.vocabulary.has(t));
+  // Retired terms count as vocabulary tags here, so the approved set replaces them too.
+  const calibre = (JSON.parse(book.tags) as string[]).filter((t) => c.vocabulary.has(t) || c.vocabulary.retired(t));
   const want = new Set(approved.map((t) => t.toLowerCase()));
   const have = new Set(calibre.map((t) => t.toLowerCase()));
   return { add: approved.filter((t) => !have.has(t.toLowerCase())), remove: calibre.filter((t) => !want.has(t.toLowerCase())) };
 }
 
 /**
- * The changes that make Calibre match the approved category sets, per book, for tools/calibre-tags.sh.
+ * A book's tags with each retired term that has a single replacement swapped for it; books whose retired
+ * terms were split or dropped wait for a person (see vocabularyReport).
+ */
+function retagged(c: Corpus, tags: string[]): string[] {
+  const out: string[] = [];
+  for (const t of tags) {
+    const replacedBy = c.vocabulary.retired(t);
+    const next = replacedBy?.length === 1 ? replacedBy[0] : t;
+    if (!out.some((x) => x.toLowerCase() === next.toLowerCase())) out.push(next);
+  }
+  return out;
+}
+
+/**
+ * The changes that make Calibre match the approved category sets, per book, for tools/calibre-tags.sh,
+ * plus automatic re-tags for retired terms on books with no approved set.
  * `bookIds` limits the plan to those books (a book page's "apply this book").
  */
 export function tagPlan(c: Corpus, library: string, bookIds?: string[]) {
+  // Without a vocabulary every approved tag would look missing from Calibre.
+  if (!c.vocabulary.tags.length) throw new ToolError("No vocabulary is loaded, so there is no tag plan.");
   const rows = c.data.prepare("SELECT * FROM tag_proposals WHERE status = 'approved'").all() as ProposalRow[];
   const bookByUuid = c.db.prepare<[string, string], BookRow>("SELECT * FROM books WHERE uuid = ? AND library = ?");
   const only = bookIds ? new Set(bookIds) : null;
   const books = [];
+  const planned = new Set<string>();
   for (const r of rows) {
     const book = bookByUuid.get(r.calibre_uuid, library);
     if (!book || (only && !only.has(book.id))) continue;
+    planned.add(r.calibre_uuid);
     const { add, remove } = categoryDiff(c, book, JSON.parse(r.approved_tags ?? "[]") as string[]);
     if (add.length || remove.length) {
       books.push({ calibre_id: Number(book.id.split(":")[1]), uuid: r.calibre_uuid, title: book.title, add, ...(remove.length ? { remove } : {}) });
+    }
+  }
+  for (const book of c.db.prepare("SELECT * FROM books WHERE library = ? AND uuid IS NOT NULL").all(library) as BookRow[]) {
+    if (planned.has(book.uuid!) || (only && !only.has(book.id))) continue;
+    const vocab = (JSON.parse(book.tags) as string[]).filter((t) => c.vocabulary.has(t) || c.vocabulary.retired(t));
+    if (!vocab.some((t) => c.vocabulary.retired(t)?.length === 1)) continue;
+    const { add, remove } = categoryDiff(c, book, retagged(c, vocab));
+    if (add.length || remove.length) {
+      books.push({ calibre_id: Number(book.id.split(":")[1]), uuid: book.uuid, title: book.title, add, ...(remove.length ? { remove } : {}) });
     }
   }
   return { library, generated_at: new Date().toISOString(), books };
@@ -282,4 +312,51 @@ export function setBookCategories(c: Corpus, args: SetCategoriesArgs, by: string
     detail: tags.length ? tags.join(", ") : "(none)", actor: by,
   }]);
   return { status: "approved", book_id: book.id, tags, pending_in_calibre: categoryDiff(c, book, tags) };
+}
+
+const TERM_LIKE = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/;
+
+/**
+ * How Calibre's tags stand against the vocabulary, to catch every taxonomy change without being told
+ * about it: retired terms still in use (re-tagged automatically when they have one replacement, else
+ * for a person), tags shaped like terms that the vocabulary does not have, and books tagged only at a
+ * term that has narrower ones, grouped by term. Many books stopping at one term suggests the taxonomy
+ * needs a narrower term there; the vocabulary's owner decides, corpus-mcp never edits it.
+ */
+export function vocabularyReport(c: Corpus) {
+  const v = c.vocabulary;
+  const books = c.db.prepare("SELECT id, title, tags FROM books WHERE status != 'no_file' ORDER BY id").all() as { id: string; title: string; tags: string }[];
+  const retired = new Map<string, { tag: string; replaced_by: string[]; action: "automatic" | "review"; books: { book_id: string; title: string }[] }>();
+  const unknown = new Map<string, { tag: string; reason: string; books: { book_id: string; title: string }[] }>();
+  const broad = new Map<string, { tag: string; label: string; narrower: number; books: { book_id: string; title: string }[] }>();
+  for (const b of books) {
+    const tags = (JSON.parse(b.tags) as string[]).map((t) => t.toLowerCase());
+    const ref = { book_id: b.id, title: b.title };
+    for (const t of tags) {
+      const replacedBy = v.retired(t);
+      if (replacedBy) {
+        const r = retired.get(t) ?? { tag: t, replaced_by: replacedBy, action: replacedBy.length === 1 ? "automatic" as const : "review" as const, books: [] };
+        r.books.push(ref);
+        retired.set(t, r);
+      } else if (v.has(t)) {
+        if (v.hasChildren(t) && !tags.some((o) => o.startsWith(`${t}.`))) {
+          const n = broad.get(t) ?? { tag: t, label: v.labelFor(t) ?? t, narrower: v.tags.filter((x) => x.tag.startsWith(`${t}.`)).length, books: [] };
+          n.books.push(ref);
+          broad.set(t, n);
+        }
+      } else if (v.labelFor(t) || TERM_LIKE.test(t)) {
+        const u = unknown.get(t) ?? { tag: t, reason: v.labelFor(t) ? "a grouping term, not assignable" : "not in the vocabulary", books: [] };
+        u.books.push(ref);
+        unknown.set(t, u);
+      }
+    }
+  }
+  const byCount = <T extends { tag: string; books: unknown[] }>(m: Map<string, T>) => [...m.values()].sort((a, b) => b.books.length - a.books.length || a.tag.localeCompare(b.tag));
+  return {
+    vocabulary: { version: v.version, generated_at: v.generatedAt, terms: v.terms.length, assignable: v.tags.length, error: c.vocabularySource?.error ?? null },
+    retired_in_use: byCount(retired),
+    unknown_terms: byCount(unknown),
+    tagged_only_broadly: byCount(broad),
+    note: "retired_in_use with action \"automatic\" is fixed by the tags job; \"review\" needs a person to choose. unknown_terms are Calibre tags shaped like vocabulary ids that it does not have. tagged_only_broadly lists books tagged at a term with narrower terms below it, most first: re-tagging candidates, and a hint where the taxonomy may need a new term.",
+  };
 }

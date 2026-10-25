@@ -14,8 +14,8 @@ import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
 import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
-import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist } from "../src/tagging.js";
-import { Vocabulary, buildVocabulary } from "../src/vocabulary.js";
+import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport } from "../src/tagging.js";
+import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
@@ -52,17 +52,8 @@ let db: DB;
 let data: DataStore;
 let c: Corpus;
 
-/** A small slice of the Concept Clusters taxonomy, including a comma and a category with no domain. */
-const taxonomy = {
-  domains: [{ slug: "social-sciences", name: "Social Sciences" }, { slug: "interdisciplinary-studies", name: "Interdisciplinary Studies" }],
-  categories: [
-    { slug: "sociology", name: "Sociology", domain: "social-sciences", subcategories: [{ id: "social-change", title: "Social Change" }] },
-    { slug: "psychology", name: "Psychology", domain: "social-sciences", subcategories: [{ id: "social-psychology", title: "Social Psychology" }] },
-    { slug: "science-technology-society", name: "Science, Technology & Society", domain: "interdisciplinary-studies",
-      subcategories: [{ id: "technology-work-control", title: "Technology, Work & Control" }] },
-    { slug: "trivia", name: "Trivia", domain: null },
-  ],
-};
+/** A small vocabulary: grouping terms, a comma in a label, and a top-level term. */
+const vocabularyFile = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "vocabulary.json"), "utf8")) as VocabularyFile;
 
 function build(): void {
   makeLibrary(root, "main", [
@@ -84,10 +75,11 @@ beforeEach(() => {
     booksRoot: root, libraries: ["main", "library"], excludeTags: ["private"], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
+    vocabularyPath: path.join(root, "vocabulary.json"),
   };
   db = openDatabase(config.dbPath);
   data = openDataStore(config.dataDbPath);
-  c = { db, data, booksRoot: root, vocabulary: new Vocabulary(taxonomy) };
+  c = { db, data, booksRoot: root, vocabulary: new Vocabulary(vocabularyFile) };
 });
 
 afterEach(() => {
@@ -561,8 +553,8 @@ describe("tags", () => {
 });
 
 describe("tag vocabulary and proposals", () => {
-  it("builds slug tags with title labels, and finds tags by slug or title", () => {
-    expect(buildVocabulary(taxonomy).map((t) => t.tag)).toEqual([
+  it("builds tags from term ids with title-path labels, and finds tags by id or title", () => {
+    expect(c.vocabulary.tags.map((t) => t.tag)).toEqual([
       "interdisciplinary-studies.science-technology-society",
       "interdisciplinary-studies.science-technology-society.technology-work-control",
       "social-sciences.psychology",
@@ -574,8 +566,11 @@ describe("tag vocabulary and proposals", () => {
     const v = c.vocabulary;
     expect(v.find("Social-Sciences.Sociology.Social-Change")).toEqual({
       tag: "social-sciences.sociology.social-change", label: "Social Sciences › Sociology › Social Change",
-      domain: "social-sciences", category: "sociology", subcategory: "social-change",
+      name: "Social Change", parent: "social-sciences.sociology", assignable: true,
     });
+    // Grouping terms label paths but are not tags.
+    expect(v.find("social-sciences")).toBeUndefined();
+    expect(v.has("social-sciences")).toBe(false);
     // Titles with their commas, without them (the earlier tag form), and with " › " all resolve.
     for (const title of ["Interdisciplinary Studies › Science, Technology & Society › Technology, Work & Control",
       "Interdisciplinary Studies.Science Technology & Society.Technology Work & Control"]) {
@@ -638,6 +633,75 @@ describe("tag vocabulary and proposals", () => {
       expect(reviewProposal(c, "uuid-1", { action: "reopen" }).status).toBe("pending");
       expect(tagPlan(c, "main").books).toEqual([]);
     });
+
+    it("replaces a retired term with its single replacement, and leaves splits for review", () => {
+      c.vocabulary = new Vocabulary({ ...vocabularyFile, retired: [
+        { id: "social-sciences.psychology.old-social", replacedBy: ["social-sciences.psychology.social-psychology"] },
+        { id: "social-sciences.split-me", replacedBy: ["social-sciences.sociology", "social-sciences.psychology"] },
+      ] });
+      const setTags = db.prepare("UPDATE books SET tags = ? WHERE id = ?");
+      setTags.run(JSON.stringify(["social-sciences.psychology.old-social", "MEAP V08"]), "main:2");
+      setTags.run(JSON.stringify(["social-sciences.split-me", "social-sciences.media-studies"]), "main:6");
+      setTags.run(JSON.stringify(["social-sciences.psychology"]), "library:7");
+      expect(c.vocabulary.find("social-sciences.psychology.old-social")?.tag).toBe("social-sciences.psychology.social-psychology");
+      expect(c.vocabulary.find("social-sciences.split-me")).toBeUndefined();
+      // Automatic: free tags stay, the retired term is swapped.
+      expect(tagPlan(c, "main").books).toEqual([{
+        calibre_id: 2, uuid: "uuid-2", title: "Echoes", add: ["social-sciences.psychology.social-psychology"], remove: ["social-sciences.psychology.old-social"],
+      }]);
+      // An approved set still naming the retired term is rewritten, and its plan removes the old tag too.
+      data.prepare(`INSERT INTO tag_proposals (calibre_uuid, book_id, title, tags, rationale, status, approved_tags, proposed_at)
+        VALUES ('uuid-2', 'main:2', 'Echoes', ?, 'r', 'approved', ?, '2026-10-25')`).run(JSON.stringify(["social-sciences.psychology.old-social"]), JSON.stringify(["social-sciences.psychology.old-social", "trivia"]));
+      expect(normalizeProposalTags(c)).toBe(1);
+      expect(tagPlan(c, "main").books).toEqual([{
+        calibre_id: 2, uuid: "uuid-2", title: "Echoes", add: ["social-sciences.psychology.social-psychology", "trivia"], remove: ["social-sciences.psychology.old-social"],
+      }]);
+
+      const report = vocabularyReport(c);
+      expect(report.vocabulary).toMatchObject({ version: "test-1", assignable: 7, terms: 9 });
+      expect(report.retired_in_use.map((r) => [r.tag, r.action, r.books.map((b) => b.book_id)])).toEqual([
+        ["social-sciences.psychology.old-social", "automatic", ["main:2"]],
+        ["social-sciences.split-me", "review", ["main:6"]],
+      ]);
+      expect(report.unknown_terms.map((u) => u.tag)).toEqual(["social-sciences.media-studies"]);
+      expect(report.tagged_only_broadly).toEqual([{ tag: "social-sciences.psychology", label: "Social Sciences › Psychology", narrower: 1, books: [{ book_id: "library:7", title: "Networks" }] }]);
+    });
+
+    it("plans nothing without a vocabulary", () => {
+      c.vocabulary = Vocabulary.empty();
+      expect(() => tagPlan(c, "main")).toThrow(/No vocabulary/);
+    });
+  });
+
+  it("rejects an invalid vocabulary with every problem named", () => {
+    expect(vocabularyProblems({ format: "other", terms: [
+      { id: "a", label: "A" }, { id: "a", label: "Again" }, { id: "a.B_c", label: "Bad", parent: "a" }, { id: "x.y", label: "Orphan", parent: "x" },
+      { id: "a.dot", label: "Dr. Who", parent: "a" }, { id: "a.wrong", label: "Wrong", parent: "b" },
+    ], retired: [{ id: "a", replacedBy: ["nowhere"] }] })).toEqual([
+      'format is "other", expected "corpus-vocabulary/1"',
+      'duplicate id "a"',
+      '"a.B_c": the last segment must be lowercase letters, digits, and single hyphens',
+      '"x.y": parent "x" is not a term',
+      '"a.dot": the label "Dr. Who" contains "." or "›"',
+      '"a.wrong": parent is "b", but the id says "a"',
+      'retired "a" is still a term',
+      'retired "a": replacement "nowhere" is not a term',
+    ]);
+  });
+
+  it("reloads the vocabulary file when it changes, keeping the last good one", () => {
+    const file = path.join(root, "vocabulary.json");
+    const seen: number[] = [];
+    const source = new VocabularySource(file, (v) => seen.push(v.tags.length), 0);
+    expect(source.current().tags).toEqual([]);
+    expect(source.error).toMatch(/No vocabulary file/);
+    fs.writeFileSync(file, JSON.stringify(vocabularyFile));
+    expect(source.current().tags).toHaveLength(7);
+    expect(source.error).toBeNull();
+    fs.writeFileSync(file, JSON.stringify({ ...vocabularyFile, terms: [...vocabularyFile.terms, { id: "nope.x", label: "X", parent: "nope" }] }));
+    expect(source.current().tags).toHaveLength(7);
+    expect(source.error).toMatch(/parent "nope" is not a term/);
+    expect(seen).toEqual([0, 7]);
   });
 
   it("lists the merged tags calibre-tags.sh would write, and skips a book whose id moved", () => {

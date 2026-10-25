@@ -39,17 +39,46 @@ The citekey, tag-proposal, and quote tools write to corpus-mcp's own data; corpu
 
 ## Categories
 
-Calibre tags (Calibre-Web's *Categories*) follow a controlled vocabulary:
-[Concept Clusters](https://github.com/jmajerus/concept-clusters)' taxonomy as
-slug paths such as `social-sciences.psychology.social-psychology` (snapshot in
-[`data/`](data/)). Slugs are Concept Clusters' stable ids, so a renamed category
-leaves Calibre's tags valid. Tools and the review page show the titles
+Calibre tags (Calibre-Web's *Categories*) follow a controlled vocabulary that
+the taxonomy's owner supplies as a JSON file (format below). Here that owner is
+[Concept Clusters](https://github.com/jmajerus/concept-clusters); any project can
+supply its own. Term ids are the tags, nested with `.` such as
+`social-sciences.psychology.social-psychology`, so a renamed term leaves
+Calibre's tags valid. Tools and the review page show the titles
 ("Social Sciences › Psychology › Social Psychology") and accept either form. An agent takes
 books from `tagging_worklist` and calls `propose_tags`. A person approves,
 edits, or rejects each proposal at `/admin/proposals`, or sets a book's categories directly on its page. Then
 `npm run tags:apply -- --apply` runs [`tools/calibre-tags.sh`](tools/calibre-tags.sh)
 on the Calibre-Web host. That script backs up `metadata.db` and adds the
 approved tags with `calibredb`, keeping each book's existing tags.
+
+The vocabulary file (`corpus-vocabulary/1`) is a flat list of terms:
+
+```json
+{
+  "format": "corpus-vocabulary/1",
+  "version": "any string",
+  "generatedAt": "2026-10-25T12:00:00Z",
+  "terms": [
+    { "id": "social-sciences", "label": "Social Sciences", "assignable": false },
+    { "id": "social-sciences.psychology", "label": "Psychology", "parent": "social-sciences" }
+  ],
+  "retired": [{ "id": "old.term", "replacedBy": ["social-sciences.psychology"] }]
+}
+```
+
+- An id is its parent's id, `.`, and one segment of lowercase letters, digits,
+  and single hyphens. A label is the term's own title, without `.` or `›`.
+- `assignable: false` marks a term that only groups others.
+- A retired term with one replacement is re-tagged by the tags job; one that
+  was split or dropped waits for a person.
+- The server reads `/var/lib/corpus-mcp/vocabulary.json` (`CORPUS_VOCABULARY`)
+  and reloads it when it changes; an invalid file is reported and the last good
+  one stays in use. `npm run deploy -- --vocabulary=<file>` validates and
+  installs one.
+- `vocabulary_report` (and the categories page) lists retired terms still in
+  Calibre, tags shaped like terms that the vocabulary lacks, and books tagged
+  only at a term with narrower ones. corpus-mcp never edits the vocabulary.
 
 ## Admin
 

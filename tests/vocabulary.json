@@ -1,0 +1,17 @@
+{
+  "format": "corpus-vocabulary/1",
+  "version": "test-1",
+  "generatedAt": "2026-10-25T00:00:00Z",
+  "terms": [
+    { "id": "social-sciences", "label": "Social Sciences", "assignable": false },
+    { "id": "social-sciences.sociology", "label": "Sociology", "parent": "social-sciences" },
+    { "id": "social-sciences.sociology.social-change", "label": "Social Change", "parent": "social-sciences.sociology" },
+    { "id": "social-sciences.psychology", "label": "Psychology", "parent": "social-sciences" },
+    { "id": "social-sciences.psychology.social-psychology", "label": "Social Psychology", "parent": "social-sciences.psychology" },
+    { "id": "interdisciplinary-studies", "label": "Interdisciplinary Studies", "assignable": false },
+    { "id": "interdisciplinary-studies.science-technology-society", "label": "Science, Technology & Society", "parent": "interdisciplinary-studies" },
+    { "id": "interdisciplinary-studies.science-technology-society.technology-work-control", "label": "Technology, Work & Control", "parent": "interdisciplinary-studies.science-technology-society" },
+    { "id": "trivia", "label": "Trivia" }
+  ],
+  "retired": []
+}
