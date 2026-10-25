@@ -1,4 +1,5 @@
 /** BibTeX for filing a Calibre book in Zotero from its own metadata (no ISBN lookup). */
+import { validIsbn } from "./isbn.js";
 
 const SPECIAL = /[\\{}&%$#_~^]/g;
 const ESCAPES: Record<string, string> = {
@@ -35,7 +36,8 @@ export function bookBibtex(b: BibtexBook): string {
     ["author", names.length ? names.join(" and ") : null],
     ["publisher", b.publisher ? escapeBibtex(b.publisher) : null],
     ["year", b.year ? String(b.year) : null],
-    ["isbn", b.isbn],
+    // Concept Clusters rejects an entry whose ISBN fails its check digit, so an invalid one is left out.
+    ["isbn", b.isbn ? validIsbn(b.isbn) : null],
     ["note", b.calibreUuid ? `Calibre UUID: ${b.calibreUuid}` : null],
   ];
   const body = fields.filter(([, v]) => v).map(([k, v]) => `  ${k} = {${v}},`).join("\n");

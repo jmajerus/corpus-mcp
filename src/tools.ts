@@ -368,7 +368,7 @@ export function citePassage(c: Corpus, args: CiteArgs) {
       arguments: {
         bibtex: bookBibtex({
           citekey: filingKey, title: book.title, authors, authorSorts: JSON.parse(book.author_sorts) as string[],
-          publisher: book.publisher, year: book.year, isbn: book.isbn ? validIsbn(book.isbn) : null, calibreUuid: book.uuid,
+          publisher: book.publisher, year: book.year, isbn: book.isbn, calibreUuid: book.uuid,
         }),
       },
     });

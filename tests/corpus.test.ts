@@ -273,6 +273,12 @@ describe("citekeys", () => {
     ].join("\n"));
   });
 
+  it("leaves an ISBN that fails its check digit out of the entry, and normalizes a valid one", () => {
+    const entry = (isbn: string) => bookBibtex({ citekey: "nye2011future", title: "T", authors: [], authorSorts: [], publisher: null, year: 2011, isbn, calibreUuid: null });
+    expect(entry("9780306406158")).not.toContain("isbn");
+    expect(entry("978-0-306-40615-7")).toContain("isbn = {9780306406157}");
+  });
+
   it("migrates a schema 1 index in place, and a reader accepts a newer schema", () => {
     for (const col of ["author_sorts", "calibre_citekey", "proposed_citekey", "citekey_blockers"]) db.exec(`ALTER TABLE books DROP COLUMN ${col}`);
     db.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
@@ -308,6 +314,12 @@ describe("citekeys", () => {
       expect(bibtex).toContain("author = {Author, Ann and Second, Bo}");
       expect(bibtex).toContain("note = {Calibre UUID: uuid-1}");
       expect(bibtex).toContain("isbn = {9780000000002}");
+      db.prepare("UPDATE books SET isbn = '978-0-00-000000-1' WHERE id = 'main:1'").run();
+      const invalid = citePassage(c, { book_id: "main:1" });
+      expect(invalid.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata"]);
+      expect((invalid.zotero_filing![0].arguments as { bibtex: string }).bibtex).not.toContain("isbn");
+      expect(invalid.warnings.join(" ")).toMatch(/fails its check digit/);
+      db.prepare("UPDATE books SET isbn = '978-0-00-000000-2' WHERE id = 'main:1'").run();
 
       expect(pinCitekey(c, { book_id: "main:1", citekey: "author1986networksa" }, "me@example.com")).toMatchObject({ status: "pinned" });
       const after = citePassage(c, { book_id: "author1986networksa", page: 3 });

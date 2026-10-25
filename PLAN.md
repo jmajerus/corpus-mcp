@@ -269,13 +269,26 @@ title is deliberately skipped: it uses the same sources as Zotero's ISBN
 lookup and often returns a different edition. Live: 340 of the 434 books
 without a Calibre ISBN print at least one.
 
-**Needs from Concept Clusters.**
+**Concept Clusters side** (concept-clusters 2dc5bab, PR #313).
+`file_zotero_reference` accepts `bibtex` and files the book from the entry's
+own metadata, with no lookup.
 
-- `file_zotero_reference` accepts `bibtex` (one `@book` entry). It files
-  from the entry's own metadata with no lookup, deduplicates against the
-  collection by ISBN, then title, author, and year, and assigns and returns
-  a unique citekey.
-- A copy of `tests/citekey-cases.json`, run against `proposedCitationKey`.
+- **Parsing.** "Surname, Given" becomes a person; a braced name such as
+  `{Apple Inc.}` stays one organization.
+- **Duplicates.** A book already in the collection is matched by ISBN (an
+  ISBN-10 equals its ISBN-13), but only among up to 10 title-search results,
+  because Zotero cannot search by ISBN. Failing that, title, first author,
+  and year must all match. Two different ISBNs mean different editions.
+- **Reuse.** A matched book keeps its existing citekey and gains the
+  Calibre UUID in Extra if it lacks it.
+- **Elsewhere in the library.** A book outside the collection is moved in,
+  keeping its citekey.
+- **Every route returns `citekey`,** including the ISBN route, so
+  `pin_citekey` works after any filing.
+- **Invalid ISBNs.** An entry whose ISBN fails its check digit is rejected
+  outright. `bookBibtex` leaves invalid ISBNs out, so such books still file
+  by BibTeX.
+- **Shared cases.** `tests/citekey-cases.json` is copied there and passes.
 
 **Prerequisite.** Calibre metadata hygiene, the same as for ISBN filing:
 fill unknown authors and years, fix author sort names, and merge duplicate
