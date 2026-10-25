@@ -18,6 +18,8 @@ export interface ScanSummary {
   removed: number;
   excluded: number;
   unreadableLibraries: string[];
+  /** Shelves loaded from the export, or why they were left as they were. */
+  shelves: number | string;
 }
 
 interface ExistingRow {
@@ -45,7 +47,7 @@ function sha256(data: Uint8Array): string {
 }
 
 export function scanLibraries(config: Config, db: DB, { force = false, log = (() => {}) as Log } = {}): ScanSummary {
-  const summary: ScanSummary = { scanned: 0, extracted: 0, unchanged: 0, noFile: 0, failed: 0, removed: 0, excluded: 0, unreadableLibraries: [] };
+  const summary: ScanSummary = { scanned: 0, extracted: 0, unchanged: 0, noFile: 0, failed: 0, removed: 0, excluded: 0, unreadableLibraries: [], shelves: "no export" };
   const seen = new Set<string>();
 
   const getExisting = db.prepare<[string], ExistingRow>(
@@ -144,6 +146,7 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
     }
   }
 
+  summary.shelves = loadShelves(config, db);
   fillDerivedColumns(db);
 
   const stale = (db.prepare("SELECT id FROM books").pluck().all() as string[]).filter((id) => !seen.has(id));
@@ -156,6 +159,34 @@ export function scanLibraries(config: Config, db: DB, { force = false, log = (()
   summary.removed = stale.length;
   setMeta(db, "last_scan", new Date().toISOString());
   return summary;
+}
+
+interface ShelfExport { exported_at: string; shelves: { id: number; name: string; books: { book_id: number; order: number | null }[] }[] }
+
+/**
+ * Replaces the shelf tables from Calibre-Web's export (deploy/corpus-source.sh). Shelf book ids are
+ * Calibre ids in the library Calibre-Web serves. A missing or malformed export leaves the tables as they were.
+ */
+function loadShelves(config: Config, db: DB): number | string {
+  let data: ShelfExport;
+  try {
+    data = JSON.parse(fs.readFileSync(config.shelvesFile, "utf8")) as ShelfExport;
+    if (!Array.isArray(data.shelves)) throw new Error("no shelves array");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "no export" : `unreadable export: ${(error as Error).message}`;
+  }
+  const insertShelf = db.prepare("INSERT INTO shelves (id, name) VALUES (?, ?)");
+  const insertLink = db.prepare("INSERT OR IGNORE INTO book_shelves (book_id, shelf_id, ord) VALUES (?, ?, ?)");
+  db.transaction(() => {
+    db.prepare("DELETE FROM book_shelves").run();
+    db.prepare("DELETE FROM shelves").run();
+    for (const shelf of data.shelves) {
+      insertShelf.run(shelf.id, shelf.name);
+      for (const book of shelf.books) insertLink.run(`${config.shelvesLibrary}:${book.book_id}`, shelf.id, book.order);
+    }
+    setMeta(db, "shelves_exported_at", data.exported_at);
+  })();
+  return data.shelves.length;
 }
 
 /** Copyright pages sit in the front matter, or at the back of some ebooks. */

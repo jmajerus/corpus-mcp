@@ -8,7 +8,7 @@ import type { Config } from "./config.js";
 import { openDataStore } from "./data.js";
 import { openDatabase } from "./db.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, pinCitekey, readBook, renderPage, searchCorpus,
 } from "./tools.js";
 
 const VERSION = "0.2.0";
@@ -46,6 +46,7 @@ export function createServer(c: Corpus): McpServer {
       query: z.string().min(1).describe('Words or "quoted phrases" to find'),
       book_id: bookId.optional().describe("Search within one book"),
       library: z.string().optional().describe("Limit to one Calibre library"),
+      shelf: z.string().optional().describe("Limit to one Calibre-Web shelf, by name (see list_shelves)"),
       author: z.string().optional().describe("Limit to books whose author contains this text"),
       limit: z.number().int().min(1).max(50).optional().describe("Results to return (default 10)"),
       advanced: z.boolean().optional().describe("Pass query to SQLite FTS5 unchanged (OR, NOT, NEAR(), column filters)"),
@@ -55,15 +56,23 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("list_books", {
     title: "List books",
-    description: "Look up books by title, author, tag, publisher, ISBN, id, or citekey. Returns metadata, format, page count, citekey (pinned or set in Calibre) and proposed_citekey, and other ids that hold the same file.",
+    description: "Look up books by title, author, tag, publisher, ISBN, id, or citekey, optionally on one shelf. Returns metadata, shelves, format, page count, citekey (pinned or set in Calibre) and proposed_citekey, and other ids that hold the same file.",
     inputSchema: {
       query: z.string().optional().describe("Text to match; omit to list everything"),
       library: z.string().optional(),
+      shelf: z.string().optional().describe("Only books on this Calibre-Web shelf, by name (see list_shelves)"),
       include_unindexed: z.boolean().optional().describe("Also list catalogue entries with no readable ebook file"),
       limit: z.number().int().min(1).max(200).optional().describe("Default 25"),
     },
     annotations: { title: "List books", ...readOnly },
   }, (args) => run(() => json(listBooks(c, args))));
+
+  server.registerTool("list_shelves", {
+    title: "List shelves",
+    description: "Calibre-Web's public shelves (topic collections such as Misinformation), with how many indexed books each holds. Use a shelf name to filter search_corpus or list_books.",
+    inputSchema: {},
+    annotations: { title: "List shelves", ...readOnly },
+  }, () => run(() => json(listShelves(c))));
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -68,6 +68,20 @@ CREATE TABLE IF NOT EXISTS passages (
   text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS passages_book ON passages(book_id, page_index);
+
+-- Calibre-Web's public shelves, replaced from its export on every scan. book_shelves.book_id joins
+-- books.id; it can name a book not (yet) in the index, so it has no foreign key.
+CREATE TABLE IF NOT EXISTS shelves (
+  id INTEGER PRIMARY KEY,            -- Calibre-Web shelf id
+  name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS book_shelves (
+  book_id TEXT NOT NULL,             -- "<library>:<calibre id>"
+  shelf_id INTEGER NOT NULL REFERENCES shelves(id) ON DELETE CASCADE,
+  ord INTEGER,                       -- the shelf's manual order
+  PRIMARY KEY (book_id, shelf_id)
+);
+CREATE INDEX IF NOT EXISTS book_shelves_shelf ON book_shelves(shelf_id, ord);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(
   text, content='passages', content_rowid='id',

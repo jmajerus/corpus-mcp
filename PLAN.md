@@ -379,6 +379,28 @@ zotero-mcp's full text where it is available. Web sources would use the URL
 and access date and would be unverified. Both need a `source_kind` column,
 which the schema includes from the start.
 
+## Shelves
+
+Calibre-Web's public shelves (Business, Literature, Main, Misinformation,
+Tech) are topic collections stored in its `app.db`, not in the Calibre
+library.
+
+- **Export on CT 115.** The sync key's forced command is
+  `deploy/corpus-source.sh`, installed as `~authoring/.local/bin/corpus-source`.
+  It dispatches read-only rsync to `rrsync -ro`, answers `shelves` with JSON
+  from `app.db` (opened read-only, public shelves only), and refuses
+  everything else. Tested: shell, `..` escape, write, and injection
+  (`shelves; id`) are all refused. `app.db` is never copied, because it also
+  holds password hashes.
+- **Fetch.** `corpus-sync.sh` writes the export to
+  `/var/lib/corpus-mcp/shelves.json`, replacing it only on success.
+- **Load.** Each scan replaces `shelves` and `book_shelves` (with
+  `book_shelves.book_id` joining `books.id`) in one transaction. A missing
+  or malformed export leaves the tables as they were. Shelf book ids belong
+  to `CORPUS_SHELVES_LIBRARY` (default `main`).
+- **Tools.** `list_shelves`, a `shelf` filter on `search_corpus` and
+  `list_books`, and `shelves` in book summaries.
+
 ## Remote access (Claude web)
 
 Claude web reaches the server through Cloudflare. The path is a Cloudflare
@@ -414,7 +436,10 @@ zotero-mcp's.
   `authoring` user's `authorized_keys` on CT 115, restricted to
   `restrict,command="/usr/bin/rrsync -ro /mnt/Calibre/main"`. That key
   cannot open a shell, write, or reach outside `main`; all three were tested.
-  The LXC's env has `CORPUS_SOURCE=authoring@calibre-web.localdomain` and
+  The key is now forced to `~authoring/.local/bin/corpus-source` (see
+  *Shelves*), which still allows only read-only rsync of `main` plus the
+  shelf export. The LXC's env has
+  `CORPUS_SOURCE=authoring@calibre-web.localdomain` and
   `CORPUS_REMOTE_PATH=./`. Once CT 115 is fixed, run `--source-setup`, set
   `CORPUS_SOURCE=corpus-sync@calibre-web.localdomain` and remove
   `CORPUS_REMOTE_PATH` from `/etc/corpus-mcp/env`, then delete the key line

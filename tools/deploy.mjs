@@ -71,7 +71,10 @@ async function sourceSetup() {
   const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
   const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
   if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
-  await runAsRoot(SOURCE_HOST, readScript("source-setup.sh"), { CORPUS_PUBKEY: pubkey });
+  await runAsRoot(SOURCE_HOST, readScript("source-setup.sh"), {
+    CORPUS_PUBKEY: pubkey,
+    CORPUS_SOURCE_SCRIPT: Buffer.from(readScript("corpus-source.sh")).toString("base64"),
+  });
   console.log("\nSource ready. Next: npm run deploy");
 }
 
@@ -90,13 +93,21 @@ async function sourceSetupUserKey() {
   const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
   const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
   if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
-  const line = `restrict,command="/usr/bin/rrsync -ro /mnt/Calibre/main" ${pubkey}`;
+  // The forced command (deploy/corpus-source.sh) allows read-only rsync of main and the shelf export.
+  const script = Buffer.from(readScript("corpus-source.sh")).toString("base64");
   const sourceUser = SOURCE_HOST.split("@")[0];
   await runAsUser(SOURCE_HOST, [
     "set -eu",
+    "install -d -m 0755 ~/.local/bin",
+    `printf %s ${shellQuote(script)} | base64 -d | sed 's|^RSYNC_ROOT=.*|RSYNC_ROOT="/mnt/Calibre/main"|' > ~/.local/bin/corpus-source`,
+    "chmod 0755 ~/.local/bin/corpus-source",
     "install -d -m 0700 ~/.ssh",
     "touch ~/.ssh/authorized_keys && chmod 0600 ~/.ssh/authorized_keys",
-    `grep -qF ${shellQuote(pubkey)} ~/.ssh/authorized_keys || echo ${shellQuote(line)} >> ~/.ssh/authorized_keys`,
+    // Replace any earlier line for this key (it was forced to rrsync alone).
+    `grep -vF ${shellQuote(pubkey)} ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.new || true`,
+    // OpenSSH requires the command option quoted: restrict,command="…" ssh-ed25519 …
+    `printf 'restrict,command="%s" %s\\n' "$HOME/.local/bin/corpus-source" ${shellQuote(pubkey)} >> ~/.ssh/authorized_keys.new`,
+    "chmod 0600 ~/.ssh/authorized_keys.new && mv ~/.ssh/authorized_keys.new ~/.ssh/authorized_keys",
   ].join("\n"));
   await runAsRoot(CORPUS_HOST, `
 set -euo pipefail

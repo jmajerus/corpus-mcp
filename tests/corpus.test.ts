@@ -1,3 +1,5 @@
+import Database from "better-sqlite3";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +14,7 @@ import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, pinCitekey, readBook, renderPage, searchCorpus,
   toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -64,7 +66,8 @@ beforeEach(() => {
   build();
   config = {
     booksRoot: root, libraries: ["main", "library"], excludeTags: ["private"], dbPath: path.join(root, "corpus.db"),
-    dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"), host: "127.0.0.1", port: 0,
+    dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
+    shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
   };
   db = openDatabase(config.dbPath);
   data = openDataStore(config.dataDbPath);
@@ -418,5 +421,67 @@ describe("printed ISBNs", () => {
     expect(cite.isbn_candidates?.map((x) => [x.isbn, x.format])).toEqual([["9780306406157", "paperback"], ["9781402894626", null]]);
     expect(cite.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata"]);
     expect(corpusStatus(c).printed_isbns.books.map((b) => b.book_id)).toContain("extra:8");
+  });
+});
+
+describe("shelves", () => {
+  const writeExport = (shelves: { id: number; name: string; books: number[] }[]) =>
+    fs.writeFileSync(config.shelvesFile, JSON.stringify({
+      exported_at: "2026-10-25T00:00:00Z",
+      shelves: shelves.map((x) => ({ id: x.id, name: x.name, books: x.books.map((book_id, order) => ({ book_id, order })) })),
+    }));
+
+  beforeEach(() => {
+    writeExport([{ id: 1, name: "Misinformation", books: [2, 1] }, { id: 5, name: "Main", books: [1, 99] }]);
+  });
+
+  it("loads Calibre-Web's shelves into a table joined to books", () => {
+    expect(scanLibraries(config, db).shelves).toBe(2);
+    expect(listShelves(c)).toEqual({
+      exported_at: "2026-10-25T00:00:00Z",
+      shelves: [{ name: "Main", books: 2, indexed_books: 1 }, { name: "Misinformation", books: 2, indexed_books: 2 }],
+    });
+    expect(listBooks(c, { query: "Networks" }).books.find((b) => b.book_id === "main:1")?.shelves).toEqual(["Main", "Misinformation"]);
+    expect(getBookOutline(c, "main:2").shelves).toEqual(["Misinformation"]);
+  });
+
+  it("filters search and listings by shelf name", () => {
+    scanLibraries(config, db);
+    // Listed by title: Echoes (main:2), then Networks (main:1).
+    expect(listBooks(c, { shelf: "misinformation" }).books.map((b) => b.book_id)).toEqual(["main:2", "main:1"]);
+    const hits = searchCorpus(c, { query: "clusters", shelf: "Main" }).results;
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((r) => r.book_id === "main:1")).toBe(true);
+    expect(() => searchCorpus(c, { query: "clusters", shelf: "Nope" })).toThrow(/No shelf "Nope". Shelves: Main, Misinformation/);
+  });
+
+  it("keeps the previous shelves when the export is missing or malformed", () => {
+    scanLibraries(config, db);
+    fs.writeFileSync(config.shelvesFile, "{ not json");
+    expect(scanLibraries(config, db).shelves).toMatch(/^unreadable export/);
+    fs.rmSync(config.shelvesFile);
+    expect(scanLibraries(config, db).shelves).toBe("no export");
+    expect(listShelves(c).shelves).toHaveLength(2);
+    writeExport([{ id: 1, name: "Misinformation", books: [2] }]);
+    scanLibraries(config, db);
+    expect(listBooks(c, { query: "Networks" }).books.find((b) => b.book_id === "main:1")?.shelves).toEqual([]);
+  });
+
+  it("exports only public shelves from app.db and allows nothing but rsync and the export", () => {
+    const appDb = path.join(root, "app.db");
+    const app = new Database(appDb);
+    app.exec(`
+      CREATE TABLE shelf (id INTEGER PRIMARY KEY, name TEXT, is_public INTEGER);
+      CREATE TABLE book_shelf_link (id INTEGER PRIMARY KEY, book_id INTEGER, "order" INTEGER, shelf INTEGER);
+      INSERT INTO shelf VALUES (1, 'Misinformation', 1), (2, 'Diary', 0);
+      INSERT INTO book_shelf_link (book_id, "order", shelf) VALUES (53, 1, 1), (7, 2, 1), (99, 1, 2);`);
+    app.close();
+    const script = fs.readFileSync(new URL("../deploy/corpus-source.sh", import.meta.url), "utf8").replace(/^APP_DB=.*$/m, `APP_DB="${appDb}"`);
+    const run = (command: string) => spawnSync("sh", ["-c", script], { env: { ...process.env, SSH_ORIGINAL_COMMAND: command }, encoding: "utf8" });
+    const exported = JSON.parse(run("shelves").stdout);
+    expect(exported.shelves).toEqual([{ id: 1, name: "Misinformation", books: [{ book_id: 53, order: 1 }, { book_id: 7, order: 2 }] }]);
+    const refused = run("cat /etc/passwd");
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/only read-only rsync and 'shelves'/);
   });
 });

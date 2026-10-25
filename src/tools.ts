@@ -88,11 +88,32 @@ function citekeyInfo(book: BookRow, pin: PinnedCitekey | undefined) {
   };
 }
 
-function bookSummary(book: BookRow, pin: PinnedCitekey | undefined) {
+/** Shelf names per book id, for the given books (all books when omitted). */
+function shelvesByBook(c: Corpus, bookIds?: string[]): Map<string, string[]> {
+  const rows = c.db.prepare(`
+    SELECT bs.book_id, s.name FROM book_shelves bs JOIN shelves s ON s.id = bs.shelf_id
+    ${bookIds ? "WHERE bs.book_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY s.name`)
+    .all(...(bookIds ? [JSON.stringify(bookIds)] : [])) as { book_id: string; name: string }[];
+  const map = new Map<string, string[]>();
+  for (const r of rows) map.set(r.book_id, [...(map.get(r.book_id) ?? []), r.name]);
+  return map;
+}
+
+/** The SQL condition for books on a shelf, matched by name; an unknown name is an error that lists the shelves. */
+function shelfFilter(c: Corpus, shelf: string): string {
+  const known = c.db.prepare("SELECT name FROM shelves ORDER BY name").pluck().all() as string[];
+  if (!known.some((name) => name.toLowerCase() === shelf.toLowerCase())) {
+    throw new ToolError(known.length ? `No shelf "${shelf}". Shelves: ${known.join(", ")}.` : "No shelves have been synced from Calibre-Web.");
+  }
+  return "b.id IN (SELECT bs.book_id FROM book_shelves bs JOIN shelves s ON s.id = bs.shelf_id WHERE s.name = @shelf COLLATE NOCASE)";
+}
+
+function bookSummary(book: BookRow, pin: PinnedCitekey | undefined, shelves: string[] = []) {
   return {
     book_id: book.id,
     title: book.title,
     authors: JSON.parse(book.authors) as string[],
+    shelves,
     year: book.year,
     publisher: book.publisher,
     isbn: book.isbn,
@@ -119,7 +140,7 @@ export function toFtsQuery(query: string): string {
     .join(" ");
 }
 
-export interface SearchArgs { query: string; book_id?: string; library?: string; author?: string; limit?: number; advanced?: boolean }
+export interface SearchArgs { query: string; book_id?: string; library?: string; shelf?: string; author?: string; limit?: number; advanced?: boolean }
 
 export function searchCorpus(c: Corpus, args: SearchArgs) {
   const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
@@ -128,6 +149,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
   const where = ["passages_fts MATCH @match", "b.status = 'indexed'"];
   if (bookId) where.push("b.id = @book_id");
   if (args.library) where.push("b.library = @library");
+  if (args.shelf) where.push(shelfFilter(c, args.shelf));
   if (args.author) where.push("b.authors LIKE @author");
 
   let rows: (PageRow & BookRow & { ord: number; snippet: string })[];
@@ -142,7 +164,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
       WHERE ${where.join(" AND ")}
       ORDER BY bm25(passages_fts)
       LIMIT @fetch`).all({
-      match, book_id: bookId, library: args.library,
+      match, book_id: bookId, library: args.library, shelf: args.shelf,
       author: args.author ? `%${args.author}%` : undefined, fetch: limit * 4,
     }) as typeof rows;
   } catch (error) {
@@ -175,7 +197,7 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
   return { query: match, count: results.length, results };
 }
 
-export interface ListArgs { query?: string; library?: string; include_unindexed?: boolean; limit?: number }
+export interface ListArgs { query?: string; library?: string; shelf?: string; include_unindexed?: boolean; limit?: number }
 
 export function listBooks(c: Corpus, args: ListArgs) {
   const limit = Math.min(Math.max(args.limit ?? 25, 1), 200);
@@ -186,20 +208,23 @@ export function listBooks(c: Corpus, args: ListArgs) {
   const where: string[] = [];
   if (!args.include_unindexed) where.push("status = 'indexed'");
   if (args.library) where.push("library = @library");
+  if (args.shelf) where.push(shelfFilter(c, args.shelf));
   if (query) {
     where.push(`(title LIKE @q OR authors LIKE @q OR tags LIKE @q OR isbn LIKE @q OR publisher LIKE @q OR id = @exact
       OR calibre_citekey LIKE @q OR proposed_citekey LIKE @q OR uuid IN (SELECT value FROM json_each(@pinned)))`);
   }
   const rows = c.db.prepare(`
-    SELECT * FROM books ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    SELECT * FROM books b ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
     ORDER BY title COLLATE NOCASE, id LIMIT @limit`).all({
-    library: args.library, q: query ? `%${query}%` : undefined, exact: args.query, limit, pinned: JSON.stringify(pinnedMatches),
+    library: args.library, shelf: args.shelf, q: query ? `%${query}%` : undefined, exact: args.query, limit,
+    pinned: JSON.stringify(pinnedMatches),
   }) as BookRow[];
+  const shelves = shelvesByBook(c, rows.map((b) => b.id));
   const copies = c.db.prepare<[string, string], string>("SELECT id FROM books WHERE sha256 = ? AND id != ?").pluck();
   return {
     count: rows.length,
     books: rows.map((b) => ({
-      ...bookSummary(b, b.uuid ? pins.get(b.uuid) : undefined),
+      ...bookSummary(b, b.uuid ? pins.get(b.uuid) : undefined, shelves.get(b.id)),
       same_file_as: b.sha256 ? copies.all(b.sha256, b.id) : [],
     })),
   };
@@ -212,7 +237,7 @@ export function getBookOutline(c: Corpus, bookId: string) {
     FROM outline o LEFT JOIN pages p ON p.book_id = o.book_id AND p.page_index = o.start_page
     WHERE o.book_id = ? ORDER BY o.ord`).all(book.id) as { level: number; title: string; start_page: number | null; label: string | null }[];
   return {
-    ...bookSummary(book, pinnedByUuid(c.data, book.uuid)),
+    ...bookSummary(book, pinnedByUuid(c.data, book.uuid), shelvesByBook(c, [book.id]).get(book.id)),
     tags: JSON.parse(book.tags) as string[],
     outline: outline.map((o) => ({
       level: o.level,
@@ -222,6 +247,17 @@ export function getBookOutline(c: Corpus, bookId: string) {
     })),
     ...(outline.length ? {} : { note: "This book has no outline. Read it by page range, or search within it with search_corpus." }),
   };
+}
+
+/** Calibre-Web's public shelves, with how many indexed books each holds. */
+export function listShelves(c: Corpus) {
+  const shelves = c.db.prepare(`
+    SELECT s.name, COUNT(bs.book_id) AS books,
+           COUNT(CASE WHEN b.status = 'indexed' THEN 1 END) AS indexed_books
+    FROM shelves s LEFT JOIN book_shelves bs ON bs.shelf_id = s.id LEFT JOIN books b ON b.id = bs.book_id
+    GROUP BY s.id ORDER BY s.name`).all();
+  const exportedAt = c.db.prepare("SELECT value FROM meta WHERE key = 'shelves_exported_at'").pluck().get();
+  return { exported_at: exportedAt ?? null, shelves };
 }
 
 export interface ReadArgs { book_id: string; start_page?: number; end_page?: number; section?: string; max_chars?: number }

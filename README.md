@@ -19,7 +19,8 @@ books that live in Calibre.
 | Tool | What it does |
 |---|---|
 | `search_corpus` | Full-text search (SQLite FTS5, BM25 ranking) over every indexed book. Returns ranked snippets with book, page, printed page label, and section. Supports phrases, prefixes, and filters by book, library, or author. |
-| `list_books` | Looks up books by title, author, tag, publisher, or ISBN. |
+| `list_books` | Looks up books by title, author, tag, publisher, ISBN, citekey, or shelf. |
+| `list_shelves` | Lists Calibre-Web's public shelves (topic collections) with book counts; any shelf name can filter `search_corpus` and `list_books`. |
 | `get_book_outline` | Returns metadata and the table of contents with the page where each section starts. |
 | `read_book` | Returns contiguous text for a page range or a named section, within a character budget, and says where to continue. |
 | `render_page` | Returns a PNG of a PDF page, for figures, tables, and equations. |
@@ -28,6 +29,17 @@ books that live in Calibre.
 | `corpus_status` | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
 
 All tools except `pin_citekey` are read-only, and corpus-mcp never writes to Calibre.
+
+## Shelves
+
+Calibre-Web shelves are topic collections, such as *Misinformation*, kept in
+Calibre-Web's own `app.db` rather than in the Calibre library. The sync key's
+forced command, [`deploy/corpus-source.sh`](deploy/corpus-source.sh), allows
+exactly two things: read-only rsync of the library, and a `shelves` command
+that prints the public shelves and their book ids as JSON. `app.db`, which
+also holds password hashes, never leaves the Calibre-Web host. Each refresh
+replaces the index's `shelves` and `book_shelves` tables from that export.
+If the export fails, the previous membership is kept.
 
 ## Citekeys
 

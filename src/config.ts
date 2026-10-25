@@ -11,6 +11,9 @@ export interface Config {
   /** Primary data (pinned citekeys, quotes): never rebuilt, backed up nightly. */
   dataDbPath: string;
   backupDir: string;
+  /** Calibre-Web's shelf export (see deploy/corpus-source.sh), and the library its book ids belong to. */
+  shelvesFile: string;
+  shelvesLibrary: string;
   host: string;
   port: number;
 }
@@ -30,6 +33,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath: path.resolve(env.CORPUS_DB ?? "/var/lib/corpus-mcp/corpus.db"),
     dataDbPath: path.resolve(env.CORPUS_DATA_DB ?? "/var/lib/corpus-mcp/data.db"),
     backupDir: path.resolve(env.CORPUS_BACKUP_DIR ?? "/var/lib/corpus-mcp/backups"),
+    shelvesFile: path.resolve(env.CORPUS_SHELVES_FILE ?? "/var/lib/corpus-mcp/shelves.json"),
+    shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
     host: env.CORPUS_HOST ?? "0.0.0.0",
     port: Number.parseInt(env.CORPUS_PORT ?? "8000", 10),
   };
