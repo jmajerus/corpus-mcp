@@ -152,7 +152,7 @@ export function createServer(c: Corpus): McpServer {
       text: z.string().min(1).max(2000).describe("The passage, as close to the book's wording as possible"),
       page: page.optional().describe("Page or location where the passage starts"),
       note: z.string().max(2000).optional().describe("Why the passage matters"),
-      categories: z.array(z.string()).max(5).optional().describe("Vocabulary categories (get_tag_vocabulary), slug or title"),
+      categories: z.array(z.string()).max(5).optional().describe("Only when the passage departs from its book's categories (e.g. a narrower subcategory): vocabulary categories, slug or title. Omit to inherit the book's."),
       labels: z.array(z.string()).max(20).optional().describe('Free-form labels, e.g. "cc:puzzle:<puzzle id>"'),
     },
     annotations: { title: "Save a quote", ...writes },
@@ -182,7 +182,7 @@ export function createServer(c: Corpus): McpServer {
     description: "Change a quote's note, categories, or labels. The quoted text cannot change; save a new quote instead.",
     inputSchema: {
       id: z.number().int(), note: z.string().max(2000).nullable().optional(),
-      categories: z.array(z.string()).max(5).optional().describe("Replaces the quote's categories"),
+      categories: z.array(z.string()).max(5).optional().describe("Replaces the quote's own categories; an empty list makes it inherit its book's again"),
       labels: z.array(z.string()).max(20).optional().describe("Replaces the quote's labels"),
     },
     annotations: { title: "Update a quote", ...writes, idempotentHint: true },
@@ -366,6 +366,8 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         .all(book.id, start - 1, end - 1) as { page_index: number; label: string | null; section_path: string | null; text: string }[];
       sendJson(res, 200, {
         book_id: book.id, title: book.title, authors: JSON.parse(book.authors), page_count: book.page_count, page_kind: book.reflowable ? "location" : "pdf_page",
+        // A new quote inherits these unless it is given its own.
+        categories: (JSON.parse(book.tags) as string[]).filter((t) => c.vocabulary.has(t)),
         outline: c.db.prepare("SELECT level, title, start_page FROM outline WHERE book_id = ? AND level <= 1 AND start_page IS NOT NULL ORDER BY ord").all(book.id)
           .map((o) => ({ ...(o as { level: number; title: string; start_page: number }), page: (o as { start_page: number }).start_page + 1 })),
         start, end,

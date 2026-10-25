@@ -312,8 +312,12 @@ books. `corpus_status` lists the books to fix.
 
 Implemented as designed below, with these decisions:
 
-- **Tags.** Quotes carry vocabulary categories (slugs, which can be more
-  specific than the book's) plus free-form labels (`cc:puzzle:<id>`).
+- **Tags.** By default a quote inherits its book's categories. Nothing is
+  stored, so re-categorizing a book carries its quotes along. A quote gets
+  its own categories only when it departs from its book (for example a
+  narrower subcategory); an empty list returns it to inheriting. Search
+  uses effective categories. Free-form labels (`cc:puzzle:<id>`) are
+  separate.
 - **Creating, for people.** A reader view (`/admin/books/<id>/read`) shows
   the text with saved quotes highlighted. Selecting a passage saves it
   through the same check `save_quote` uses.

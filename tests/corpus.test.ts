@@ -890,6 +890,22 @@ describe("quotes", () => {
     expect(queryChanges(data, { kinds: ["quote_saved", "quote_edited", "quote_deleted"] }).rows.map((r) => (r as Change).kind)).toEqual(["quote_deleted", "quote_edited", "quote_saved", "quote_saved"]);
   });
 
+  it("inherits its book's categories unless it is given its own", () => {
+    // main:5 is filed under social-sciences.psychology.social-psychology in Calibre.
+    const saved = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies" }, undefined, "agent") as { quote: { id: number } };
+    const id = saved.quote.id;
+    expect(searchQuotes(c, { book: "main:5" }).quotes[0]).toMatchObject({
+      categories_inherited: true, categories: [{ tag: "social-sciences.psychology.social-psychology" }],
+      book_categories: [{ tag: "social-sciences.psychology.social-psychology" }],
+    });
+    expect(searchQuotes(c, { category: "Psychology" }).quotes.map((q) => q.id)).toEqual([id]);
+    // A departure from the book: its own categories replace the inherited ones.
+    expect(updateQuote(c, { id, categories: ["Sociology"] }, "me", "admin")).toMatchObject({ categories_inherited: false, categories: [{ tag: "social-sciences.sociology" }] });
+    expect(searchQuotes(c, { category: "Psychology" }).total).toBe(0);
+    // An empty list goes back to inheriting.
+    expect(updateQuote(c, { id, categories: [] }, "me", "admin")).toMatchObject({ categories_inherited: true });
+  });
+
   it("re-anchors quotes when their book's file changes, and orphans those that are gone", () => {
     const echo = saveQuote(c, { book_id: "main:2", page: 1, text: "echo chamber amplifies" }, undefined, "agent") as { quote: { id: number } };
     const beta = saveQuote(c, { book_id: "main:2", page: 2, text: "Filter bubbles differ" }, undefined, "agent") as { quote: { id: number } };

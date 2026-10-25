@@ -170,14 +170,33 @@ function canonicalCategories(c: Corpus, categories: string[] | undefined): strin
   return out;
 }
 
+/** The vocabulary tags the quote's book carries in Calibre now. */
+function bookCategories(c: Corpus, uuid: string): string[] {
+  const tags = c.db.prepare("SELECT tags FROM books WHERE uuid = ? ORDER BY id").pluck().get(uuid) as string | undefined;
+  return tags ? (JSON.parse(tags) as string[]).filter((t) => c.vocabulary.has(t)) : [];
+}
+
+/**
+ * A quote's categories: its own when it was given some (a departure from its book), otherwise its
+ * book's, read at the time of asking, so re-categorizing a book carries its quotes along.
+ */
+export function effectiveCategories(c: Corpus, r: { categories: string; calibre_uuid: string }): { tags: string[]; inherited: boolean } {
+  const own = JSON.parse(r.categories) as string[];
+  return own.length ? { tags: own, inherited: false } : { tags: bookCategories(c, r.calibre_uuid), inherited: true };
+}
+
 function present(c: Corpus, r: QuoteRow) {
   const reflowable = c.db.prepare("SELECT reflowable FROM books WHERE uuid = ? ORDER BY id").pluck().get(r.calibre_uuid) as number | undefined;
+  const cats = effectiveCategories(c, r);
+  const withLabel = (t: string) => ({ tag: t, label: c.vocabulary.find(t)?.label ?? t });
   const locator = r.page_label
     ? `p. ${r.page_label}${r.end_page_label && r.end_page_label !== r.page_label ? `–${r.end_page_label}` : ""}`
     : r.section_path ?? (reflowable ? `location ${r.start_page + 1}` : `page ${r.start_page + 1}`);
   return {
     id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, note: r.note,
-    categories: (JSON.parse(r.categories) as string[]).map((t) => ({ tag: t, label: c.vocabulary.find(t)?.label ?? t })),
+    categories: cats.tags.map(withLabel),
+    categories_inherited: cats.inherited,
+    book_categories: bookCategories(c, r.calibre_uuid).map(withLabel),
     labels: JSON.parse(r.labels) as string[],
     page: r.start_page + 1, end_page: r.end_page + 1, page_label: r.page_label, end_page_label: r.end_page_label, section: r.section_path,
     locator, status: r.status, source: r.source, created_by: r.created_by, created_at: r.created_at, updated_by: r.updated_by, updated_at: r.updated_at,
@@ -261,14 +280,12 @@ export function searchQuotes(c: Corpus, query: QuoteQuery) {
   if (query.by) { where.push("lower(q.created_by) LIKE @by"); params.by = `%${query.by.toLowerCase()}%`; }
   if (query.since) { where.push("q.created_at >= @since"); params.since = query.since; }
   if (query.label) { where.push("EXISTS (SELECT 1 FROM json_each(q.labels) l WHERE lower(l.value) = lower(@label))"); params.label = query.label.trim(); }
-  if (query.category) {
-    // A category matches itself and everything below it, given as a slug or a title.
-    where.push("EXISTS (SELECT 1 FROM json_each(q.categories) t WHERE t.value = @cat OR t.value LIKE @catPrefix ESCAPE '!')");
-    const slug = c.vocabulary.find(query.category)?.tag ?? c.vocabulary.toSlugPath(query.category).toLowerCase();
-    params.cat = slug;
-    params.catPrefix = `${slug.replace(/[!%_]/g, "!$&")}.%`;
-  }
   let rows = c.data.prepare(`SELECT q.* FROM quotes q ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY q.created_at DESC, q.id DESC`).all(params) as QuoteRow[];
+  if (query.category) {
+    // Matches the quote's effective categories (its own, or its book's), and everything below the one asked for.
+    const slug = c.vocabulary.find(query.category)?.tag ?? c.vocabulary.toSlugPath(query.category).toLowerCase();
+    rows = rows.filter((r) => effectiveCategories(c, r).tags.some((t) => t === slug || t.startsWith(`${slug}.`)));
+  }
   if (query.author) {
     const author = query.author.toLowerCase();
     const byUuid = c.db.prepare<[string], { authors: string }>("SELECT authors FROM books WHERE uuid = ?");

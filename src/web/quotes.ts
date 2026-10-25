@@ -1,6 +1,7 @@
 import { page } from "./layout.js";
 
 const QUOTE_CSS = `
+.chip.inherited { background: var(--code); color: var(--muted); }
 blockquote { margin: 0; padding: 4px 0 4px 14px; border-left: 3px solid var(--bar); font-size: 0.98rem; white-space: pre-wrap; }
 .qmeta { font-size: 0.86rem; color: var(--muted); margin-top: 8px; }
 .qcard { margin-bottom: 12px; }
@@ -38,7 +39,8 @@ function card(q) {
   return '<article class="card qcard"><a class="open" href="/admin/quotes/' + q.id + '">#' + q.id + " →</a><blockquote>" + esc(q.text.length > 500 ? q.text.slice(0, 500) + "…" : q.text) + "</blockquote>" +
     '<div class="qmeta">' + bookLink(q.book_id, q.title) + " · " + esc(q.locator) + (q.status === "orphaned" ? ' · <span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</div>" +
     (q.note ? '<p class="note">' + esc(q.note) + "</p>" : "") +
-    "<div>" + q.categories.map((t) => tagChip(t.tag)).join("") + q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</div>" +
+    "<div>" + q.categories.map((t) => q.categories_inherited ? '<span class="chip inherited" title="From the book: ' + esc(t.tag) + '">' + esc(t.label) + "</span>" : tagChip(t.tag)).join("") +
+    q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</div>" +
     '<div class="qmeta">Saved ' + esc(ago(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " · " + esc(q.source) + "</div></article>";
 }
 async function load(reset) {
@@ -86,7 +88,7 @@ textarea { width: 100%; min-height: 90px; }
 <div id="quote"><p class="note">Loading…</p></div>`,
   script: `
 const id = Number(location.pathname.split("/").pop());
-let q, canWrite = false, cats = [];
+let q, canWrite = false, cats = [], inherit = true;
 function citationText(c) {
   if (!c) return "";
   return [c.author, c.title ? "<em>" + esc(c.title) + "</em>" : "", c.publisher, c.year, c.pages ? "pp. " + c.pages : ""].filter(Boolean).map((x, i) => (i === 1 ? x : esc(x))).join(", ") + ".";
@@ -101,7 +103,11 @@ function render() {
     '<div class="cols"><div class="card"><h2>Citation</h2><p>' + citationText(q.citation) + "</p>" + (q.citekey ? '<p class="note">Citekey ' + esc(q.citekey) + "</p>" : "") +
     '<p class="note">Saved ' + esc(when(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " (" + esc(q.source) + ")" + (q.updated_at ? " · edited " + esc(ago(q.updated_at)) + (q.updated_by ? " by " + esc(q.updated_by) : "") : "") + "</p></div>" +
     '<div class="card"><h2>Note, categories, labels</h2><textarea id="note" aria-label="Note"' + dis + ">" + esc(q.note || "") + "</textarea>" +
-    '<div id="cats" style="margin-top:8px"></div><div class="row"><input type="text" id="addcat" list="vocab" placeholder="Add a category" aria-label="Add a category"' + dis + '><button type="button" id="addbtn"' + dis + ">Add</button></div>" +
+    '<fieldset style="border:0;padding:0;margin:10px 0 0"><legend class="note">Categories</legend>' +
+    '<label><input type="radio" name="catmode" value="inherit"' + (inherit ? " checked" : "") + dis + "> Use the book's categories</label> " +
+      (q.book_categories.length ? q.book_categories.map((t) => '<span class="chip inherited" title="' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("") : '<span class="note">(the book has none)</span>') + "<br>" +
+    '<label><input type="radio" name="catmode" value="own"' + (inherit ? "" : " checked") + dis + "> Specific categories for this passage</label></fieldset>" +
+    '<div id="owncats"' + (inherit ? " hidden" : "") + '><div id="cats" style="margin-top:6px"></div><div class="row"><input type="text" id="addcat" list="vocab" placeholder="Add a category" aria-label="Add a category"' + dis + '><button type="button" id="addbtn"' + dis + ">Add</button></div></div>" +
     '<div class="row"><input type="text" id="labels" value="' + esc(q.labels.join(", ")) + '" placeholder="Labels, comma-separated (e.g. cc:puzzle:my-puzzle)" aria-label="Labels"' + dis + "></div>" +
     '<div class="row"><button type="button" class="primary" id="save"' + dis + '>Save</button><button type="button" class="danger" id="delete"' + dis + ">Delete quote</button></div>" +
     (canWrite ? "" : '<p class="note">Sign in through Cloudflare Access to edit.</p>') + "</div></div>";
@@ -112,9 +118,18 @@ function renderCats() {
 }
 async function load() {
   try { q = await api("/api/quotes/" + id); } catch (e) { document.getElementById("quote").innerHTML = '<p class="empty">' + esc(e.message) + "</p>"; return; }
-  cats = q.categories.map((t) => t.tag);
+  inherit = q.categories_inherited;
+  cats = inherit ? [] : q.categories.map((t) => t.tag);
   render();
 }
+document.getElementById("quote").addEventListener("change", (e) => {
+  if (e.target.name !== "catmode") return;
+  inherit = e.target.value === "inherit";
+  // Starting a specific set from the book's categories makes a narrower or wider choice one edit away.
+  if (!inherit && !cats.length) cats = q.book_categories.map((t) => t.tag);
+  document.getElementById("owncats").hidden = inherit;
+  renderCats();
+});
 document.getElementById("quote").addEventListener("click", async (e) => {
   const t = e.target;
   if (t.dataset.remove) { cats = cats.filter((x) => x !== t.dataset.remove); renderCats(); return; }
@@ -126,7 +141,8 @@ document.getElementById("quote").addEventListener("click", async (e) => {
       if (!cats.includes(match[0])) cats.push(match[0]);
       document.getElementById("addcat").value = ""; renderCats();
     } else if (t.id === "save") {
-      await post("/api/quotes/" + id, { note: document.getElementById("note").value, categories: cats,
+      if (!inherit && !cats.length) { toast("Add a category, or use the book's categories."); return; }
+      await post("/api/quotes/" + id, { note: document.getElementById("note").value, categories: inherit ? [] : cats,
         labels: document.getElementById("labels").value.split(",").map((l) => l.trim()).filter(Boolean) });
       toast("Saved."); load();
     } else if (t.id === "delete") {
@@ -177,8 +193,9 @@ mark { background: color-mix(in srgb, var(--bar) 22%, transparent); color: inher
 <div class="savebar" id="savebar" role="dialog" aria-label="Save quote"><div class="inner">
   <div class="sel" id="selected"></div>
   <div class="row"><input type="text" id="qnote" placeholder="Note (optional)" aria-label="Note">
-    <input type="text" id="qcats" list="vocab" placeholder="Categories, comma-separated (optional)" aria-label="Categories">
+    <input type="text" id="qcats" list="vocab" placeholder="Categories for this passage, comma-separated" aria-label="Categories for this passage" hidden>
     <input type="text" id="qlabels" placeholder="Labels, comma-separated (optional)" aria-label="Labels"></div>
+  <div class="row note" id="qcatline"><span id="bookcats"></span> <label><input type="checkbox" id="qown"> Different categories for this passage</label></div>
   <div class="row"><button type="button" class="primary" id="qsave">Save as quote</button><button type="button" id="qcancel">Cancel</button><span class="note" id="qmsg"></span></div>
 </div></div>`,
   script: `
@@ -211,6 +228,9 @@ async function load() {
   document.getElementById("goto").value = start;
   document.getElementById("prev").disabled = start <= 1;
   document.getElementById("next").disabled = data.end >= data.page_count;
+  document.getElementById("bookcats").innerHTML = data.categories.length
+    ? "Inherits the book's categories: " + data.categories.map((t) => '<span class="chip inherited" title="' + esc(t) + '">' + esc(LABELS.get(t) || t) + "</span>").join("")
+    : "The book has no categories yet.";
   const chapter = document.getElementById("chapter");
   if (chapter.options.length <= 1) chapter.insertAdjacentHTML("beforeend", data.outline.map((o) => '<option value="' + o.page + '">' + (o.level ? "  " : "") + esc(o.title) + "</option>").join(""));
   document.getElementById("pages").innerHTML = data.pages.map((p) => '<section class="pg" data-page="' + p.page + '"><h2>' + kind + " " + p.page + (p.label ? " · printed " + esc(p.label) : "") + (p.section ? " · " + esc(p.section) : "") +
@@ -240,11 +260,19 @@ document.addEventListener("selectionchange", () => {
   if (!canWrite) document.getElementById("qmsg").textContent = "Sign in through Cloudflare Access to save quotes.";
   document.getElementById("savebar").style.display = "block";
 });
+document.getElementById("qown").addEventListener("change", (e) => {
+  const input = document.getElementById("qcats");
+  input.hidden = !e.target.checked;
+  // Start from the book's categories, so narrowing to a subcategory is a small edit.
+  if (e.target.checked && !input.value) input.value = data.categories.map((t) => LABELS.get(t) || t).join(", ");
+  if (e.target.checked) input.focus();
+});
 document.getElementById("qcancel").addEventListener("click", () => { document.getElementById("savebar").style.display = "none"; window.getSelection().removeAllRanges(); });
 document.getElementById("qsave").addEventListener("click", async () => {
   if (!selection) return;
   const split = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
-  const cats = split(document.getElementById("qcats").value).map((v) => { const m = [...LABELS].find(([tag, label]) => tag === v.toLowerCase() || label.toLowerCase() === v.toLowerCase()); return m ? m[0] : v; });
+  const own = document.getElementById("qown").checked;
+  const cats = (own ? split(document.getElementById("qcats").value) : []).map((v) => { const m = [...LABELS].find(([tag, label]) => tag === v.toLowerCase() || label.toLowerCase() === v.toLowerCase()); return m ? m[0] : v; });
   try {
     const out = await post("/api/quotes", { book_id: data.book_id, text: selection.text, page: selection.page, note: document.getElementById("qnote").value,
       categories: cats, labels: split(document.getElementById("qlabels").value) });
@@ -255,6 +283,7 @@ document.getElementById("qsave").addEventListener("click", async () => {
     toast("Saved quote #" + out.quote.id + (out.exact ? "." : " (the book's exact wording was used)."));
     document.getElementById("savebar").style.display = "none";
     for (const f of ["qnote", "qcats", "qlabels"]) document.getElementById(f).value = "";
+    document.getElementById("qown").checked = false; document.getElementById("qcats").hidden = true;
     window.getSelection().removeAllRanges();
     load();
   } catch (e) { document.getElementById("qmsg").textContent = e.message; }
