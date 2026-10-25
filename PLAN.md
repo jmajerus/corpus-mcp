@@ -532,10 +532,12 @@ adapts. Agreed with CC's agent, in order:
 1. **Vocabulary** (done 2026-10-25). The `corpus-vocabulary/1` file, loaded
    from a configured path and reloaded on change; validation; retired terms
    (one replacement re-tags automatically, a split or drop goes to a
-   person); `vocabulary_report`. `data/cc-taxonomy.json` left the repo. Until
-   CC's export writes the new format, the live file is a one-time conversion
-   of that snapshot (now `cc-snapshot-2026-10-25.2`: 174 assignable terms
-   of 187). CC's export writes the format since concept-clusters c6817c2.
+   person); `vocabulary_report`. `data/cc-taxonomy.json` left the repo.
+   CC's export writes the format since concept-clusters c6817c2; the live
+   file is that export (174 assignable terms of 187), installed with
+   `npm run authoring:taxonomy:export -- --out
+   .concept-clusters/corpus-vocabulary.json` in CC, then
+   `npm run deploy -- --vocabulary=../concept-clusters/.concept-clusters/corpus-vocabulary.json`.
    The Interdisciplinary Studies category was an empty leftover and was
    withdrawn (4018daa), so every domain only groups; only `trivia` and
    `vocabulary` are assignable at the top level. No book was tagged with
