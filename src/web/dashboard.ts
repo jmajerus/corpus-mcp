@@ -56,6 +56,8 @@ async function loadMetrics() {
       [go("/admin/categories", "Suspect tags"), num(m.tags.suspect), m.tags.suspect ? "warn" : ""]]),
     card("Citekeys", go("/admin/citekeys", num(m.citekeys.pinned) + " pinned"), [[go("/admin/books?citekey=ready", "Ready to file"), num(m.citekeys.ready_to_file)],
       [go("/admin/books?citekey=blocked", "Blocked"), num(Object.values(m.citekeys.blocked).reduce((a, b) => a + b, 0)), "warn"], ["Proposed collisions", num(m.citekeys.proposed_collisions)]]),
+    card("Quotes", go("/admin/quotes", num(m.quotes.total)), [[go("/admin/quotes?category_mode=none", "Categories undecided"), num(m.quotes.undecided), m.quotes.undecided ? "warn" : ""],
+      [go("/admin/quotes?status=orphaned", "Orphaned"), num(m.quotes.orphaned), m.quotes.orphaned ? "bad" : ""]]),
     card("ISBNs", go("/admin/books?isbn=printed", num(m.printed_isbns.books_printing_isbn)) + ' <span class="note">printed only</span>', [[go("/admin/books?isbn=none", "No ISBN"), "→"], [go("/admin/books?isbn=valid", "Valid in Calibre"), "→"]]),
     card("Last refresh", ago(m.index.last_scan), run ? [["Took", run.seconds.toFixed(1) + " s"], ["Extracted", num(run.extracted)], ["Failed", num(run.failed), run.failed ? "warn" : ""],
       ["Unreadable libraries", num((run.unreadable_libraries || []).length), (run.unreadable_libraries || []).length ? "bad" : ""]] : [], staleScan ? "warn" : ""),

@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 5;
+export const DATA_SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS quotes (
   title TEXT NOT NULL,
   text TEXT NOT NULL,                -- the book's exact wording
   note TEXT,
-  categories TEXT NOT NULL DEFAULT '[]', -- JSON: vocabulary tags (slugs)
+  category_mode TEXT NOT NULL DEFAULT 'none', -- none (undecided, review later) | book (its book's, live) | own
+  categories TEXT NOT NULL DEFAULT '[]', -- JSON: vocabulary tags (slugs), for category_mode 'own'
   labels TEXT NOT NULL DEFAULT '[]', -- JSON: free-form labels, e.g. cc:puzzle:<id>
   start_page INTEGER NOT NULL,       -- 0-based page or location index
   start_offset INTEGER NOT NULL,     -- character offset in that page's stored text
@@ -133,6 +134,12 @@ export function openDataStore(dbPath: string): DataStore {
   // Columns added after a table first shipped.
   const jobColumns = new Set((db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
   if (!jobColumns.has("items")) db.exec("ALTER TABLE jobs ADD COLUMN items TEXT");
+  const quoteColumns = new Set((db.prepare("PRAGMA table_info(quotes)").all() as { name: string }[]).map((c) => c.name));
+  if (!quoteColumns.has("category_mode")) {
+    // Quotes saved before the explicit choice: stored categories were chosen; none means undecided.
+    db.exec("ALTER TABLE quotes ADD COLUMN category_mode TEXT NOT NULL DEFAULT 'none'");
+    db.exec("UPDATE quotes SET category_mode = 'own' WHERE categories != '[]'");
+  }
   db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(DATA_SCHEMA_VERSION));
   return db;
 }

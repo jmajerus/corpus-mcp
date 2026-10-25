@@ -312,12 +312,18 @@ books. `corpus_status` lists the books to fix.
 
 Implemented as designed below, with these decisions:
 
-- **Tags.** By default a quote inherits its book's categories. Nothing is
-  stored, so re-categorizing a book carries its quotes along. A quote gets
-  its own categories only when it departs from its book (for example a
-  narrower subcategory); an empty list returns it to inheriting. Search
-  uses effective categories. Free-form labels (`cc:puzzle:<id>`) are
-  separate.
+- **Categories are always an explicit choice** (`category_mode`). Free-form
+  labels (`cc:puzzle:<id>`) are separate.
+  - *Undecided* (`none`) is the default and means "review later". An
+    epigraph or a personal story can be quotable without matching its
+    book's subject, and these tools may serve authoring beyond Concept
+    Clusters. The quotes list filters on it, and the dashboard counts it.
+  - *The book's categories* (`book`) is chosen deliberately and followed
+    live, so re-categorizing the book carries the quote along.
+  - *Own categories* (`own`) are chosen for the passage.
+  - Search uses each quote's effective categories.
+  - An automatic default to the book's categories was tried and dropped on
+    2026-10-25.
 - **Creating, for people.** A reader view (`/admin/books/<id>/read`) shows
   the text with saved quotes highlighted. Selecting a passage saves it
   through the same check `save_quote` uses.

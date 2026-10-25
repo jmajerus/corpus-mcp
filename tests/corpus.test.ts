@@ -890,20 +890,29 @@ describe("quotes", () => {
     expect(queryChanges(data, { kinds: ["quote_saved", "quote_edited", "quote_deleted"] }).rows.map((r) => (r as Change).kind)).toEqual(["quote_deleted", "quote_edited", "quote_saved", "quote_saved"]);
   });
 
-  it("inherits its book's categories unless it is given its own", () => {
+  it("leaves categories undecided unless chosen: the book's (followed live) or the passage's own", () => {
     // main:5 is filed under social-sciences.psychology.social-psychology in Calibre.
     const saved = saveQuote(c, { book_id: "main:5", page: 1, text: "The echo chamber amplifies" }, undefined, "agent") as { quote: { id: number } };
     const id = saved.quote.id;
     expect(searchQuotes(c, { book: "main:5" }).quotes[0]).toMatchObject({
-      categories_inherited: true, categories: [{ tag: "social-sciences.psychology.social-psychology" }],
-      book_categories: [{ tag: "social-sciences.psychology.social-psychology" }],
+      category_mode: "none", categories: [], book_categories: [{ tag: "social-sciences.psychology.social-psychology" }],
+    });
+    expect(searchQuotes(c, { category_mode: "none" }).quotes.map((q) => q.id)).toEqual([id]);
+    expect(searchQuotes(c, { category: "Psychology" }).total).toBe(0);
+
+    expect(updateQuote(c, { id, use_book_categories: true }, "me", "admin")).toMatchObject({
+      category_mode: "book", categories: [{ tag: "social-sciences.psychology.social-psychology" }],
     });
     expect(searchQuotes(c, { category: "Psychology" }).quotes.map((q) => q.id)).toEqual([id]);
-    // A departure from the book: its own categories replace the inherited ones.
-    expect(updateQuote(c, { id, categories: ["Sociology"] }, "me", "admin")).toMatchObject({ categories_inherited: false, categories: [{ tag: "social-sciences.sociology" }] });
-    expect(searchQuotes(c, { category: "Psychology" }).total).toBe(0);
-    // An empty list goes back to inheriting.
-    expect(updateQuote(c, { id, categories: [] }, "me", "admin")).toMatchObject({ categories_inherited: true });
+    // Following the book: re-categorizing the book moves the quote with it.
+    db.prepare("UPDATE books SET tags = ? WHERE id = 'main:5'").run(JSON.stringify(["trivia"]));
+    expect(searchQuotes(c, { category: "Trivia" }).quotes.map((q) => q.id)).toEqual([id]);
+
+    expect(updateQuote(c, { id, categories: ["Sociology"] }, "me", "admin")).toMatchObject({ category_mode: "own", categories: [{ tag: "social-sciences.sociology" }] });
+    expect(updateQuote(c, { id, note: "only the note" }, "me", "admin")).toMatchObject({ category_mode: "own" });
+    expect(updateQuote(c, { id, categories: [] }, "me", "admin")).toMatchObject({ category_mode: "none", categories: [] });
+    expect(() => updateQuote(c, { id, categories: ["Trivia"], use_book_categories: true }, "me", "admin")).toThrow(/either categories or use_book_categories/);
+    expect(saveQuote(c, { book_id: "main:5", page: 1, text: "familiar claims", use_book_categories: true }, undefined, "agent")).toMatchObject({ quote: { category_mode: "book" } });
   });
 
   it("re-anchors quotes when their book's file changes, and orphans those that are gone", () => {

@@ -148,7 +148,7 @@ function suggestions(c: Corpus, book: BookRow, text: string) {
 }
 
 interface QuoteRow {
-  id: number; calibre_uuid: string; book_id: string; title: string; text: string; note: string | null; categories: string; labels: string;
+  id: number; calibre_uuid: string; book_id: string; title: string; text: string; note: string | null; category_mode: CategoryMode; categories: string; labels: string;
   start_page: number; start_offset: number; end_page: number; end_offset: number; page_label: string | null; end_page_label: string | null;
   section_path: string | null; prefix: string; suffix: string; sha256: string | null; status: "verified" | "orphaned"; source: string;
   created_by: string | null; created_at: string; updated_by: string | null; updated_at: string | null;
@@ -177,25 +177,37 @@ function bookCategories(c: Corpus, uuid: string): string[] {
 }
 
 /**
- * A quote's categories: its own when it was given some (a departure from its book), otherwise its
- * book's, read at the time of asking, so re-categorizing a book carries its quotes along.
+ * How a quote is categorized, always by an explicit choice: "none" is undecided (the default, a queue to
+ * review later; an epigraph or anecdote may not fit its book's subject at all), "book" follows its book's
+ * categories as they change, and "own" is categories chosen for this passage.
  */
-export function effectiveCategories(c: Corpus, r: { categories: string; calibre_uuid: string }): { tags: string[]; inherited: boolean } {
-  const own = JSON.parse(r.categories) as string[];
-  return own.length ? { tags: own, inherited: false } : { tags: bookCategories(c, r.calibre_uuid), inherited: true };
+export type CategoryMode = "none" | "book" | "own";
+export const CATEGORY_MODES = ["none", "book", "own"] as const;
+
+export function effectiveCategories(c: Corpus, r: { category_mode: CategoryMode; categories: string; calibre_uuid: string }): string[] {
+  if (r.category_mode === "own") return JSON.parse(r.categories) as string[];
+  if (r.category_mode === "book") return bookCategories(c, r.calibre_uuid);
+  return [];
+}
+
+/** The mode and stored categories for a requested choice: own categories, the book's, or none (undecided). */
+function categoryChoice(c: Corpus, categories: string[] | undefined, useBook: boolean | undefined): { mode: CategoryMode; tags: string[] } {
+  if (useBook && categories?.length) throw new ToolError("Give either categories or use_book_categories, not both.");
+  if (useBook) return { mode: "book", tags: [] };
+  const tags = canonicalCategories(c, categories);
+  return tags.length ? { mode: "own", tags } : { mode: "none", tags: [] };
 }
 
 function present(c: Corpus, r: QuoteRow) {
   const reflowable = c.db.prepare("SELECT reflowable FROM books WHERE uuid = ? ORDER BY id").pluck().get(r.calibre_uuid) as number | undefined;
-  const cats = effectiveCategories(c, r);
   const withLabel = (t: string) => ({ tag: t, label: c.vocabulary.find(t)?.label ?? t });
   const locator = r.page_label
     ? `p. ${r.page_label}${r.end_page_label && r.end_page_label !== r.page_label ? `–${r.end_page_label}` : ""}`
     : r.section_path ?? (reflowable ? `location ${r.start_page + 1}` : `page ${r.start_page + 1}`);
   return {
     id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, note: r.note,
-    categories: cats.tags.map(withLabel),
-    categories_inherited: cats.inherited,
+    category_mode: r.category_mode,
+    categories: effectiveCategories(c, r).map(withLabel),
     book_categories: bookCategories(c, r.calibre_uuid).map(withLabel),
     labels: JSON.parse(r.labels) as string[],
     page: r.start_page + 1, end_page: r.end_page + 1, page_label: r.page_label, end_page_label: r.end_page_label, section: r.section_path,
@@ -203,7 +215,9 @@ function present(c: Corpus, r: QuoteRow) {
   };
 }
 
-export interface SaveQuoteArgs { book_id: string; text: string; page?: number; note?: string; categories?: string[]; labels?: string[] }
+export interface SaveQuoteArgs {
+  book_id: string; text: string; page?: number; note?: string; categories?: string[]; use_book_categories?: boolean; labels?: string[];
+}
 
 /** Verifies and saves a quote. `page` (1-based) is where to look first; the whole book is searched if needed. */
 export function saveQuote(c: Corpus, args: SaveQuoteArgs, by: string | undefined, source: "agent" | "admin") {
@@ -213,7 +227,7 @@ export function saveQuote(c: Corpus, args: SaveQuoteArgs, by: string | undefined
   const wanted = args.text.trim();
   if (!wanted) throw new ToolError("The quote is empty.");
   if (wanted.length > MAX_QUOTE) throw new ToolError(`Quotes are limited to ${MAX_QUOTE} characters; this one has ${wanted.length}.`);
-  const categories = canonicalCategories(c, args.categories);
+  const choice = categoryChoice(c, args.categories, args.use_book_categories);
   const anchor = find(c.db, book, args.page !== undefined ? args.page - 1 : undefined, wanted);
   if (!anchor) {
     return { saved: false, reason: "The text was not found in this book as written.", closest: suggestions(c, book, wanted) };
@@ -226,10 +240,10 @@ export function saveQuote(c: Corpus, args: SaveQuoteArgs, by: string | undefined
   if (duplicate) return { saved: false, reason: `This passage is already saved as quote ${duplicate}.`, id: duplicate };
   const now = new Date().toISOString();
   const id = Number(c.data.prepare(`
-    INSERT INTO quotes (calibre_uuid, book_id, title, text, note, categories, labels, start_page, start_offset, end_page, end_offset,
+    INSERT INTO quotes (calibre_uuid, book_id, title, text, note, category_mode, categories, labels, start_page, start_offset, end_page, end_offset,
       page_label, end_page_label, section_path, prefix, suffix, sha256, status, source, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, ?)`)
-    .run(book.uuid, book.id, book.title, anchor.text, args.note?.trim() || null, JSON.stringify(categories), JSON.stringify(cleanLabels(args.labels)),
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, ?)`)
+    .run(book.uuid, book.id, book.title, anchor.text, args.note?.trim() || null, choice.mode, JSON.stringify(choice.tags), JSON.stringify(cleanLabels(args.labels)),
       anchor.start_page, anchor.start_offset, anchor.end_page, anchor.end_offset, startPage?.label ?? null, endPage?.label ?? null,
       startPage?.section_path ?? null, anchor.prefix, anchor.suffix, book.sha256, source, by ?? null, now).lastInsertRowid);
   recordChanges(c.data, [{ kind: "quote_saved", source, book_id: book.id, calibre_uuid: book.uuid, title: book.title, detail: `#${id} ${anchor.text.slice(0, 80)}`, actor: by ?? null }]);
@@ -263,6 +277,8 @@ export function getQuote(c: Corpus, id: number) {
 
 export interface QuoteQuery {
   q?: string; book?: string; author?: string; category?: string; label?: string; status?: string; by?: string; since?: string;
+  /** "none" lists the undecided quotes, the review queue. */
+  category_mode?: CategoryMode;
   limit?: number; offset?: number;
 }
 
@@ -277,6 +293,7 @@ export function searchQuotes(c: Corpus, query: QuoteQuery) {
     params.book = book.id;
   }
   if (query.status) { where.push("q.status = @status"); params.status = query.status; }
+  if (query.category_mode) { where.push("q.category_mode = @mode"); params.mode = query.category_mode; }
   if (query.by) { where.push("lower(q.created_by) LIKE @by"); params.by = `%${query.by.toLowerCase()}%`; }
   if (query.since) { where.push("q.created_at >= @since"); params.since = query.since; }
   if (query.label) { where.push("EXISTS (SELECT 1 FROM json_each(q.labels) l WHERE lower(l.value) = lower(@label))"); params.label = query.label.trim(); }
@@ -284,7 +301,7 @@ export function searchQuotes(c: Corpus, query: QuoteQuery) {
   if (query.category) {
     // Matches the quote's effective categories (its own, or its book's), and everything below the one asked for.
     const slug = c.vocabulary.find(query.category)?.tag ?? c.vocabulary.toSlugPath(query.category).toLowerCase();
-    rows = rows.filter((r) => effectiveCategories(c, r).tags.some((t) => t === slug || t.startsWith(`${slug}.`)));
+    rows = rows.filter((r) => effectiveCategories(c, r).some((t) => t === slug || t.startsWith(`${slug}.`)));
   }
   if (query.author) {
     const author = query.author.toLowerCase();
@@ -295,19 +312,23 @@ export function searchQuotes(c: Corpus, query: QuoteQuery) {
   const offset = Math.max(query.offset ?? 0, 0);
   const labels = c.data.prepare("SELECT DISTINCT l.value FROM quotes, json_each(quotes.labels) l ORDER BY 1").pluck().all();
   const counts = Object.fromEntries((c.data.prepare("SELECT status, COUNT(*) AS n FROM quotes GROUP BY status").all() as { status: string; n: number }[]).map((r) => [r.status, r.n]));
-  return { total: rows.length, counts, labels, quotes: rows.slice(offset, offset + limit).map((r) => present(c, r)) };
+  const modes = Object.fromEntries((c.data.prepare("SELECT category_mode, COUNT(*) AS n FROM quotes GROUP BY category_mode").all() as { category_mode: string; n: number }[]).map((r) => [r.category_mode, r.n]));
+  return { total: rows.length, counts, category_modes: modes, labels, quotes: rows.slice(offset, offset + limit).map((r) => present(c, r)) };
 }
 
-export interface UpdateQuoteArgs { id: number; note?: string | null; categories?: string[]; labels?: string[] }
+export interface UpdateQuoteArgs { id: number; note?: string | null; categories?: string[]; use_book_categories?: boolean; labels?: string[] }
 
 /** Changes a quote's note, categories, or labels. The quoted text is fixed; save a new quote instead. */
 export function updateQuote(c: Corpus, args: UpdateQuoteArgs, by: string | undefined, source: "agent" | "admin") {
   const r = row(c, args.id);
   const note = args.note === undefined ? r.note : args.note?.trim() || null;
-  const categories = args.categories === undefined ? (JSON.parse(r.categories) as string[]) : canonicalCategories(c, args.categories);
+  // Categories change only when asked: own categories, the book's, or an empty list for undecided.
+  const choice = args.categories === undefined && args.use_book_categories === undefined
+    ? { mode: r.category_mode, tags: JSON.parse(r.categories) as string[] }
+    : categoryChoice(c, args.categories, args.use_book_categories);
   const labels = args.labels === undefined ? (JSON.parse(r.labels) as string[]) : cleanLabels(args.labels);
-  c.data.prepare("UPDATE quotes SET note = ?, categories = ?, labels = ?, updated_by = ?, updated_at = ? WHERE id = ?")
-    .run(note, JSON.stringify(categories), JSON.stringify(labels), by ?? null, new Date().toISOString(), r.id);
+  c.data.prepare("UPDATE quotes SET note = ?, category_mode = ?, categories = ?, labels = ?, updated_by = ?, updated_at = ? WHERE id = ?")
+    .run(note, choice.mode, JSON.stringify(choice.tags), JSON.stringify(labels), by ?? null, new Date().toISOString(), r.id);
   recordChanges(c.data, [{ kind: "quote_edited", source, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, detail: `#${r.id}`, actor: by ?? null }]);
   return getQuote(c, r.id);
 }
