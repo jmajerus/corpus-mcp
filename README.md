@@ -23,10 +23,30 @@ books that live in Calibre.
 | `get_book_outline` | Returns metadata and the table of contents with the page where each section starts. |
 | `read_book` | Returns contiguous text for a page range or a named section, within a character budget, and says where to continue. |
 | `render_page` | Returns a PNG of a PDF page, for figures, tables, and equations. |
-| `cite_passage` | Builds a citation object (`title`, `author`, `publisher`, `year`, `pages`) for a book and page range, and warns about missing metadata. |
-| `corpus_status` | Reports index freshness, counts, and books that failed, have no text layer, or have no outline. |
+| `cite_passage` | Builds a citation object (`title`, `author`, `publisher`, `year`, `pages`) for a book and page range, warns about missing metadata, and for a book not yet in Zotero offers ways to file it (see *Citekeys*). |
+| `pin_citekey` | Records the citekey a book was given when it was filed in Zotero. |
+| `corpus_status` | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
 
-All tools are read-only. corpus-mcp never writes to Calibre.
+All tools except `pin_citekey` are read-only, and corpus-mcp never writes to Calibre.
+
+## Citekeys
+
+Every book gets a proposed citekey (author + year + first significant title
+word, as in `nye2011future`), built from its Calibre metadata by
+[Concept Clusters](https://github.com/jmajerus/concept-clusters)' Better
+BibTeX–style rule. The two implementations share the cases in
+[`tests/citekey-cases.json`](tests/citekey-cases.json).
+
+To file a cited book in Zotero, `cite_passage` offers a BibTeX `@book` entry
+built from Calibre's own metadata, followed by an ISBN lookup when the book
+has a valid ISBN. Concept Clusters files the book, assigns the final key, and
+returns it. `pin_citekey` then stores that key against the book's Calibre
+UUID. A pinned key never changes on its own and is accepted anywhere a book id
+is. A `citekey` identifier set in Calibre takes precedence over a pinned key.
+
+Pinned keys live in `data.db`, which unlike the index is never rebuilt and is
+backed up nightly. `corpus_status` lists books whose metadata blocks a key:
+an unknown author, no year, or one author record naming several people.
 
 ## Locators
 
@@ -99,7 +119,9 @@ an outline, an EPUB, and a Calibre `metadata.db`) are generated in code.
 | `CORPUS_BOOKS_ROOT` | `/srv/corpus/books` | Directory containing one folder per Calibre library |
 | `CORPUS_LIBRARIES` | `main` | Comma-separated library folders to index |
 | `CORPUS_EXCLUDE_TAGS` | `private` | Calibre tags that keep a book out of the index |
-| `CORPUS_DB` | `/var/lib/corpus-mcp/corpus.db` | Index file |
+| `CORPUS_DB` | `/var/lib/corpus-mcp/corpus.db` | Index file (derived; can be rebuilt) |
+| `CORPUS_DATA_DB` | `/var/lib/corpus-mcp/data.db` | Primary data such as pinned citekeys (never rebuilt) |
+| `CORPUS_BACKUP_DIR` | `/var/lib/corpus-mcp/backups` | Where `corpus-mcp backup` writes daily copies of `data.db` (14 kept) |
 | `CORPUS_HOST` / `CORPUS_PORT` | `0.0.0.0` / `8000` | HTTP listen address |
 
 The server also answers `GET /health`.

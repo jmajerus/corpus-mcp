@@ -1,6 +1,6 @@
 {
   "name": "corpus-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for searching, reading, and citing Calibre book libraries",
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -192,29 +192,39 @@ the Calibre metadata itself. The stronger filing route is a BibTeX entry
 built from Calibre's metadata, carrying the proposed citekey, with no
 outside lookup.
 
-**Readiness (2026-10-24).** Concept Clusters' rule, applied to the 507
-indexed books with Calibre's sort-form author names:
+**Status.** Implemented and deployed on 2026-10-25 (version 0.2.0). Of the
+510 catalogued books with a readable file or a failed extraction:
 
 | Result | Count |
 |---|---|
-| Well-formed key | 245 |
+| Ready to file from Calibre metadata | 215 (ISBN filing reaches 73) |
 | Author "Unknown" | 152 |
 | No publication year | 130 |
-| Author sort form has no comma, so it's read as an institution | 54 |
-| Colliding keys | 11 keys, 23 books (mostly duplicate copies) |
+| On a merged author record | 37 (21 records) |
+| Colliding proposed keys | 3, all duplicate copies in `main` |
+
+A blocked book can still have more than one blocker.
 
 Calibre's year is the edition date (Sapir's *Language* becomes
 `sapir2011language`), which is right for citing that edition.
 
-**Rule.** A TypeScript port of Concept Clusters' `modules/citationKeys.js`:
-Better BibTeX's `auth.lower + year + title.skipwords.select(1,1).lower`,
-with its institution, publisher, and author-repeat fallbacks. Persons come
-from Calibre's author sort form ("Gough, James"). A two-word or longer name
-whose sort form lacks a comma, with no institution words, is treated as a
-person whose last word is the surname; the same fix goes to Concept
-Clusters. Drift is caught by a shared list of example keys
-(`tests/citekey-cases.json`), copied from Concept Clusters' tests and kept
-identical in both repos.
+**Rule.** `src/citekey.ts` is a TypeScript port of Concept Clusters'
+`modules/citationKeys.js`: Better BibTeX's
+`auth.lower + year + title.skipwords.select(1,1).lower`, with its
+institution, publisher, and author-repeat fallbacks. A Calibre author whose
+sort form has a comma ("Gough, James") is a person (Zotero's two-field
+creator). One without a comma is an organization or a single name
+(single-field), which is how Calibre's own sort works. Drift is caught by
+`tests/citekey-cases.json`, built from Concept Clusters' test cases. Both
+repos run it, and both copies must stay identical.
+
+**Merged author records.** The first readiness count blamed 54 books on
+missing commas. They were really 21 author records each holding several
+people, such as `James Gough| Daniel Bryant` (Calibre shows a comma inside a
+name as `|`). Some are one person in the same shape
+(`Rousseau| Jean-Jacques| 1712-1778`), so they are not guessed at. They are
+reported as `merged_authors` for splitting in Calibre. No sort-name change
+is needed in Concept Clusters.
 
 **Assignment and pinning.**
 
@@ -246,7 +256,7 @@ malformed sort name.
   from the entry's own metadata with no lookup, deduplicates against the
   collection by ISBN, then title, author, and year, and assigns and returns
   a unique citekey.
-- The sort-name fix in `authorPart`, plus the shared example list.
+- A copy of `tests/citekey-cases.json`, run against `proposedCitationKey`.
 
 **Prerequisite.** Calibre metadata hygiene, the same as for ISBN filing:
 fill unknown authors and years, fix author sort names, and merge duplicate

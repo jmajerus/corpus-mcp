@@ -1,0 +1,13 @@
+[Unit]
+Description=corpus-mcp: back up data.db (pinned citekeys)
+
+[Service]
+Type=oneshot
+User=corpus
+Group=corpus
+EnvironmentFile=/etc/corpus-mcp/env
+WorkingDirectory=/opt/corpus-mcp/current
+ExecStart=/usr/bin/node /opt/corpus-mcp/current/dist/cli.js backup
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/corpus-mcp

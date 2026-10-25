@@ -8,6 +8,9 @@ export interface Config {
   /** Books carrying any of these Calibre tags (case-insensitive) are never indexed. */
   excludeTags: string[];
   dbPath: string;
+  /** Primary data (pinned citekeys, quotes): never rebuilt, backed up nightly. */
+  dataDbPath: string;
+  backupDir: string;
   host: string;
   port: number;
 }
@@ -25,6 +28,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     libraries,
     excludeTags,
     dbPath: path.resolve(env.CORPUS_DB ?? "/var/lib/corpus-mcp/corpus.db"),
+    dataDbPath: path.resolve(env.CORPUS_DATA_DB ?? "/var/lib/corpus-mcp/data.db"),
+    backupDir: path.resolve(env.CORPUS_BACKUP_DIR ?? "/var/lib/corpus-mcp/backups"),
     host: env.CORPUS_HOST ?? "0.0.0.0",
     port: Number.parseInt(env.CORPUS_PORT ?? "8000", 10),
   };

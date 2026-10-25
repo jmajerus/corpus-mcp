@@ -8,11 +8,15 @@ export interface BookMetadata {
   uuid: string | null;
   title: string;
   authors: string[];
+  /** Calibre's sort form per author: "Gough, James" for a person, unchanged for an organization. */
+  authorSorts: string[];
   publisher: string | null;
   /** null when Calibre has no date (it stores year 0101 for "undefined"). */
   year: number | null;
   language: string | null;
   isbn: string | null;
+  /** A citekey set by hand as Calibre identifier "citekey:<key>"; it overrides a pinned key. */
+  citekey: string | null;
   tags: string[];
   description: string | null;
 }
@@ -44,10 +48,12 @@ export function readCatalogue(libraryRoot: string): CatalogueEntry[] {
       return map;
     };
     const authors = listOf("SELECT l.book, a.name AS value FROM books_authors_link l JOIN authors a ON a.id = l.author ORDER BY l.id");
+    const authorSorts = listOf("SELECT l.book, COALESCE(a.sort, a.name) AS value FROM books_authors_link l JOIN authors a ON a.id = l.author ORDER BY l.id");
     const publishers = listOf("SELECT l.book, p.name AS value FROM books_publishers_link l JOIN publishers p ON p.id = l.publisher");
     const tags = listOf("SELECT l.book, t.name AS value FROM books_tags_link l JOIN tags t ON t.id = l.tag ORDER BY t.name");
     const languages = listOf("SELECT l.book, g.lang_code AS value FROM books_languages_link l JOIN languages g ON g.id = l.lang_code ORDER BY l.item_order");
     const isbns = listOf("SELECT book, val AS value FROM identifiers WHERE type = 'isbn'");
+    const citekeys = listOf("SELECT book, val AS value FROM identifiers WHERE type = 'citekey'");
     const comments = listOf("SELECT book, text AS value FROM comments");
     const formats = new Map<number, { format: string; name: string }[]>();
     for (const row of db.prepare("SELECT book, format, name FROM data").all() as { book: number; format: string; name: string }[]) {
@@ -69,10 +75,12 @@ export function readCatalogue(libraryRoot: string): CatalogueEntry[] {
           uuid: b.uuid,
           title: b.title,
           authors: authors.get(b.id) ?? [],
+          authorSorts: authorSorts.get(b.id) ?? [],
           publisher: publishers.get(b.id)?.[0] ?? null,
           year: year > 1000 ? year : null,
           language: languages.get(b.id)?.[0] ?? null,
           isbn: isbns.get(b.id)?.[0] ?? null,
+          citekey: citekeys.get(b.id)?.[0]?.trim().toLowerCase() || null,
           tags: tags.get(b.id) ?? [],
           description: comments.get(b.id)?.[0] ?? null,
         },

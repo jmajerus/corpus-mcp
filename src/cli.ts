@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { loadConfig } from "./config.js";
+import { backupDataStore, openDataStore } from "./data.js";
 import { openDatabase } from "./db.js";
 import { scanLibraries } from "./indexer.js";
 
 const USAGE = `Usage:
   corpus-mcp index [--force]   Scan the libraries and update the index
   corpus-mcp serve [--stdio]   Serve MCP over Streamable HTTP (default) or stdio
+  corpus-mcp backup            Copy data.db (pinned citekeys) to the backup directory
 
-Environment: CORPUS_BOOKS_ROOT, CORPUS_LIBRARIES, CORPUS_DB, CORPUS_HOST, CORPUS_PORT`;
+Environment: CORPUS_BOOKS_ROOT, CORPUS_LIBRARIES, CORPUS_EXCLUDE_TAGS, CORPUS_DB, CORPUS_DATA_DB,
+CORPUS_BACKUP_DIR, CORPUS_HOST, CORPUS_PORT`;
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...flags] = argv;
@@ -23,6 +26,12 @@ async function main(argv: string[]): Promise<void> {
       // A book that fails extraction is recorded and reported by corpus_status; only an
       // unreadable library catalogue fails the run.
       if (summary.unreadableLibraries.length > 0) process.exitCode = 2;
+      break;
+    }
+    case "backup": {
+      const data = openDataStore(config.dataDbPath);
+      console.error(`backed up to ${await backupDataStore(data, config.backupDir)}`);
+      data.close();
       break;
     }
     case "serve": {

@@ -17,7 +17,8 @@ let base: string;
 beforeAll(async () => {
   root = tempDir();
   makeLibrary(root, "main", [{ id: 1, title: "Networks", authors: ["Ann Author"], files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } }]);
-  const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"), host: "127.0.0.1", port: 0 };
+  const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
+    dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"), host: "127.0.0.1", port: 0 };
   const db = openDatabase(config.dbPath);
   scanLibraries(config, db);
   db.close();
@@ -48,7 +49,7 @@ it("serves the tools over Streamable HTTP", async () => {
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "cite_passage", "corpus_status", "get_book_outline", "list_books", "read_book", "render_page", "search_corpus",
+    "cite_passage", "corpus_status", "get_book_outline", "list_books", "pin_citekey", "read_book", "render_page", "search_corpus",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });

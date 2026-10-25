@@ -1,0 +1,150 @@
+{
+  "description": "Citekey rule cases shared by concept-clusters (modules/citationKeys.js) and corpus-mcp (src/citekey.ts). Keep both copies identical. Input is Zotero item data; key is proposedCitationKey(input).",
+  "cases": [
+    {
+      "input": {
+        "title": "The Future of Power",
+        "date": "2011",
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Nye",
+            "firstName": "Joseph S., Jr."
+          }
+        ]
+      },
+      "key": "nye2011future"
+    },
+    {
+      "input": {
+        "title": "Inquiry into the Treatment of Detainees",
+        "date": "2008",
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "U.S. Senate Committee on Armed Services"
+          }
+        ]
+      },
+      "key": "ussenate2008inquiry"
+    },
+    {
+      "input": {
+        "title": "Advanced Encryption Standard",
+        "date": "2001",
+        "publisher": "NIST",
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "National Institute of Standards and Technology"
+          }
+        ]
+      },
+      "key": "nist2001advanced"
+    },
+    {
+      "input": {
+        "title": "The Feynman Lectures on Physics",
+        "date": "1963",
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Feynman"
+          }
+        ]
+      },
+      "key": "feynman1963lectures"
+    },
+    {
+      "input": {
+        "title": "Macbeth",
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Shakespeare"
+          }
+        ]
+      },
+      "key": "shakespearemacbeth"
+    },
+    {
+      "input": {
+        "title": "Test-Enhanced Learning",
+        "date": "2006",
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Roediger"
+          }
+        ]
+      },
+      "key": "roediger2006testenhanced"
+    },
+    {
+      "input": {
+        "title": "Philosophiæ Naturalis Principia Mathematica",
+        "date": "1687",
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Newton"
+          }
+        ]
+      },
+      "key": "newton1687philosophiae"
+    },
+    {
+      "input": {
+        "title": "The Severity of an Earthquake",
+        "date": "2000",
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "U.S. Geological Survey"
+          }
+        ]
+      },
+      "key": "usgs2000severity"
+    },
+    {
+      "input": {
+        "title": "Biology 2e",
+        "date": "2018",
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "OpenStax"
+          }
+        ]
+      },
+      "key": "openstax2018biology"
+    },
+    {
+      "input": {
+        "title": "The Rites of Passage",
+        "date": "1960",
+        "creators": [
+          {
+            "creatorType": "author",
+            "lastName": "Gennep",
+            "firstName": "Arnold van"
+          }
+        ]
+      },
+      "key": "gennep1960rites"
+    },
+    {
+      "input": {
+        "title": "iPhone User Guide",
+        "date": "2020",
+        "creators": [
+          {
+            "creatorType": "author",
+            "name": "Apple Inc."
+          }
+        ]
+      },
+      "key": "appleinc2020iphone"
+    }
+  ]
+}

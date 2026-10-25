@@ -4,11 +4,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readCatalogue } from "../src/calibre.js";
 import { chunkPage } from "../src/chunk.js";
 import type { Config } from "../src/config.js";
-import { type DB, openDatabase } from "../src/db.js";
+import { bookBibtex } from "../src/bibtex.js";
+import { calibreCitationData, proposeCitekey, proposedCitationKey } from "../src/citekey.js";
+import { type DataStore, backupDataStore, openDataStore } from "../src/data.js";
+import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  ToolError, citePassage, corpusStatus, getBookOutline, listBooks, readBook, renderPage, searchCorpus, toFtsQuery, validIsbn,
+  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, pinCitekey, readBook, renderPage, searchCorpus,
+  toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
@@ -38,6 +42,8 @@ const epub = makeEpub("Echoes", [
 let root: string;
 let config: Config;
 let db: DB;
+let data: DataStore;
+let c: Corpus;
 
 function build(): void {
   makeLibrary(root, "main", [
@@ -45,6 +51,8 @@ function build(): void {
     { id: 2, title: "Echoes", authors: ["Cy Writer"], files: { epub } },
     { id: 3, title: "Cover Only", authors: ["Nobody"] },
     { id: 4, title: "Diary", authors: ["Me"], tags: ["Private"], files: { epub } },
+    { id: 5, title: "Weak Ties Revisited", authors: ["Dee One| Eve Two"], sorts: ["Dee One, Eve Two"], pubdate: "2001-01-01 00:00:00+00:00", files: { epub } },
+    { id: 6, title: "Strength in Numbers", authors: ["Fay Fixed"], pubdate: "2000-01-01 00:00:00+00:00", citekey: "Fixed2000Strength", files: { epub } },
   ]);
   makeLibrary(root, "library", [{ id: 7, title: "Networks", authors: ["Ann Author", "Bo Second"], files: { pdf } }]);
   makeLibrary(root, "private", [{ id: 1, title: "Secret", authors: ["Me"], files: { epub } }]);
@@ -53,12 +61,18 @@ function build(): void {
 beforeEach(() => {
   root = tempDir();
   build();
-  config = { booksRoot: root, libraries: ["main", "library"], excludeTags: ["private"], dbPath: path.join(root, "corpus.db"), host: "127.0.0.1", port: 0 };
+  config = {
+    booksRoot: root, libraries: ["main", "library"], excludeTags: ["private"], dbPath: path.join(root, "corpus.db"),
+    dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"), host: "127.0.0.1", port: 0,
+  };
   db = openDatabase(config.dbPath);
+  data = openDataStore(config.dataDbPath);
+  c = { db, data, booksRoot: root };
 });
 
 afterEach(() => {
   db.close();
+  data.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -107,11 +121,11 @@ describe("chunking", () => {
 describe("indexer", () => {
   it("indexes allowlisted libraries, prefers PDF, and skips unchanged files", () => {
     const first = scanLibraries(config, db);
-    expect(first).toMatchObject({ scanned: 4, extracted: 3, noFile: 1, failed: 0, excluded: 1 });
+    expect(first).toMatchObject({ scanned: 6, extracted: 5, noFile: 1, failed: 0, excluded: 1 });
     expect(db.prepare("SELECT COUNT(*) FROM books WHERE id = 'main:4'").pluck().get()).toBe(0);
     expect(db.prepare("SELECT format FROM books WHERE id = 'main:1'").pluck().get()).toBe("pdf");
     expect(db.prepare("SELECT COUNT(*) FROM books WHERE library = 'private'").pluck().get()).toBe(0);
-    expect(scanLibraries(config, db)).toMatchObject({ extracted: 0, unchanged: 3 });
+    expect(scanLibraries(config, db)).toMatchObject({ extracted: 0, unchanged: 5 });
   });
 
   it("re-extracts a changed file and removes deleted books", () => {
@@ -122,8 +136,8 @@ describe("indexer", () => {
     makeLibrary(root, "library", []);
     const second = scanLibraries(config, db);
     expect(second).toMatchObject({ extracted: 1, removed: 1 });
-    expect(searchCorpus(db, { query: "polarization" }).results[0].book_id).toBe("main:2");
-    expect(searchCorpus(db, { query: "amplifies" }).count).toBe(0);
+    expect(searchCorpus(c, { query: "polarization" }).results[0].book_id).toBe("main:2");
+    expect(searchCorpus(c, { query: "amplifies", book_id: "main:2" }).count).toBe(0);
   });
 
   it("keeps a library's rows when its metadata.db cannot be read", () => {
@@ -155,60 +169,175 @@ describe("tools", () => {
   });
 
   it("searches with locators and collapses identical files across libraries", () => {
-    const { results } = searchCorpus(db, { query: "weak ties" });
+    const { results } = searchCorpus(c, { query: "weak ties" });
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ page: 3, page_label: "1", section: "Part One › Chapter 1" });
     expect(results[0].snippet).toContain("«Weak»");
-    expect(searchCorpus(db, { query: '"echo chamber"' }).results[0]).toMatchObject({ book_id: "main:2", section: "Alpha", page_label: null });
-    expect(searchCorpus(db, { query: "clusters", library: "library" }).results.every((r) => r.book_id === "library:7")).toBe(true);
+    expect(searchCorpus(c, { query: '"echo chamber"' }).results[0]).toMatchObject({ book_id: "main:2", section: "Alpha", page_label: null });
+    expect(searchCorpus(c, { query: "clusters", library: "library" }).results.every((r) => r.book_id === "library:7")).toBe(true);
   });
 
   it("lists books with their duplicate copies", () => {
-    const { books } = listBooks(db, { query: "Networks" });
+    const { books } = listBooks(c, { query: "Networks" });
     expect(books.map((b) => b.book_id)).toEqual(["library:7", "main:1"]);
     expect(books[1].same_file_as).toEqual(["library:7"]);
-    expect(listBooks(db, { include_unindexed: true, query: "Cover" }).books[0].status).toBe("no_file");
+    expect(listBooks(c, { include_unindexed: true, query: "Cover" }).books[0].status).toBe("no_file");
   });
 
   it("returns an outline with 1-based pages and printed labels", () => {
-    const outline = getBookOutline(db, "main:1");
+    const outline = getBookOutline(c, "main:1");
     expect(outline.outline[2]).toEqual({ level: 1, title: "Chapter 1", page: 3, page_label: "1" });
-    expect(getBookOutline(db, "main:2").page_kind).toBe("location");
+    expect(getBookOutline(c, "main:2").page_kind).toBe("location");
   });
 
   it("reads a section or a page range and reports where to continue", () => {
-    const section = readBook(db, { book_id: "main:1", section: "Chapter 1" });
+    const section = readBook(c, { book_id: "main:1", section: "Chapter 1" });
     expect(section).toContain("--- page 3 (printed 1) · Part One › Chapter 1 ---");
     expect(section).toContain("--- page 4 (printed 2)");
     expect(section).not.toContain("page 5");
-    const partial = readBook(db, { book_id: "main:1", start_page: 1, end_page: 5, max_chars: 500 });
+    const partial = readBook(c, { book_id: "main:1", start_page: 1, end_page: 5, max_chars: 500 });
     expect(partial).toMatch(/Continue with start_page \d/);
-    expect(() => readBook(db, { book_id: "main:1", start_page: 9 })).toThrow(/pages 1–5/);
+    expect(() => readBook(c, { book_id: "main:1", start_page: 9 })).toThrow(/pages 1–5/);
   });
 
   it("cites PDFs with printed page ranges and EPUBs without pages", () => {
-    const pdfCite = citePassage(db, { book_id: "main:1", page: 3, end_page: 4 });
+    const pdfCite = citePassage(c, { book_id: "main:1", page: 3, end_page: 4 });
     expect(pdfCite.citation).toEqual({ title: "Networks", author: "Ann Author and Bo Second", publisher: "Free Press", year: "1986", pages: "1-2" });
     expect(pdfCite.isbn).toBe("978-0-00-000000-2");
-    expect(pdfCite.zotero_filing).toEqual({ tool: "file_zotero_reference", arguments: { isbn: "9780000000002" } });
-    const epubCite = citePassage(db, { book_id: "main:2", page: 1 });
+    expect(pdfCite.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata", "isbn-lookup"]);
+    expect(pdfCite.zotero_filing?.[1].arguments).toEqual({ isbn: "9780000000002" });
+    const epubCite = citePassage(c, { book_id: "main:2", page: 1 });
     expect(epubCite.citation).toEqual({ title: "Echoes", author: "Cy Writer" });
     expect(epubCite.locator).toMatchObject({ section: "Alpha" });
     expect(epubCite.warnings.join(" ")).toMatch(/not page numbers/);
-    expect(epubCite.zotero_filing).toBeUndefined();
-    expect(epubCite.warnings.join(" ")).toMatch(/no ISBN/);
+    expect(epubCite.zotero_filing).toEqual([]);
+    expect(epubCite.warnings.join(" ")).toMatch(/no publication year.*cannot be filed/s);
   });
 
   it("renders PDF pages and refuses reflowable books", () => {
-    const image = renderPage(db, root, { book_id: "main:1", page: 1, scale: 0.5 });
+    const image = renderPage(c, { book_id: "main:1", page: 1, scale: 0.5 });
     expect(Buffer.from(image.png, "base64").subarray(1, 4).toString()).toBe("PNG");
     expect(image.width).toBe(306);
-    expect(() => renderPage(db, root, { book_id: "main:2", page: 1 })).toThrow(/no fixed pages/);
+    expect(() => renderPage(c, { book_id: "main:2", page: 1 })).toThrow(/no fixed pages/);
   });
 
   it("reports status", () => {
-    const status = corpusStatus(db);
+    const status = corpusStatus(c);
     expect(status.last_scan).not.toBeNull();
     expect(status.failed).toEqual([]);
+  });
+});
+
+describe("citekeys", () => {
+  const shared = JSON.parse(fs.readFileSync(new URL("./citekey-cases.json", import.meta.url), "utf8")) as {
+    cases: { input: Parameters<typeof proposedCitationKey>[0]; key: string }[];
+  };
+
+  it.each(shared.cases)("matches the shared Concept Clusters case $key", ({ input, key }) => {
+    expect(proposedCitationKey(input)).toBe(key);
+  });
+
+  const metadata = (overrides: Partial<Parameters<typeof proposeCitekey>[0]>) => ({
+    calibreId: 1, uuid: "u", title: "The Future of Power", authors: ["Joseph Nye"], authorSorts: ["Nye, Joseph"],
+    publisher: "PublicAffairs", year: 2011, language: "eng", isbn: null, citekey: null, tags: [], description: null, ...overrides,
+  });
+
+  it("builds keys from Calibre metadata and names what blocks them", () => {
+    expect(proposeCitekey(metadata({}))).toEqual({ key: "nye2011future", blockers: [] });
+    expect(calibreCitationData(metadata({ authors: ["FAA"], authorSorts: ["FAA"] })).creators).toEqual([{ creatorType: "author", name: "FAA" }]);
+    expect(proposeCitekey(metadata({ authors: ["Unknown"], authorSorts: ["Unknown"] })).blockers).toEqual(["unknown_author"]);
+    expect(proposeCitekey(metadata({ authors: ["James Gough| Daniel Bryant"], authorSorts: ["James Gough, Daniel Bryant"] })).blockers)
+      .toEqual(["merged_authors"]);
+    expect(proposeCitekey(metadata({ year: null })).blockers).toEqual(["no_year"]);
+  });
+
+  it("writes BibTeX with sort-form persons, braced organizations, and escapes", () => {
+    const bib = bookBibtex({
+      citekey: "nye2011future", title: "Power & Influence_{2}", authors: ["Joseph Nye", "Apple Inc.", "Unknown"],
+      authorSorts: ["Nye, Joseph", "Apple Inc.", "Unknown"], publisher: "PublicAffairs", year: 2011, isbn: "9780306406157", calibreUuid: "abc",
+    });
+    expect(bib).toBe([
+      "@book{nye2011future,",
+      "  title = {Power \\& Influence\\_\\{2\\}},",
+      "  author = {Nye, Joseph and {Apple Inc.}},",
+      "  publisher = {PublicAffairs},",
+      "  year = {2011},",
+      "  isbn = {9780306406157},",
+      "  note = {Calibre UUID: abc},",
+      "}",
+    ].join("\n"));
+  });
+
+  it("migrates a schema 1 index in place, and a reader accepts a newer schema", () => {
+    for (const col of ["author_sorts", "calibre_citekey", "proposed_citekey", "citekey_blockers"]) db.exec(`ALTER TABLE books DROP COLUMN ${col}`);
+    db.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
+    db.close();
+    db = openDatabase(config.dbPath);
+    c.db = db;
+    const columns = (db.prepare("PRAGMA table_info(books)").all() as { name: string }[]).map((x) => x.name);
+    expect(columns).toEqual(expect.arrayContaining(["author_sorts", "calibre_citekey", "proposed_citekey", "citekey_blockers"]));
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION + 1));
+    expect(() => openDatabase(config.dbPath, { readonly: true }).close()).not.toThrow();
+  });
+
+  describe("in the index", () => {
+    beforeEach(() => {
+      scanLibraries(config, db);
+    });
+
+    it("stores proposals, blockers, and Calibre's identifier, and resolves citekeys as book ids", () => {
+      const books = Object.fromEntries(listBooks(c, { limit: 200 }).books.map((b) => [b.book_id, b]));
+      expect(books["main:1"]).toMatchObject({ proposed_citekey: "author1986networks", citekey: null, citekey_blockers: [] });
+      expect(books["main:2"].citekey_blockers).toEqual(["no_year"]);
+      expect(books["main:5"].citekey_blockers).toEqual(["merged_authors"]);
+      expect(books["main:6"]).toMatchObject({ citekey: "fixed2000strength", citekey_source: "calibre" });
+      expect(getBookOutline(c, "author1986networks").book_id).toBe("main:1");
+      expect(getBookOutline(c, "fixed2000strength").book_id).toBe("main:6");
+      expect(() => getBookOutline(c, "nobody2000none")).toThrow(/No book/);
+    });
+
+    it("offers BibTeX filing first, then the ISBN lookup, until a key is pinned", () => {
+      const before = citePassage(c, { book_id: "main:1", page: 3 });
+      const bibtex = (before.zotero_filing![0].arguments as { bibtex: string }).bibtex;
+      expect(bibtex).toMatch(/^@book\{author1986networks,/);
+      expect(bibtex).toContain("author = {Author, Ann and Second, Bo}");
+      expect(bibtex).toContain("note = {Calibre UUID: uuid-1}");
+      expect(bibtex).toContain("isbn = {9780000000002}");
+
+      expect(pinCitekey(c, { book_id: "main:1", citekey: "author1986networksa" }, "me@example.com")).toMatchObject({ status: "pinned" });
+      const after = citePassage(c, { book_id: "author1986networksa", page: 3 });
+      expect(after).toMatchObject({ citekey: "author1986networksa", citekey_source: "pinned" });
+      expect(after).not.toHaveProperty("zotero_filing");
+      expect(searchCorpus(c, { query: "weak ties" }).results[0].citekey).toBe("author1986networksa");
+      expect(listBooks(c, { query: "networksa" }).books.map((b) => b.book_id)).toEqual(["main:1"]);
+    });
+
+    it("pins only well-formed, unique keys and changes a pin only on request", () => {
+      expect(() => pinCitekey(c, { book_id: "main:1", citekey: "Not A Key" })).toThrow(/not a citekey/);
+      pinCitekey(c, { book_id: "main:1", citekey: "author1986networks" });
+      expect(pinCitekey(c, { book_id: "main:1", citekey: "author1986networks" }).status).toBe("unchanged");
+      expect(() => pinCitekey(c, { book_id: "main:5", citekey: "author1986networks" })).toThrow(/already pinned to "Networks"/);
+      expect(() => pinCitekey(c, { book_id: "main:1", citekey: "author1986other" })).toThrow(/replace: true/);
+      const replaced = pinCitekey(c, { book_id: "main:1", citekey: "author1986other", replace: true });
+      expect(replaced).toMatchObject({ status: "replaced", previous: "author1986networks" });
+      expect(replaced.warnings.join(" ")).toMatch(/proposed citekey was "author1986networks"/);
+      expect(pinCitekey(c, { book_id: "main:6", citekey: "fay2000strength" }).warnings.join(" ")).toMatch(/overrides this pin/);
+    });
+
+    it("reports citekey readiness", () => {
+      pinCitekey(c, { book_id: "main:1", citekey: "author1986networks" });
+      const { citekeys } = corpusStatus(c);
+      expect(citekeys).toMatchObject({ pinned: 1, calibre_identifier: 1, ready_to_file: 0 });
+      expect(citekeys.blocked).toEqual({ unknown_author: 0, merged_authors: 1, no_year: 2, malformed: 0 });
+      expect(citekeys.blocked_books.map((b) => b.book_id).sort()).toEqual(["library:7", "main:2", "main:5"]);
+    });
+  });
+
+  it("backs up data.db and keeps the newest copies", async () => {
+    fs.mkdirSync(config.backupDir, { recursive: true });
+    for (const day of ["2026-01-01", "2026-01-02", "2026-01-03"]) fs.writeFileSync(path.join(config.backupDir, `data-${day}.db`), "");
+    const target = await backupDataStore(data, config.backupDir, 2);
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.readdirSync(config.backupDir).sort()).toEqual([path.basename(target), "data-2026-01-03.db"].sort());
   });
 });

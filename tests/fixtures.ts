@@ -123,6 +123,10 @@ export interface FixtureBook {
   publisher?: string;
   pubdate?: string;
   isbn?: string;
+  /** Calibre identifier "citekey". */
+  citekey?: string;
+  /** Author sort forms; by default "Last, First" for each author, as Calibre writes a person. */
+  sorts?: string[];
   tags?: string[];
   /** Format to file contents. */
   files?: Record<string, Buffer>;
@@ -135,7 +139,7 @@ export function makeLibrary(root: string, library: string, books: FixtureBook[])
   const db = new Database(path.join(libraryRoot, "metadata.db"));
   db.exec(`
     CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, path TEXT, uuid TEXT, pubdate TEXT);
-    CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, sort TEXT);
     CREATE TABLE books_authors_link (id INTEGER PRIMARY KEY, book INTEGER, author INTEGER);
     CREATE TABLE publishers (id INTEGER PRIMARY KEY, name TEXT);
     CREATE TABLE books_publishers_link (id INTEGER PRIMARY KEY, book INTEGER, publisher INTEGER);
@@ -153,9 +157,11 @@ export function makeLibrary(root: string, library: string, books: FixtureBook[])
     const author = book.authors?.[0] ?? "Unknown";
     const folder = `${author}/${book.title} (${book.id})`;
     db.prepare("INSERT INTO books VALUES (?, ?, ?, ?, ?)").run(book.id, book.title, folder, `uuid-${book.id}`, book.pubdate ?? "0101-01-01 00:00:00+00:00");
-    for (const name of book.authors ?? []) {
-      db.prepare("INSERT INTO books_authors_link (book, author) VALUES (?, ?)").run(book.id, insertId("INSERT INTO authors (name) VALUES (?)", name));
-    }
+    (book.authors ?? []).forEach((name, i) => {
+      const words = name.split(" ");
+      const sort = book.sorts?.[i] ?? (words.length > 1 ? `${words.at(-1)}, ${words.slice(0, -1).join(" ")}` : name);
+      db.prepare("INSERT INTO books_authors_link (book, author) VALUES (?, ?)").run(book.id, insertId("INSERT INTO authors (name, sort) VALUES (?, ?)", name, sort));
+    });
     if (book.publisher) {
       db.prepare("INSERT INTO books_publishers_link (book, publisher) VALUES (?, ?)").run(book.id, insertId("INSERT INTO publishers (name) VALUES (?)", book.publisher));
     }
@@ -164,6 +170,7 @@ export function makeLibrary(root: string, library: string, books: FixtureBook[])
     }
     db.prepare("INSERT INTO books_languages_link (book, lang_code, item_order) VALUES (?, 1, 0)").run(book.id);
     if (book.isbn) db.prepare("INSERT INTO identifiers (book, type, val) VALUES (?, 'isbn', ?)").run(book.id, book.isbn);
+    if (book.citekey) db.prepare("INSERT INTO identifiers (book, type, val) VALUES (?, 'citekey', ?)").run(book.id, book.citekey);
     fs.mkdirSync(path.join(libraryRoot, folder), { recursive: true });
     for (const [format, data] of Object.entries(book.files ?? {})) {
       const name = `${book.title} - ${author}`;

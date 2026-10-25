@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { type BookMetadata, type CatalogueEntry, readCatalogue } from "./calibre.js";
 import { chunkPage } from "./chunk.js";
+import { proposeCitekey } from "./citekey.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
@@ -161,10 +162,12 @@ function clearContent(db: DB, id: string): void {
 }
 
 function metadataColumns(m: BookMetadata) {
+  const proposal = proposeCitekey(m);
   return {
     calibre_id: m.calibreId, uuid: m.uuid, title: m.title, authors: JSON.stringify(m.authors),
-    publisher: m.publisher, year: m.year, language: m.language, isbn: m.isbn,
-    tags: JSON.stringify(m.tags), description: m.description,
+    author_sorts: JSON.stringify(m.authorSorts), publisher: m.publisher, year: m.year, language: m.language,
+    isbn: m.isbn, calibre_citekey: m.citekey, proposed_citekey: proposal.key,
+    citekey_blockers: JSON.stringify(proposal.blockers), tags: JSON.stringify(m.tags), description: m.description,
   };
 }
 

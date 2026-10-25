@@ -130,13 +130,14 @@ cd "$release"
 npm ci --omit=dev --no-audit --no-fund --loglevel=error
 chmod +x deploy/*.sh
 [ -f /etc/corpus-mcp/env ] || install -m 0644 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
-install -m 0644 deploy/corpus-mcp.service deploy/corpus-refresh.service deploy/corpus-refresh.timer /etc/systemd/system/
+install -m 0644 deploy/corpus-mcp.service deploy/corpus-refresh.service deploy/corpus-refresh.timer \
+  deploy/corpus-backup.service deploy/corpus-backup.timer /etc/systemd/system/
 previous=$(readlink /opt/corpus-mcp/current || true)
 echo "previous=$previous"
 ln -sfn "$release" /opt/corpus-mcp/current.new && mv -T /opt/corpus-mcp/current.new /opt/corpus-mcp/current
 systemctl daemon-reload
-systemctl enable --quiet corpus-mcp.service corpus-refresh.timer
-systemctl start corpus-refresh.timer
+systemctl enable --quiet corpus-mcp.service corpus-refresh.timer corpus-backup.timer
+systemctl start corpus-refresh.timer corpus-backup.timer
 
 . /etc/corpus-mcp/env
 : "\${CORPUS_DB:=/var/lib/corpus-mcp/corpus.db}" "\${CORPUS_PORT:=8000}"
@@ -146,6 +147,9 @@ if [ ! -f "$CORPUS_DB" ]; then
   echo "installed=${id} (first sync and index started; the server starts once the index exists)"
   exit 0
 fi
+# Migrate the index schema and refresh metadata with the new code before the server restarts.
+# A start while the timer's run is in progress waits for that run instead.
+systemctl start corpus-refresh.service || echo "refresh failed; continuing to the health check"
 systemctl restart corpus-mcp.service
 for i in $(seq 1 20); do
   if curl -sf "http://127.0.0.1:$CORPUS_PORT/health"; then echo; echo "installed=${id}"; break; fi

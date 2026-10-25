@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -14,10 +14,14 @@ CREATE TABLE IF NOT EXISTS books (
   uuid TEXT,
   title TEXT NOT NULL,
   authors TEXT NOT NULL,             -- JSON array
+  author_sorts TEXT NOT NULL DEFAULT '[]', -- JSON array, Calibre's sort form per author
   publisher TEXT,
   year INTEGER,
   language TEXT,
   isbn TEXT,
+  calibre_citekey TEXT,              -- Calibre identifier "citekey", set by hand
+  proposed_citekey TEXT,             -- Concept Clusters' rule applied to the metadata
+  citekey_blockers TEXT NOT NULL DEFAULT '[]', -- JSON array of CitekeyBlocker
   tags TEXT NOT NULL,                -- JSON array
   description TEXT,
   folder TEXT NOT NULL,              -- relative to the books root
@@ -81,16 +85,33 @@ export function openDatabase(dbPath: string, { readonly = false } = {}): DB {
   const db = new Database(dbPath, { readonly, fileMustExist: readonly });
   db.pragma("foreign_keys = ON");
   if (readonly) {
+    // Schema changes are additive, so an index newer than this code still reads correctly.
     const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").pluck().get();
-    if (Number(version) !== SCHEMA_VERSION) {
+    if (!(Number(version) >= SCHEMA_VERSION)) {
       throw new Error(`Index schema is ${version ?? "missing"}, expected ${SCHEMA_VERSION}. Run "corpus-mcp index".`);
     }
     return db;
   }
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA);
+  migrate(db);
   db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
   return db;
+}
+
+/** Columns added after schema 1, for an index created by older code. Metadata fills in on the next scan. */
+const ADDED_BOOK_COLUMNS: Record<string, string> = {
+  author_sorts: "TEXT NOT NULL DEFAULT '[]'",
+  calibre_citekey: "TEXT",
+  proposed_citekey: "TEXT",
+  citekey_blockers: "TEXT NOT NULL DEFAULT '[]'",
+};
+
+function migrate(db: DB): void {
+  const existing = new Set((db.prepare("PRAGMA table_info(books)").all() as { name: string }[]).map((c) => c.name));
+  for (const [column, type] of Object.entries(ADDED_BOOK_COLUMNS)) {
+    if (!existing.has(column)) db.exec(`ALTER TABLE books ADD COLUMN ${column} ${type}`);
+  }
 }
 
 export function setMeta(db: DB, key: string, value: string): void {

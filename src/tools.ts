@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as mupdf from "mupdf";
+import { bookBibtex } from "./bibtex.js";
+import { CITEKEY_PATTERN, type CitekeyBlocker } from "./citekey.js";
+import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUuid } from "./data.js";
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 
@@ -8,28 +11,55 @@ import { type BookFormat, openBook } from "./extract.js";
  * Tool implementations over the index. Pages are 1-based in every input and output.
  * For PDFs a page is a physical page and `page_label` is its printed number. For EPUB and
  * MOBI a page is a location in the service's fixed layout: stable, but not citable.
+ * Every tool that takes a book id also takes a citekey.
  */
 
 export class ToolError extends Error {}
 
+/** The read-only index, the read-write primary data, and the mirrored book files. */
+export interface Corpus { db: DB; data: DataStore; booksRoot: string }
+
 interface BookRow {
-  id: string; library: string; title: string; authors: string; publisher: string | null; year: number | null;
-  language: string | null; isbn: string | null; tags: string; format: BookFormat | null; file_path: string | null;
-  sha256: string | null; reflowable: number | null; page_count: number | null; status: string; error: string | null;
+  id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;
+  publisher: string | null; year: number | null; language: string | null; isbn: string | null;
+  calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; tags: string;
+  format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
+  page_count: number | null; status: string; error: string | null;
 }
 
 interface PageRow { page_index: number; label: string | null; section_path: string | null; text: string }
 
-function getBook(db: DB, bookId: string): BookRow {
-  const book = db.prepare<[string], BookRow>("SELECT * FROM books WHERE id = ?").get(bookId);
-  if (!book) throw new ToolError(`No book "${bookId}". Use list_books to find book ids.`);
-  return book;
+const BOOK_ID = /^[^:\s]+:\d+$/;
+
+/** A book by id ("main:42") or citekey: Calibre's identifier, then a pinned key, then a proposed key held by one book. */
+function getBook(c: Corpus, idOrCitekey: string): BookRow {
+  const byId = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE id = ?");
+  if (BOOK_ID.test(idOrCitekey)) {
+    const book = byId.get(idOrCitekey);
+    if (!book) throw new ToolError(`No book "${idOrCitekey}". Use list_books to find book ids.`);
+    return book;
+  }
+  const key = idOrCitekey.trim().toLowerCase();
+  const calibre = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE calibre_citekey = ? ORDER BY id").get(key);
+  if (calibre) return calibre;
+  const pinned = pinnedByKey(c.data, key);
+  if (pinned) {
+    const book = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE uuid = ? ORDER BY id").get(pinned.calibre_uuid);
+    if (book) return book;
+    throw new ToolError(`Citekey "${key}" is pinned to "${pinned.title}" (${pinned.book_id}), which is no longer in the index.`);
+  }
+  const proposed = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE proposed_citekey = ? ORDER BY id").all(key);
+  if (proposed.length === 1) return proposed[0];
+  if (proposed.length > 1) {
+    throw new ToolError(`Citekey "${key}" is proposed for ${proposed.length} books (${proposed.map((b) => b.id).join(", ")}). Use a book id.`);
+  }
+  throw new ToolError(`No book "${idOrCitekey}". Use list_books to find book ids or citekeys.`);
 }
 
-function getIndexedBook(db: DB, bookId: string): BookRow & { page_count: number } {
-  const book = getBook(db, bookId);
+function getIndexedBook(c: Corpus, idOrCitekey: string): BookRow & { page_count: number } {
+  const book = getBook(c, idOrCitekey);
   if (book.status !== "indexed") {
-    throw new ToolError(`Book "${bookId}" has no indexed text (${book.status === "no_file" ? "no PDF, EPUB, or MOBI file" : `extraction failed: ${book.error}`}).`);
+    throw new ToolError(`Book "${book.id}" has no indexed text (${book.status === "no_file" ? "no PDF, EPUB, or MOBI file" : `extraction failed: ${book.error}`}).`);
   }
   return book as BookRow & { page_count: number };
 }
@@ -40,7 +70,22 @@ function checkPage(book: { id: string; page_count: number }, page: number): void
   }
 }
 
-function bookSummary(book: BookRow) {
+/** The key that identifies the book in Zotero: Calibre's identifier overrides a pinned key. */
+function effectiveCitekey(book: BookRow, pin: PinnedCitekey | undefined) {
+  if (book.calibre_citekey) return { citekey: book.calibre_citekey, citekey_source: "calibre" as const };
+  if (pin) return { citekey: pin.citekey, citekey_source: "pinned" as const };
+  return { citekey: null, citekey_source: null };
+}
+
+function citekeyInfo(book: BookRow, pin: PinnedCitekey | undefined) {
+  return {
+    ...effectiveCitekey(book, pin),
+    proposed_citekey: book.proposed_citekey,
+    citekey_blockers: JSON.parse(book.citekey_blockers) as CitekeyBlocker[],
+  };
+}
+
+function bookSummary(book: BookRow, pin: PinnedCitekey | undefined) {
   return {
     book_id: book.id,
     title: book.title,
@@ -48,6 +93,7 @@ function bookSummary(book: BookRow) {
     year: book.year,
     publisher: book.publisher,
     isbn: book.isbn,
+    ...citekeyInfo(book, pin),
     format: book.format,
     pages: book.page_count,
     page_kind: book.reflowable === null ? null : book.reflowable ? "location" : "pdf_page",
@@ -72,17 +118,18 @@ export function toFtsQuery(query: string): string {
 
 export interface SearchArgs { query: string; book_id?: string; library?: string; author?: string; limit?: number; advanced?: boolean }
 
-export function searchCorpus(db: DB, args: SearchArgs) {
+export function searchCorpus(c: Corpus, args: SearchArgs) {
   const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
   const match = args.advanced ? args.query : toFtsQuery(args.query);
+  const bookId = args.book_id ? getBook(c, args.book_id).id : undefined;
   const where = ["passages_fts MATCH @match", "b.status = 'indexed'"];
-  if (args.book_id) where.push("b.id = @book_id");
+  if (bookId) where.push("b.id = @book_id");
   if (args.library) where.push("b.library = @library");
   if (args.author) where.push("b.authors LIKE @author");
 
   let rows: (PageRow & BookRow & { ord: number; snippet: string })[];
   try {
-    rows = db.prepare(`
+    rows = c.db.prepare(`
       SELECT b.*, x.page_index, x.ord, p.label, p.section_path,
              snippet(passages_fts, 0, '«', '»', '…', 40) AS snippet
       FROM passages_fts
@@ -92,7 +139,7 @@ export function searchCorpus(db: DB, args: SearchArgs) {
       WHERE ${where.join(" AND ")}
       ORDER BY bm25(passages_fts)
       LIMIT @fetch`).all({
-      match, book_id: args.book_id, library: args.library,
+      match, book_id: bookId, library: args.library,
       author: args.author ? `%${args.author}%` : undefined, fetch: limit * 4,
     }) as typeof rows;
   } catch (error) {
@@ -100,6 +147,7 @@ export function searchCorpus(db: DB, args: SearchArgs) {
   }
 
   // The same file can sit in more than one library; keep its best-ranked hit only.
+  const pins = allPinned(c.data);
   const seen = new Set<string>();
   const results = [];
   for (const row of rows) {
@@ -108,6 +156,7 @@ export function searchCorpus(db: DB, args: SearchArgs) {
     seen.add(key);
     results.push({
       book_id: row.id,
+      citekey: effectiveCitekey(row, row.uuid ? pins.get(row.uuid) : undefined).citekey,
       title: row.title,
       authors: JSON.parse(row.authors) as string[],
       year: row.year,
@@ -123,32 +172,42 @@ export function searchCorpus(db: DB, args: SearchArgs) {
 
 export interface ListArgs { query?: string; library?: string; include_unindexed?: boolean; limit?: number }
 
-export function listBooks(db: DB, args: ListArgs) {
+export function listBooks(c: Corpus, args: ListArgs) {
   const limit = Math.min(Math.max(args.limit ?? 25, 1), 200);
+  const pins = allPinned(c.data);
+  const query = args.query?.toLowerCase();
+  // Pinned keys live in data.db, so match them here and pass the UUIDs into the index query.
+  const pinnedMatches = query ? [...pins.values()].filter((p) => p.citekey.includes(query)).map((p) => p.calibre_uuid) : [];
   const where: string[] = [];
   if (!args.include_unindexed) where.push("status = 'indexed'");
   if (args.library) where.push("library = @library");
-  if (args.query) where.push("(title LIKE @q OR authors LIKE @q OR tags LIKE @q OR isbn LIKE @q OR publisher LIKE @q OR id = @exact)");
-  const rows = db.prepare(`
+  if (query) {
+    where.push(`(title LIKE @q OR authors LIKE @q OR tags LIKE @q OR isbn LIKE @q OR publisher LIKE @q OR id = @exact
+      OR calibre_citekey LIKE @q OR proposed_citekey LIKE @q OR uuid IN (SELECT value FROM json_each(@pinned)))`);
+  }
+  const rows = c.db.prepare(`
     SELECT * FROM books ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
     ORDER BY title COLLATE NOCASE, id LIMIT @limit`).all({
-    library: args.library, q: args.query ? `%${args.query}%` : undefined, exact: args.query, limit,
+    library: args.library, q: query ? `%${query}%` : undefined, exact: args.query, limit, pinned: JSON.stringify(pinnedMatches),
   }) as BookRow[];
-  const copies = db.prepare<[string, string], string>("SELECT id FROM books WHERE sha256 = ? AND id != ?").pluck();
+  const copies = c.db.prepare<[string, string], string>("SELECT id FROM books WHERE sha256 = ? AND id != ?").pluck();
   return {
     count: rows.length,
-    books: rows.map((b) => ({ ...bookSummary(b), same_file_as: b.sha256 ? copies.all(b.sha256, b.id) : [] })),
+    books: rows.map((b) => ({
+      ...bookSummary(b, b.uuid ? pins.get(b.uuid) : undefined),
+      same_file_as: b.sha256 ? copies.all(b.sha256, b.id) : [],
+    })),
   };
 }
 
-export function getBookOutline(db: DB, bookId: string) {
-  const book = getIndexedBook(db, bookId);
-  const outline = db.prepare(`
+export function getBookOutline(c: Corpus, bookId: string) {
+  const book = getIndexedBook(c, bookId);
+  const outline = c.db.prepare(`
     SELECT o.level, o.title, o.start_page, p.label
     FROM outline o LEFT JOIN pages p ON p.book_id = o.book_id AND p.page_index = o.start_page
-    WHERE o.book_id = ? ORDER BY o.ord`).all(bookId) as { level: number; title: string; start_page: number | null; label: string | null }[];
+    WHERE o.book_id = ? ORDER BY o.ord`).all(book.id) as { level: number; title: string; start_page: number | null; label: string | null }[];
   return {
-    ...bookSummary(book),
+    ...bookSummary(book, pinnedByUuid(c.data, book.uuid)),
     tags: JSON.parse(book.tags) as string[],
     outline: outline.map((o) => ({
       level: o.level,
@@ -162,14 +221,14 @@ export function getBookOutline(db: DB, bookId: string) {
 
 export interface ReadArgs { book_id: string; start_page?: number; end_page?: number; section?: string; max_chars?: number }
 
-export function readBook(db: DB, args: ReadArgs) {
-  const book = getIndexedBook(db, args.book_id);
+export function readBook(c: Corpus, args: ReadArgs) {
+  const book = getIndexedBook(c, args.book_id);
   const maxChars = Math.min(Math.max(args.max_chars ?? 12000, 500), 40000);
   let start: number;
   let end: number;
 
   if (args.section) {
-    const entries = db.prepare(
+    const entries = c.db.prepare(
       "SELECT ord, level, title, path, start_page FROM outline WHERE book_id = ? AND start_page IS NOT NULL ORDER BY ord",
     ).all(book.id) as { ord: number; level: number; title: string; path: string; start_page: number }[];
     const needle = args.section.toLowerCase();
@@ -188,7 +247,7 @@ export function readBook(db: DB, args: ReadArgs) {
   checkPage(book, end);
   if (end < start) throw new ToolError(`end_page ${end} is before start_page ${start}.`);
 
-  const pages = db.prepare(
+  const pages = c.db.prepare(
     "SELECT page_index, label, section_path, text FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index",
   ).iterate(book.id, start - 1, end - 1) as IterableIterator<PageRow>;
 
@@ -215,12 +274,12 @@ export function readBook(db: DB, args: ReadArgs) {
 
 export interface RenderArgs { book_id: string; page: number; scale?: number }
 
-export function renderPage(db: DB, booksRoot: string, args: RenderArgs): { png: string; width: number; height: number } {
-  const book = getIndexedBook(db, args.book_id);
+export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: number; height: number } {
+  const book = getIndexedBook(c, args.book_id);
   if (book.reflowable) throw new ToolError(`${book.id} is ${book.format?.toUpperCase()}, which has no fixed pages to render. Use read_book.`);
   checkPage(book, args.page);
   const scale = Math.min(Math.max(args.scale ?? 1.5, 0.5), 3);
-  const file = path.join(booksRoot, book.file_path!);
+  const file = path.join(c.booksRoot, book.file_path!);
   if (!fs.existsSync(file)) throw new ToolError(`The file for ${book.id} is missing on disk. The index may be out of date.`);
   const doc = openBook(fs.readFileSync(file), book.format!);
   try {
@@ -256,10 +315,19 @@ export function validIsbn(raw: string): string | null {
   return null;
 }
 
+const BLOCKER_FIXES: Record<CitekeyBlocker, string> = {
+  unknown_author: "Calibre has no author for this book.",
+  merged_authors: "One Calibre author record names several people (Calibre shows commas inside a name as \"|\"). Split it into separate authors in Calibre.",
+  no_year: "Calibre has no publication year for this book.",
+  malformed: "The proposed citekey is malformed; check the author and title in Calibre.",
+};
+
+interface ZoteroFiling { tool: "file_zotero_reference"; arguments: { bibtex: string } | { isbn: string }; source: "calibre-metadata" | "isbn-lookup" }
+
 export interface CiteArgs { book_id: string; page?: number; end_page?: number }
 
-export function citePassage(db: DB, args: CiteArgs) {
-  const book = getBook(db, args.book_id);
+export function citePassage(c: Corpus, args: CiteArgs) {
+  const book = getBook(c, args.book_id);
   const authors = JSON.parse(book.authors) as string[];
   const citation: Record<string, string> = { title: book.title };
   const author = joinAuthors(authors.filter((a) => a !== "Unknown"));
@@ -270,11 +338,11 @@ export function citePassage(db: DB, args: CiteArgs) {
   let locator: Record<string, unknown> | undefined;
   const warnings: string[] = [];
   if (args.page !== undefined) {
-    const indexed = getIndexedBook(db, args.book_id);
+    const indexed = getIndexedBook(c, book.id);
     const end = args.end_page ?? args.page;
     checkPage(indexed, args.page);
     checkPage(indexed, end);
-    const pageRow = db.prepare<[string, number], PageRow>("SELECT * FROM pages WHERE book_id = ? AND page_index = ?");
+    const pageRow = c.db.prepare<[string, number], PageRow>("SELECT * FROM pages WHERE book_id = ? AND page_index = ?");
     const first = pageRow.get(book.id, args.page - 1)!;
     const last = pageRow.get(book.id, end - 1)!;
     if (!book.reflowable) {
@@ -288,24 +356,86 @@ export function citePassage(db: DB, args: CiteArgs) {
     locator = { page: args.page, end_page: end, section: first.section_path, ...(book.reflowable ? {} : { page_label: first.label }) };
   }
   if (!book.publisher) warnings.push("Calibre has no publisher for this book.");
-  if (!book.year) warnings.push("Calibre has no publication year for this book.");
 
-  // Concept Clusters files a cited book in Zotero with file_zotero_reference({ isbn }).
-  let zoteroFiling: { tool: string; arguments: { isbn: string } } | undefined;
-  const isbn = book.isbn ? validIsbn(book.isbn) : null;
-  if (isbn) {
-    zoteroFiling = { tool: "file_zotero_reference", arguments: { isbn } };
-    warnings.push("Filing by ISBN looks the book up in Open Library or Google Books. Check the citation Zotero returns against this one.");
-  } else if (book.isbn) {
-    warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so file_zotero_reference will reject it. Correct it in Calibre first.`);
-  } else {
-    warnings.push("Calibre has no ISBN for this book. Run Download metadata in Calibre, or file it in Zotero by DOI, URL, or item key.");
+  const pin = pinnedByUuid(c.data, book.uuid);
+  const keys = citekeyInfo(book, pin);
+  if (keys.citekey_source === "pinned") {
+    // Pinned means Concept Clusters filed it and assigned this key.
+    return { citation, locator, ...keys, isbn: book.isbn, warnings };
   }
 
-  return { citation, locator, isbn: book.isbn, zotero_filing: zoteroFiling, warnings };
+  // Not filed yet. Preferred: BibTeX from Calibre's own metadata. Fallback: ISBN lookup.
+  const zoteroFiling: ZoteroFiling[] = [];
+  const filingKey = keys.citekey ?? (keys.citekey_blockers.length ? null : book.proposed_citekey);
+  if (filingKey) {
+    zoteroFiling.push({
+      tool: "file_zotero_reference",
+      source: "calibre-metadata",
+      arguments: {
+        bibtex: bookBibtex({
+          citekey: filingKey, title: book.title, authors, authorSorts: JSON.parse(book.author_sorts) as string[],
+          publisher: book.publisher, year: book.year, isbn: book.isbn ? validIsbn(book.isbn) : null, calibreUuid: book.uuid,
+        }),
+      },
+    });
+  } else {
+    warnings.push(...keys.citekey_blockers.map((b) => BLOCKER_FIXES[b]));
+  }
+  const isbn = book.isbn ? validIsbn(book.isbn) : null;
+  if (isbn) {
+    zoteroFiling.push({ tool: "file_zotero_reference", source: "isbn-lookup", arguments: { isbn } });
+  } else if (book.isbn) {
+    warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so file_zotero_reference will reject it. Correct it in Calibre first.`);
+  }
+  if (zoteroFiling.length) {
+    warnings.push("To file the book in Zotero, try zotero_filing in order. ISBN lookups use Open Library or Google Books, so check the citation Zotero returns. Then call pin_citekey with the citekey file_zotero_reference returns.");
+  } else {
+    warnings.push("This book cannot be filed in Zotero yet. Fix the metadata in Calibre, or file it by DOI, URL, or item key.");
+  }
+  return { citation, locator, ...keys, isbn: book.isbn, zotero_filing: zoteroFiling, warnings };
 }
 
-export function corpusStatus(db: DB) {
+export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
+
+/** Records the citekey Concept Clusters assigned when it filed the book, against the book's Calibre UUID. */
+export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string) {
+  const book = getBook(c, args.book_id);
+  if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so its citekey cannot be pinned.`);
+  const citekey = args.citekey.trim().toLowerCase();
+  if (!CITEKEY_PATTERN.test(citekey)) {
+    throw new ToolError(`"${args.citekey}" is not a citekey of the form author + year + title word (e.g. "nye2011future", with an optional a–z suffix).`);
+  }
+  const holder = pinnedByKey(c.data, citekey);
+  if (holder && holder.calibre_uuid !== book.uuid) {
+    throw new ToolError(`Citekey "${citekey}" is already pinned to "${holder.title}" (${holder.book_id}).`);
+  }
+  const existing = pinnedByUuid(c.data, book.uuid);
+  const warnings: string[] = [];
+  if (existing?.citekey === citekey) {
+    return { status: "unchanged", book_id: book.id, citekey, pinned_at: existing.pinned_at, warnings };
+  }
+  if (existing && !args.replace) {
+    throw new ToolError(`${book.id} is already pinned to "${existing.citekey}". Pass replace: true to change it.`);
+  }
+  if (book.calibre_citekey && book.calibre_citekey !== citekey) {
+    warnings.push(`Calibre's citekey identifier "${book.calibre_citekey}" overrides this pin until it is removed in Calibre.`);
+  }
+  const proposed = book.proposed_citekey;
+  const suffixed = proposed && citekey.length === proposed.length + 1 && citekey.startsWith(proposed);
+  if (proposed && citekey !== proposed && !suffixed) {
+    warnings.push(`The proposed citekey was "${book.proposed_citekey}". Pinned "${citekey}" as given.`);
+  }
+  const pinnedAt = new Date().toISOString();
+  c.data.prepare(`
+    INSERT INTO citekeys (calibre_uuid, citekey, book_id, title, pinned_at, pinned_by) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (calibre_uuid) DO UPDATE SET citekey = excluded.citekey, book_id = excluded.book_id,
+      title = excluded.title, pinned_at = excluded.pinned_at, pinned_by = excluded.pinned_by`)
+    .run(book.uuid, citekey, book.id, book.title, pinnedAt, pinnedBy ?? null);
+  return { status: existing ? "replaced" : "pinned", book_id: book.id, citekey, previous: existing?.citekey, pinned_at: pinnedAt, warnings };
+}
+
+export function corpusStatus(c: Corpus) {
+  const { db } = c;
   const counts = db.prepare("SELECT library, format, status, COUNT(*) AS books FROM books GROUP BY 1, 2, 3 ORDER BY 1, 2, 3").all();
   const lastScan = db.prepare("SELECT value FROM meta WHERE key = 'last_scan'").pluck().get();
   const failed = db.prepare("SELECT id, title, error FROM books WHERE status = 'failed'").all();
@@ -321,5 +451,41 @@ export function corpusStatus(db: DB) {
     failed,
     little_or_no_text: { note: "Probably scanned images without a text layer; they need OCR.", books: noText },
     no_outline: { note: "No chapter locators. For MOBI books, convert to EPUB in Calibre.", books: noOutline },
+    citekeys: citekeyReadiness(c),
+  };
+}
+
+function citekeyReadiness(c: Corpus) {
+  const pins = allPinned(c.data);
+  const books = c.db.prepare("SELECT * FROM books WHERE status != 'no_file' ORDER BY id").all() as BookRow[];
+  const blocked: Record<CitekeyBlocker, number> = { unknown_author: 0, merged_authors: 0, no_year: 0, malformed: 0 };
+  const blockedBooks: { book_id: string; title: string; blockers: CitekeyBlocker[] }[] = [];
+  const byProposed = new Map<string, string[]>();
+  let pinned = 0;
+  let calibre = 0;
+  let ready = 0;
+  for (const b of books) {
+    const source = effectiveCitekey(b, b.uuid ? pins.get(b.uuid) : undefined).citekey_source;
+    if (source === "calibre") calibre++;
+    else if (source === "pinned") pinned++;
+    if (source) continue;
+    const blockers = JSON.parse(b.citekey_blockers) as CitekeyBlocker[];
+    if (blockers.length) {
+      for (const x of blockers) blocked[x]++;
+      blockedBooks.push({ book_id: b.id, title: b.title, blockers });
+    } else {
+      ready++;
+      byProposed.set(b.proposed_citekey!, [...(byProposed.get(b.proposed_citekey!) ?? []), b.id]);
+    }
+  }
+  return {
+    note: "Books need a citekey to be filed in Zotero from their Calibre metadata. Fix blocked books in Calibre.",
+    pinned,
+    calibre_identifier: calibre,
+    ready_to_file: ready,
+    blocked,
+    proposed_collisions: [...byProposed].filter(([, ids]) => ids.length > 1).map(([key, ids]) => ({ key, books: ids })),
+    blocked_books: blockedBooks.slice(0, 100),
+    ...(blockedBooks.length > 100 ? { blocked_books_truncated: blockedBooks.length - 100 } : {}),
   };
 }
