@@ -16,4 +16,6 @@ Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=yes
 ProtectSystem=strict
+# SQLite writes temporary files (large deletes, sorts); strict makes the shared /tmp read-only.
+PrivateTmp=yes
 ReadWritePaths=/srv/corpus/books /var/lib/corpus-mcp

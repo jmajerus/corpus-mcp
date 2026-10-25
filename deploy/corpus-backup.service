@@ -10,4 +10,6 @@ WorkingDirectory=/opt/corpus-mcp/current
 ExecStart=/usr/bin/node /opt/corpus-mcp/current/dist/cli.js backup
 NoNewPrivileges=yes
 ProtectSystem=strict
+# SQLite writes temporary files (large deletes, sorts); strict makes the shared /tmp read-only.
+PrivateTmp=yes
 ReadWritePaths=/var/lib/corpus-mcp

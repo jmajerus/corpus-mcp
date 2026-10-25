@@ -48,9 +48,14 @@ files, about 8.9 GB. Size the LXC's disk at 20 GB or more.
   library's database cannot be read (for example, pulled mid-write), that
   library keeps its previous index.
 - **MOBI has no outline in MuPDF** (0 of 55 files). MOBI-only books can be
-  searched and read, but they have no chapter locators. The fix needs no
-  code: bulk *Convert books → EPUB* in Calibre (24 books in `main`). The
-  indexer prefers the EPUB. KFX is not readable.
+  searched and read, but they have no chapter locators. On 2026-10-25,
+  `tools/calibre-convert.sh --apply` added EPUBs to all 25 MOBI/AZW3-only
+  books in `main` on CT 115. The indexer now prefers the EPUB, so the index
+  holds 270 EPUB, 237 PDF, and no MOBI, and books without an outline fell
+  from 39 to 14. *Suspicious Minds* now has 91 outline entries. Pins carry
+  over, because they are keyed by Calibre UUID. KFX is not readable.
+  Calibre-Web's own Convert needs *Path to Calibre Binaries* set to
+  `/usr/bin` (it pointed at a nonexistent `/opt/calibre/`).
 - **ISBNs are sparse outside `tech`.** Running Calibre's *Download metadata*
   on books you cite fills ISBN, publisher, and year. Citations and Zotero
   filing need these.
