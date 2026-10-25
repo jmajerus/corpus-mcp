@@ -25,9 +25,9 @@ books that live in Calibre.
 | `get_book_outline` | Returns metadata and the table of contents with the page where each section starts. |
 | `read_book` | Returns contiguous text for a page range or a named section, within a character budget, and says where to continue. |
 | `render_page` | Returns a PNG of a PDF page, for figures, tables, and equations. |
-| `cite_passage` | Builds a citation object (`title`, `author`, `publisher`, `year`, `pages`) for a book and page range, warns about missing metadata, and for a book not yet in Zotero offers ways to file it (see *Citekeys*). |
-| `pin_citekey` | Records the citekey a book was given when it was filed in Zotero. |
-| `get_tag_vocabulary` | Concept Clusters' taxonomy as Calibre tags, the controlled vocabulary for categories. |
+| `cite_passage` | A book's citation as a CSL JSON item, with a CSL locator for a page range, the reading position, and filing data: a BibTeX entry, a valid ISBN, or printed ISBN candidates (see *Citations*). |
+| `pin_citekey` | Records the citekey a book was given elsewhere, such as in the reference manager it was filed in. |
+| `get_tag_vocabulary` | The vocabulary's terms as Calibre tags, the controlled vocabulary for categories. |
 | `tagging_worklist` | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Proposes 1–3 vocabulary tags for a book, for a person to review. |
 | `save_quote` | Saves a passage as a quote after checking it against the book; the book's exact wording is stored. |
@@ -153,11 +153,12 @@ word, as in `nye2011future`), built from its Calibre metadata by
 BibTeX–style rule. The two implementations share the cases in
 [`tests/citekey-cases.json`](tests/citekey-cases.json).
 
-To file a cited book in Zotero, `cite_passage` offers a BibTeX `@book` entry
-built from Calibre's own metadata, followed by an ISBN lookup when the book
-has a valid ISBN. Concept Clusters files the book, assigns the final key, and
-returns it. `pin_citekey` then stores that key against the book's Calibre
-UUID. A pinned key never changes on its own and is accepted anywhere a book id
+To file a cited book in a reference manager, `cite_passage` returns a BibTeX
+`@book` entry built from Calibre's own metadata (`bibtex`) and the book's
+ISBN when it passes its check digit (`isbn`). The project that files the book
+assigns the final key; `pin_citekey` then stores it against the book's Calibre
+UUID. Any BibTeX-safe key is accepted and kept as given; one that doesn't
+follow this server's rule gets a warning. A pinned key never changes on its own and is accepted anywhere a book id
 is. A `citekey` identifier set in Calibre takes precedence over a pinned key.
 
 Pinned keys live in `data.db`, which unlike the index is never rebuilt and is
@@ -170,6 +171,35 @@ each with its page, the printed line, and its binding (hardcover, paperback,
 or ebook) when one is printed beside it. Copyright pages often list several
 editions, and back pages often advertise other books, so these are offered for
 someone to confirm, never filed automatically.
+
+## Citations
+
+`cite_passage` (and `cite_quote`, for a saved quote) returns:
+
+```json
+{
+  "csl": { "id": "nye2011future", "citation-key": "nye2011future", "type": "book", "title": "The Future of Power",
+           "author": [{ "family": "Nye", "given": "Joseph S., Jr." }], "publisher": "PublicAffairs",
+           "issued": { "date-parts": [[2011]] }, "ISBN": "9781586488925" },
+  "locator": { "label": "page", "locator": "4-5" },
+  "position": { "page": 19, "end_page": 20, "page_kind": "page", "page_label": "4", "end_page_label": "5", "section": "Part One › Chapter 1" },
+  "citekey": "nye2011future", "citekey_source": "pinned",
+  "bibtex": "@book{nye2011future, …}", "isbn": "9781586488925", "isbn_candidates": [],
+  "warnings": []
+}
+```
+
+- `csl` is a CSL JSON item. Its `id` is the citekey, or `calibre:<uuid>` when
+  there is none. A Calibre author with a comma in the sort form ("Nye,
+  Joseph S., Jr.") becomes `family` and `given`; one without becomes
+  `literal`. `issued` is the year; empty fields are left out.
+- `locator` is a CSL locator: printed page labels for PDFs (physical pages,
+  with a warning, when a PDF has none), and null for EPUB and MOBI, whose
+  locations are not pages. `position` is where the passage is in the index.
+- `bibtex` is null when the citekey is blocked; `isbn` is null when Calibre's
+  ISBN is missing or fails its check digit.
+- Until consumers switch, the legacy `citation` (`title`, `author`,
+  `publisher`, `year`, `pages`) and `zotero_filing` fields are also returned.
 
 ## Locators
 

@@ -542,13 +542,16 @@ adapts. Agreed with CC's agent, in order:
    withdrawn (4018daa), so every domain only groups; only `trivia` and
    `vocabulary` are assignable at the top level. No book was tagged with
    `interdisciplinary-studies` directly.
-2. **Neutral citations.** `cite_passage` and `cite_quote` return a CSL JSON
+2. **Neutral citations** (done 2026-10-25). `cite_passage` and `cite_quote` return a CSL JSON
    item, a CSL locator (`{ label, locator }`, null for EPUB and MOBI), and
    corpus-mcp's reading `position`; filing becomes plain data (`bibtex`,
    `isbn`, `isbn_candidates`) with no tool names. One release carries the
    old `citation` and `zotero_filing` fields too, until CC switches.
    `pin_citekey` accepts any BibTeX-safe key and warns when it doesn't fit
-   the preset.
+   the preset. Pinned keys keep their case (lookups ignore it), so another
+   project's camelCase keys survive. The old `locator` (page, section,
+   label) became `position`; `isbn` is now the valid ISBN or null rather
+   than Calibre's raw value.
 3. **Citekey package** `@jmajerus/citekey` in `packages/citekey`: pure ESM,
    no dependencies, released as a GitHub release tarball (`citekey-v<semver>`)
    because npm can't install a git subdirectory. `proposeCitekey(csl,

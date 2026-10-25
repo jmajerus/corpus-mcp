@@ -51,7 +51,7 @@ function citekeyCard() {
   const rows = [["State", badge("citekey", k.state)], ["Calibre identifier", k.calibre_identifier ? esc(k.calibre_identifier) : null],
     ["Pinned", k.pinned ? esc(k.pinned.citekey) + ' <span class="note">' + (k.pinned.pinned_by ? "by " + esc(k.pinned.pinned_by) + " · " : "") + esc(ago(k.pinned.pinned_at)) + "</span>" : null],
     ["Proposed", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null]];
-  const editor = '<div class="editor"><strong>Pin a citekey</strong><div class="note">The key Concept Clusters assigned when the book was filed in Zotero.</div><div class="row">' +
+  const editor = '<div class="editor"><strong>Pin a citekey</strong><div class="note">The key the book was given when it was filed in a reference manager.</div><div class="row">' +
     '<input type="text" id="citekey" value="' + esc(k.pinned ? k.pinned.citekey : k.proposed || "") + '" aria-label="Citekey"' + (canWrite ? "" : " disabled") + ">" +
     '<button type="button" class="primary" id="pin"' + (canWrite ? "" : " disabled") + ">" + (k.pinned ? "Replace" : "Pin") + "</button>" +
     (k.pinned ? '<button type="button" class="danger" id="unpin"' + (canWrite ? "" : " disabled") + ">Unpin</button>" : "") + "</div></div>";

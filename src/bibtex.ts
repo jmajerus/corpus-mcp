@@ -36,7 +36,7 @@ export function bookBibtex(b: BibtexBook): string {
     ["author", names.length ? names.join(" and ") : null],
     ["publisher", b.publisher ? escapeBibtex(b.publisher) : null],
     ["year", b.year ? String(b.year) : null],
-    // Concept Clusters rejects an entry whose ISBN fails its check digit, so an invalid one is left out.
+    // An ISBN that fails its check digit is left out; reference managers reject it.
     ["isbn", b.isbn ? validIsbn(b.isbn) : null],
     ["note", b.calibreUuid ? `Calibre UUID: ${b.calibreUuid}` : null],
   ];

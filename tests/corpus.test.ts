@@ -217,18 +217,28 @@ describe("tools", () => {
     expect(searchCorpus(c, { query: "weak ties" }).results[0].page_kind).toBe("pdf_page");
   });
 
-  it("cites PDFs with printed page ranges and EPUBs without pages", () => {
+  it("cites as a CSL item with a page locator for PDFs and none for EPUBs", () => {
     const pdfCite = citePassage(c, { book_id: "main:1", page: 3, end_page: 4 });
+    expect(pdfCite.csl).toEqual({
+      id: "author1986networks", "citation-key": "author1986networks", type: "book", title: "Networks",
+      author: [{ family: "Author", given: "Ann" }, { family: "Second", given: "Bo" }],
+      publisher: "Free Press", issued: { "date-parts": [[1986]] }, ISBN: "9780000000002",
+    });
+    expect(pdfCite.locator).toEqual({ label: "page", locator: "1-2" });
+    expect(pdfCite.position).toEqual({ page: 3, end_page: 4, page_kind: "page", section: "Part One › Chapter 1", page_label: "1", end_page_label: "2" });
+    expect(pdfCite).toMatchObject({ isbn: "9780000000002", isbn_candidates: [] });
+    expect(pdfCite.bibtex).toMatch(/^@book\{author1986networks,/);
+    // The legacy fields, for one release.
     expect(pdfCite.citation).toEqual({ title: "Networks", author: "Ann Author and Bo Second", publisher: "Free Press", year: "1986", pages: "1-2" });
-    expect(pdfCite.isbn).toBe("978-0-00-000000-2");
     expect(pdfCite.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata", "isbn-lookup"]);
-    expect(pdfCite.zotero_filing?.[1].arguments).toEqual({ isbn: "9780000000002" });
     const epubCite = citePassage(c, { book_id: "main:2", page: 1 });
-    expect(epubCite.citation).toEqual({ title: "Echoes", author: "Cy Writer" });
-    expect(epubCite.locator).toMatchObject({ section: "Alpha" });
+    expect(epubCite.csl).toEqual({ id: "calibre:uuid-2", type: "book", title: "Echoes", author: [{ family: "Writer", given: "Cy" }] });
+    expect(epubCite.locator).toBeNull();
+    expect(epubCite.position).toMatchObject({ page_kind: "location", section: "Alpha" });
     expect(epubCite.warnings.join(" ")).toMatch(/not page numbers/);
-    expect(epubCite.zotero_filing).toEqual([]);
-    expect(epubCite.warnings.join(" ")).toMatch(/no publication year.*cannot be filed/s);
+    expect(epubCite).toMatchObject({ bibtex: null, isbn: null });
+    expect(epubCite.warnings.join(" ")).toMatch(/no publication year.*no BibTeX entry or valid ISBN/s);
+    expect(JSON.stringify(citePassage(c, { book_id: "main:1" }).warnings)).not.toMatch(/zotero|file_zotero_reference/i);
   });
 
   it("renders PDF pages and refuses reflowable books", () => {
@@ -325,15 +335,16 @@ describe("citekeys", () => {
 
     it("offers BibTeX filing first, then the ISBN lookup, until a key is pinned", () => {
       const before = citePassage(c, { book_id: "main:1", page: 3 });
-      const bibtex = (before.zotero_filing![0].arguments as { bibtex: string }).bibtex;
+      const bibtex = before.bibtex!;
       expect(bibtex).toMatch(/^@book\{author1986networks,/);
       expect(bibtex).toContain("author = {Author, Ann and Second, Bo}");
       expect(bibtex).toContain("note = {Calibre UUID: uuid-1}");
       expect(bibtex).toContain("isbn = {9780000000002}");
       db.prepare("UPDATE books SET isbn = '978-0-00-000000-1' WHERE id = 'main:1'").run();
       const invalid = citePassage(c, { book_id: "main:1" });
-      expect(invalid.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata"]);
-      expect((invalid.zotero_filing![0].arguments as { bibtex: string }).bibtex).not.toContain("isbn");
+      expect(invalid).toMatchObject({ isbn: null });
+      expect(invalid.csl).not.toHaveProperty("ISBN");
+      expect(invalid.bibtex).not.toContain("isbn");
       expect(invalid.warnings.join(" ")).toMatch(/fails its check digit/);
       db.prepare("UPDATE books SET isbn = '978-0-00-000000-2' WHERE id = 'main:1'").run();
 
@@ -341,12 +352,13 @@ describe("citekeys", () => {
       const after = citePassage(c, { book_id: "author1986networksa", page: 3 });
       expect(after).toMatchObject({ citekey: "author1986networksa", citekey_source: "pinned" });
       expect(after).not.toHaveProperty("zotero_filing");
+      expect(after.csl).toMatchObject({ id: "author1986networksa", "citation-key": "author1986networksa" });
       expect(searchCorpus(c, { query: "weak ties" }).results[0].citekey).toBe("author1986networksa");
       expect(listBooks(c, { query: "networksa" }).books.map((b) => b.book_id)).toEqual(["main:1"]);
     });
 
-    it("pins only well-formed, unique keys and changes a pin only on request", () => {
-      expect(() => pinCitekey(c, { book_id: "main:1", citekey: "Not A Key" })).toThrow(/not a citekey/);
+    it("pins only BibTeX-safe, unique keys and changes a pin only on request", () => {
+      expect(() => pinCitekey(c, { book_id: "main:1", citekey: "Not A Key" })).toThrow(/not a BibTeX key/);
       pinCitekey(c, { book_id: "main:1", citekey: "author1986networks" });
       expect(pinCitekey(c, { book_id: "main:1", citekey: "author1986networks" }).status).toBe("unchanged");
       expect(() => pinCitekey(c, { book_id: "main:5", citekey: "author1986networks" })).toThrow(/already pinned to "Networks"/);
@@ -355,6 +367,12 @@ describe("citekeys", () => {
       expect(replaced).toMatchObject({ status: "replaced", previous: "author1986networks" });
       expect(replaced.warnings.join(" ")).toMatch(/proposed citekey was "author1986networks"/);
       expect(pinCitekey(c, { book_id: "main:6", citekey: "fay2000strength" }).warnings.join(" ")).toMatch(/overrides this pin/);
+      // Another project's key: kept as given, found without regard to case, with a warning.
+      const bbt = pinCitekey(c, { book_id: "main:2", citekey: "writerEchoes" });
+      expect(bbt).toMatchObject({ status: "pinned", citekey: "writerEchoes" });
+      expect(bbt.warnings.join(" ")).toMatch(/does not follow this server's citekey rule/);
+      expect(getBookOutline(c, "writerechoes").book_id).toBe("main:2");
+      expect(citePassage(c, { book_id: "main:2" }).csl.id).toBe("writerEchoes");
     });
 
     it("reports citekey readiness", () => {
@@ -427,7 +445,7 @@ describe("printed ISBNs", () => {
     scanLibraries(config, db);
     const cite = citePassage(c, { book_id: "extra:8" });
     expect(cite.isbn_candidates?.map((x) => [x.isbn, x.format])).toEqual([["9780306406157", "paperback"], ["9781402894626", null]]);
-    expect(cite.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata"]);
+    expect(cite).toMatchObject({ isbn: null, bibtex: expect.stringMatching(/^@book/) });
     expect(corpusStatus(c).printed_isbns.books.map((b) => b.book_id)).toContain("extra:8");
   });
 });
@@ -917,10 +935,10 @@ describe("quotes", () => {
   });
 
   it("saves the book's exact wording, found from the given page or anywhere", () => {
-    const saved = saveQuote(c, { book_id: "main:1", page: 3, text: "weak ties carry  novel information", note: "Granovetter's point", labels: ["cc:puzzle:weak-ties", " "] }, "me@example.com", "admin");
+    const saved = saveQuote(c, { book_id: "main:1", page: 3, text: "weak ties carry  novel information", note: "Granovetter's point", labels: ["project:weak-ties", " "] }, "me@example.com", "admin");
     expect(saved).toMatchObject({ saved: true, exact: false, quote: {
       text: "Weak ties carry novel information", page: 3, page_label: "1", locator: "p. 1", section: "Part One › Chapter 1",
-      labels: ["cc:puzzle:weak-ties"], status: "verified", source: "admin",
+      labels: ["project:weak-ties"], status: "verified", source: "admin",
     } });
     // Wrong page: found anyway through the full-text index.
     expect(saveQuote(c, { book_id: "main:1", page: 1, text: "Structural holes separate" }, undefined, "agent")).toMatchObject({ saved: true, quote: { page: 5 } });
@@ -945,7 +963,7 @@ describe("quotes", () => {
     expect(quotesOnPages(c, getBookRow("main:1"), 0, 4)).toEqual([{ id, start_page: 3, start_offset: 0, end_page: 3, end_offset: 33, note: null }]);
 
     expect(updateQuote(c, { id, note: "Strength of weak ties", labels: [] }, "me", "admin")).toMatchObject({ note: "Strength of weak ties", labels: [] });
-    expect(citeQuote(c, id)).toMatchObject({ quote: "Weak ties carry novel information", quote_locator: "p. 1", citation: { title: "Networks", pages: "1" } });
+    expect(citeQuote(c, id)).toMatchObject({ quote: "Weak ties carry novel information", quote_locator: "p. 1", locator: { label: "page", locator: "1" }, csl: { title: "Networks" } });
     deleteQuote(c, id, "me", "admin");
     expect(searchQuotes(c, {}).total).toBe(1);
     expect(queryChanges(data, { kinds: ["quote_saved", "quote_edited", "quote_deleted"] }).rows.map((r) => (r as Change).kind)).toEqual(["quote_deleted", "quote_edited", "quote_saved", "quote_saved"]);

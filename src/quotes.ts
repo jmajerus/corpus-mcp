@@ -248,7 +248,11 @@ export function getQuote(c: Corpus, id: number) {
     after = last.slice(r.end_offset, r.end_offset + 300);
   }
   const citation = book ? citePassage(c, { book_id: book.id, page: r.start_page + 1, end_page: r.end_page + 1 }) : null;
-  return { ...present(c, r), current_book_id: book?.id ?? null, context: { before, after }, citation: citation?.citation ?? null, citekey: citation?.citekey ?? null };
+  return {
+    ...present(c, r), current_book_id: book?.id ?? null, context: { before, after },
+    csl: citation?.csl ?? null, csl_locator: citation?.locator ?? null, citekey: citation?.citekey ?? null,
+    citation: citation?.citation ?? null,
+  };
 }
 
 export interface QuoteQuery {
@@ -311,7 +315,7 @@ export function deleteQuote(c: Corpus, id: number, by: string | undefined, sourc
   return { deleted: id };
 }
 
-/** The Concept Clusters citation for a quote, with the verified text to quote. */
+/** A quote's citation (as cite_passage gives it for the quote's pages), with the verified text to quote. */
 export function citeQuote(c: Corpus, id: number) {
   const q = getQuote(c, id);
   if (!q.current_book_id) throw new ToolError(`Quote ${id}'s book is no longer in the index.`);

@@ -38,6 +38,8 @@ export interface BookRow {
 interface PageRow { page_index: number; label: string | null; section_path: string | null; text: string }
 
 const BOOK_ID = /^[^:\s]+:\d+$/;
+/** Characters BibTeX keys can safely hold. */
+const BIBTEX_KEY = /^[A-Za-z0-9_:.+-]+$/;
 
 /** A book by id ("main:42") or citekey: Calibre's identifier, then a pinned key, then a proposed key held by one book. */
 export function getBook(c: Corpus, idOrCitekey: string): BookRow {
@@ -341,7 +343,7 @@ export function listTags(c: Corpus, args: ListTagsArgs = {}) {
     top = [found!];
   }
   return {
-    note: "Calibre tags, shown as Categories in Calibre-Web. \".\" nests them; filtering by a tag includes the tags below it. Vocabulary tags are Concept Clusters slugs, with their titles in label.",
+    note: "Calibre tags, shown as Categories in Calibre-Web. \".\" nests them; filtering by a tag includes the tags below it. Vocabulary tags are term ids, with their title paths in label.",
     tags: top,
   };
 }
@@ -425,11 +427,46 @@ export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: n
   }
 }
 
-/** Joins names the way the Concept Clusters corpus mostly does: "A", "A and B", "A, B, and C". */
+/** Joins names "A", "A and B", "A, B, and C": the legacy `citation` field only. */
 function joinAuthors(authors: string[]): string | undefined {
   if (authors.length === 0) return undefined;
   if (authors.length <= 2) return authors.join(" and ");
   return `${authors.slice(0, -1).join(", ")}, and ${authors.at(-1)}`;
+}
+
+/** A CSL JSON name: Calibre's sort form "Nye, Joseph S., Jr." is family and given; a name without a comma is literal. */
+export interface CslName { family?: string; given?: string; literal?: string }
+
+export interface CslItem {
+  id: string; "citation-key"?: string; type: "book"; title: string; author?: CslName[]; publisher?: string;
+  issued?: { "date-parts": number[][] }; ISBN?: string;
+}
+
+function cslName(name: string, sort: string | undefined): CslName {
+  if (sort?.includes(",")) {
+    const [family, ...rest] = sort.split(",");
+    const given = rest.join(",").trim();
+    return given ? { family: family.trim(), given } : { family: family.trim() };
+  }
+  return { literal: name };
+}
+
+/** The book as a CSL JSON item; empty fields are left out. */
+export function cslItem(book: BookRow, citekey: string | null): CslItem {
+  const authors = JSON.parse(book.authors) as string[];
+  const sorts = JSON.parse(book.author_sorts) as string[];
+  const names = authors.map((name, i) => (name && name !== "Unknown" ? cslName(name, sorts[i]) : null)).filter((n): n is CslName => n !== null);
+  const isbn = book.isbn ? validIsbn(book.isbn) : null;
+  return {
+    id: citekey ?? `calibre:${book.uuid ?? book.id}`,
+    ...(citekey ? { "citation-key": citekey } : {}),
+    type: "book",
+    title: book.title,
+    ...(names.length ? { author: names } : {}),
+    ...(book.publisher ? { publisher: book.publisher } : {}),
+    ...(book.year ? { issued: { "date-parts": [[book.year]] } } : {}),
+    ...(isbn ? { ISBN: isbn } : {}),
+  };
 }
 
 const BLOCKER_FIXES: Record<CitekeyBlocker, string> = {
@@ -444,20 +481,32 @@ export function printedIsbns(book: BookRow): IsbnCandidate[] {
   return book.printed_isbns ? (JSON.parse(book.printed_isbns) as IsbnCandidate[]) : [];
 }
 
-interface ZoteroFiling { tool: "file_zotero_reference"; arguments: { bibtex: string } | { isbn: string }; source: "calibre-metadata" | "isbn-lookup" }
+/** Legacy: the filing calls the first CSL release still returns, until consumers switch to bibtex and isbn. */
+interface LegacyFiling { tool: "file_zotero_reference"; arguments: { bibtex: string } | { isbn: string }; source: "calibre-metadata" | "isbn-lookup" }
 
 export interface CiteArgs { book_id: string; page?: number; end_page?: number }
 
+/**
+ * A book's citation as a CSL JSON item, with a CSL locator for a page range (null when the pages are
+ * reading locations, not citable pages), the reading position, and plain filing data: a BibTeX entry
+ * from Calibre's metadata, a check-digit-valid ISBN, and printed ISBN candidates when Calibre has none.
+ */
 export function citePassage(c: Corpus, args: CiteArgs) {
   const book = getBook(c, args.book_id);
   const authors = JSON.parse(book.authors) as string[];
+  const pin = pinnedByUuid(c.data, book.uuid);
+  const keys = citekeyInfo(book, pin);
+  const filingKey = keys.citekey ?? (keys.citekey_blockers.length ? null : book.proposed_citekey);
+  const csl = cslItem(book, filingKey);
+  // Legacy shape, kept for one release.
   const citation: Record<string, string> = { title: book.title };
   const author = joinAuthors(authors.filter((a) => a !== "Unknown"));
   if (author) citation.author = author;
   if (book.publisher) citation.publisher = book.publisher;
   if (book.year) citation.year = String(book.year);
 
-  let locator: Record<string, unknown> | undefined;
+  let locator: { label: "page"; locator: string } | null = null;
+  let position: Record<string, unknown> | null = null;
   const warnings: string[] = [];
   if (args.page !== undefined) {
     const indexed = getIndexedBook(c, book.id);
@@ -470,68 +519,52 @@ export function citePassage(c: Corpus, args: CiteArgs) {
     if (!book.reflowable) {
       const a = first.label ?? String(args.page);
       const b = last.label ?? String(end);
-      citation.pages = a === b ? a : `${a}-${b}`;
+      locator = { label: "page", locator: a === b ? a : `${a}-${b}` };
+      citation.pages = locator.locator;
       if (!first.label) warnings.push("This PDF has no printed page labels; pages are physical page numbers.");
     } else {
-      warnings.push("EPUB and MOBI locations are not page numbers, so the citation has no pages. Name the chapter in the puzzle text if it matters.");
+      warnings.push("EPUB and MOBI locations are not page numbers, so there is no locator. Name the chapter (position.section) in the text if it matters.");
     }
-    locator = { page: args.page, end_page: end, section: first.section_path, ...(book.reflowable ? {} : { page_label: first.label }) };
+    position = {
+      page: args.page, end_page: end, page_kind: book.reflowable ? "location" : "page", section: first.section_path,
+      ...(book.reflowable ? {} : { page_label: first.label, end_page_label: last.label }),
+    };
   }
   if (!book.publisher) warnings.push("Calibre has no publisher for this book.");
 
-  const pin = pinnedByUuid(c.data, book.uuid);
-  const keys = citekeyInfo(book, pin);
-  if (keys.citekey_source === "pinned") {
-    // Pinned means Concept Clusters filed it and assigned this key.
-    return { citation, locator, ...keys, isbn: book.isbn, warnings };
-  }
-
-  // Not filed yet. Preferred: BibTeX from Calibre's own metadata. Fallback: ISBN lookup.
-  const zoteroFiling: ZoteroFiling[] = [];
-  const filingKey = keys.citekey ?? (keys.citekey_blockers.length ? null : book.proposed_citekey);
-  if (filingKey) {
-    zoteroFiling.push({
-      tool: "file_zotero_reference",
-      source: "calibre-metadata",
-      arguments: {
-        bibtex: bookBibtex({
-          citekey: filingKey, title: book.title, authors, authorSorts: JSON.parse(book.author_sorts) as string[],
-          publisher: book.publisher, year: book.year, isbn: book.isbn, calibreUuid: book.uuid,
-        }),
-      },
-    });
-  } else {
-    warnings.push(...keys.citekey_blockers.map((b) => BLOCKER_FIXES[b]));
-  }
+  const bibtex = filingKey ? bookBibtex({
+    citekey: filingKey, title: book.title, authors, authorSorts: JSON.parse(book.author_sorts) as string[],
+    publisher: book.publisher, year: book.year, isbn: book.isbn, calibreUuid: book.uuid,
+  }) : null;
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
-  let isbnCandidates: IsbnCandidate[] | undefined;
-  if (isbn) {
-    zoteroFiling.push({ tool: "file_zotero_reference", source: "isbn-lookup", arguments: { isbn } });
-  } else {
-    if (book.isbn) warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so file_zotero_reference will reject it. Correct it in Calibre first.`);
-    // Candidates only: copyright pages often list several editions, and the right one is the edition held.
-    isbnCandidates = printedIsbns(book);
-    if (isbnCandidates.length) {
-      warnings.push(`Calibre has no valid ISBN, but the book prints ${isbnCandidates.length} (isbn_candidates). Confirm the one for this edition (the file is ${book.format?.toUpperCase()}) before filing with file_zotero_reference({ isbn }), and add it to Calibre. ISBNs in the last pages (position "back") are often adverts for other books.`);
-    }
+  // Candidates only: copyright pages often list several editions, and the right one is the edition held.
+  const isbnCandidates = isbn ? [] : printedIsbns(book);
+  const result = { csl, locator, position, ...keys, bibtex, isbn, isbn_candidates: isbnCandidates, citation };
+  if (keys.citekey_source === "pinned") return { ...result, warnings };
+
+  if (!bibtex) warnings.push(...keys.citekey_blockers.map((b) => BLOCKER_FIXES[b]));
+  if (!isbn && book.isbn) warnings.push(`Calibre's ISBN "${book.isbn}" fails its check digit, so it is left out. Correct it in Calibre.`);
+  if (!isbn && isbnCandidates.length) {
+    warnings.push(`Calibre has no valid ISBN, but the book prints ${isbnCandidates.length} (isbn_candidates). Confirm the one for this edition (the file is ${book.format?.toUpperCase()}) before using it, and add it to Calibre. ISBNs in the last pages (position "back") are often adverts for other books.`);
   }
-  if (zoteroFiling.length) {
-    warnings.push("To file the book in Zotero, try zotero_filing in order. ISBN lookups use Open Library or Google Books, so check the citation Zotero returns. Then call pin_citekey with the citekey file_zotero_reference returns.");
-  } else {
-    warnings.push("This book cannot be filed in Zotero yet. Fix the metadata in Calibre, or file it by DOI, URL, or item key.");
-  }
-  return { citation, locator, ...keys, isbn: book.isbn, isbn_candidates: isbnCandidates, zotero_filing: zoteroFiling, warnings };
+  if (!bibtex && !isbn) warnings.push("There is no BibTeX entry or valid ISBN to file this book with yet. Fix the metadata in Calibre.");
+  const zoteroFiling: LegacyFiling[] = [
+    ...(bibtex ? [{ tool: "file_zotero_reference" as const, source: "calibre-metadata" as const, arguments: { bibtex } }] : []),
+    ...(isbn ? [{ tool: "file_zotero_reference" as const, source: "isbn-lookup" as const, arguments: { isbn } }] : []),
+  ];
+  return { ...result, zotero_filing: zoteroFiling, warnings };
 }
 
 export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
 
-/** Records the citekey Concept Clusters assigned when it filed the book, against the book's Calibre UUID. */
+/** Records a citekey assigned elsewhere (when the book was filed in a reference manager), against the book's Calibre UUID. */
 export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" = "agent") {
   const book = getBook(c, args.book_id);
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so its citekey cannot be pinned.`);
-  const citekey = args.citekey.trim().toLowerCase();
-  if (!CITEKEY_PATTERN.test(citekey)) {
-    throw new ToolError(`"${args.citekey}" is not a citekey of the form author + year + title word (e.g. "nye2011future", with an optional a–z suffix).`);
+  // Kept as given: another project's keys may use capitals (Better BibTeX's nyeFuturePower2011). Lookups ignore case.
+  const citekey = args.citekey.trim();
+  if (!BIBTEX_KEY.test(citekey)) {
+    throw new ToolError(`"${args.citekey}" is not a BibTeX key: use letters, digits, and _ : . + - only.`);
   }
   const holder = pinnedByKey(c.data, citekey);
   if (holder && holder.calibre_uuid !== book.uuid) {
@@ -545,12 +578,16 @@ export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: 
   if (existing && !args.replace) {
     throw new ToolError(`${book.id} is already pinned to "${existing.citekey}". Pass replace: true to change it.`);
   }
-  if (book.calibre_citekey && book.calibre_citekey !== citekey) {
+  if (book.calibre_citekey && book.calibre_citekey !== citekey.toLowerCase()) {
     warnings.push(`Calibre's citekey identifier "${book.calibre_citekey}" overrides this pin until it is removed in Calibre.`);
   }
+  if (!CITEKEY_PATTERN.test(citekey)) {
+    warnings.push(`"${citekey}" does not follow this server's citekey rule (author + year + title word, e.g. "nye2011future"). Pinned as given.`);
+  }
   const proposed = book.proposed_citekey;
-  const suffixed = proposed && citekey.length === proposed.length + 1 && citekey.startsWith(proposed);
-  if (proposed && citekey !== proposed && !suffixed) {
+  const lower = citekey.toLowerCase();
+  const suffixed = proposed && lower.length === proposed.length + 1 && lower.startsWith(proposed);
+  if (proposed && lower !== proposed && !suffixed) {
     warnings.push(`The proposed citekey was "${book.proposed_citekey}". Pinned "${citekey}" as given.`);
   }
   const pinnedAt = new Date().toISOString();

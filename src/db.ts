@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS books (
   language TEXT,
   isbn TEXT,
   calibre_citekey TEXT,              -- Calibre identifier "citekey", set by hand
-  proposed_citekey TEXT,             -- Concept Clusters' rule applied to the metadata
+  proposed_citekey TEXT,             -- the citekey rule applied to the metadata
   citekey_blockers TEXT NOT NULL DEFAULT '[]', -- JSON array of CitekeyBlocker
   printed_isbns TEXT,                -- JSON array of IsbnCandidate found in the text; null until scanned
   printed_isbns_version INTEGER,     -- ISBN_SCAN_VERSION that produced printed_isbns

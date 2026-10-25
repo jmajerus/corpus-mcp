@@ -34,7 +34,7 @@ const VERSION = "0.2.0";
 
 const INSTRUCTIONS = `Search, read, and cite books in the Calibre libraries (books that are not Zotero attachments; use the Zotero server for those).
 Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). Pages are 1-based. For PDFs a page is a physical page and page_label is the printed number to cite. For EPUB and MOBI a page is a stable reading location, not a citable page number; cite those by chapter (the section path).
-Typical flow: search_corpus → read_book around a hit → cite_passage for a Concept Clusters info.citations object. To file a cited book in Zotero, call the zotero_filing options cite_passage returns, in order, then pin_citekey with the citekey Concept Clusters assigned.`;
+Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey.`;
 
 const bookId = z.string().describe('Book id from search_corpus or list_books (e.g. "main:42"), or the book\'s citekey');
 const page = z.number().int().min(1);
@@ -159,7 +159,7 @@ export function createServer(c: Corpus): McpServer {
       text: z.string().min(1).max(2000).describe("The passage, as close to the book's wording as possible"),
       page: page.optional().describe("Page or location where the passage starts"),
       note: z.string().max(2000).optional().describe("Why the passage matters"),
-      labels: z.array(z.string()).max(20).optional().describe('Tags: themes ("compassion", "overwork"), forms ("parable", "epigraph"), or links ("cc:puzzle:<puzzle id>"). Quotes have no categories of their own; the book gives the subject, so tag what is finer. Reuse existing tags (search_quotes lists them).'),
+      labels: z.array(z.string()).max(20).optional().describe('Tags: themes ("compassion", "overwork"), forms ("parable", "epigraph"), or links to your own records ("project:item-id"). Quotes have no categories of their own; the book gives the subject, so tag what is finer. Reuse existing tags (search_quotes lists them).'),
     },
     annotations: { title: "Save a quote", ...writes },
   }, (args, extra) => run(() => json(saveQuote(c, args, accessEmail(extra), "agent"))));
@@ -204,7 +204,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("cite_quote", {
     title: "Cite a quote",
-    description: "The quote's verified text and locator, with a Concept Clusters citation object for its book and pages (as cite_passage returns).",
+    description: "The quote's verified text and a readable locator (quote_locator), with its citation as cite_passage returns it for the quote's pages: a CSL JSON item, a CSL locator, and filing data.",
     inputSchema: { id: z.number().int() },
     annotations: { title: "Cite a quote", ...readOnly },
   }, ({ id }) => run(() => json(citeQuote(c, id))));
@@ -250,7 +250,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("cite_passage", {
     title: "Cite a book",
-    description: "A citation object in the Concept Clusters info.citations shape (title, author, publisher, year, pages) for a book and optional page range, plus the locator, citekey, and warnings about missing metadata. PDF citations use printed page labels; EPUB and MOBI citations have no pages. For a book not yet filed in Zotero, zotero_filing lists file_zotero_reference calls to try in order: a BibTeX entry built from Calibre's metadata, then an ISBN lookup.",
+    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position. PDF locators use printed page labels; EPUB and MOBI locations are not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. The legacy citation and zotero_filing fields remain for one release.",
     inputSchema: {
       book_id: bookId,
       page: page.optional().describe("Page of the cited passage"),
@@ -261,10 +261,10 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("pin_citekey", {
     title: "Pin a book's citekey",
-    description: "Record the citekey Concept Clusters assigned when file_zotero_reference filed this book in Zotero. Pinned keys are stored by Calibre UUID, never change on their own, and are then accepted anywhere a book id is.",
+    description: "Record a citekey assigned elsewhere, such as by the reference manager the book was filed in. Pinned keys are stored by Calibre UUID, never change on their own, and are then accepted anywhere a book id is. Any BibTeX-safe key is accepted; a key that doesn't follow this server's rule gets a warning.",
     inputSchema: {
       book_id: bookId,
-      citekey: z.string().min(1).describe("The citekey file_zotero_reference returned"),
+      citekey: z.string().min(1).describe("The citekey the book was given"),
       replace: z.boolean().optional().describe("Replace a different key already pinned to this book"),
     },
     annotations: { title: "Pin a book's citekey", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },

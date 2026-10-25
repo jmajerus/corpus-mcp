@@ -11,7 +11,7 @@ export const DATA_SCHEMA_VERSION = 8;
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
--- The citekey Concept Clusters assigned when it filed the book in Zotero. Keyed by Calibre UUID,
+-- A citekey assigned elsewhere (the reference manager the book was filed in). Keyed by Calibre UUID,
 -- which survives renumbering and re-indexing; book_id and title record what it was pinned to.
 CREATE TABLE IF NOT EXISTS citekeys (
   calibre_uuid TEXT PRIMARY KEY,
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS quotes (
   title TEXT NOT NULL,
   text TEXT NOT NULL,                -- the book's exact wording
   note TEXT,
-  labels TEXT NOT NULL DEFAULT '[]', -- JSON: free-form tags (themes, forms, cc:puzzle:<id>), shown as "Tags"
+  labels TEXT NOT NULL DEFAULT '[]', -- JSON: free-form tags (themes, forms, links), shown as "Tags"
   start_page INTEGER NOT NULL,       -- 0-based page or location index
   start_offset INTEGER NOT NULL,     -- character offset in that page's stored text
   end_page INTEGER NOT NULL,
@@ -145,7 +145,7 @@ export function pinnedByUuid(data: DataStore, uuid: string | null): PinnedCiteke
 }
 
 export function pinnedByKey(data: DataStore, citekey: string): PinnedCitekey | undefined {
-  return data.prepare<[string], PinnedCitekey>("SELECT * FROM citekeys WHERE citekey = ?").get(citekey.toLowerCase());
+  return data.prepare<[string], PinnedCitekey>("SELECT * FROM citekeys WHERE citekey = ? COLLATE NOCASE").get(citekey.toLowerCase());
 }
 
 export function allPinned(data: DataStore): Map<string, PinnedCitekey> {

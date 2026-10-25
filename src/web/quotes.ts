@@ -7,7 +7,7 @@ import { page } from "./layout.js";
 const TAG_EDITOR = `
 function tagEditor(root, initial, enabled) {
   let tags = initial.slice();
-  root.innerHTML = '<span class="tagchips"></span><span class="tagadd"><input type="text" list="usedtags" placeholder="Add a tag: a theme, a form, cc:puzzle:…" aria-label="Add a tag"' + (enabled ? "" : " disabled") + '><button type="button"' + (enabled ? "" : " disabled") + ">Add</button></span>";
+  root.innerHTML = '<span class="tagchips"></span><span class="tagadd"><input type="text" list="usedtags" placeholder="Add a tag: a theme, a form, a link" aria-label="Add a tag"' + (enabled ? "" : " disabled") + '><button type="button"' + (enabled ? "" : " disabled") + ">Add</button></span>";
   const chips = root.querySelector(".tagchips"), input = root.querySelector("input");
   const draw = () => { chips.innerHTML = tags.map((t) => '<span class="chip muted">' + esc(t) + (enabled ? '<button type="button" data-untag="' + esc(t) + '" aria-label="Remove tag ' + esc(t) + '">×</button>' : "") + "</span>").join(""); };
   const add = () => {
@@ -136,9 +136,14 @@ textarea { width: 100%; min-height: 90px; }
   script: TAG_EDITOR + `
 const id = Number(location.pathname.split("/").pop());
 let q, canWrite = false, tagsEd;
-function citationText(c) {
-  if (!c) return "";
-  return [c.author, c.title ? "<em>" + esc(c.title) + "</em>" : "", c.publisher, c.year, c.pages ? "pp. " + c.pages : ""].filter(Boolean).map((x, i) => (i === 1 ? x : esc(x))).join(", ") + ".";
+// A readable citation from the CSL item and locator.
+function citationText(csl, loc) {
+  if (!csl) return "";
+  const names = (csl.author || []).map((n) => n.literal || [n.given, n.family].filter(Boolean).join(" "));
+  const authors = names.length <= 2 ? names.join(" and ") : names.slice(0, -1).join(", ") + ", and " + names.at(-1);
+  const year = csl.issued && csl.issued["date-parts"] ? String(csl.issued["date-parts"][0][0]) : "";
+  return [esc(authors), "<em>" + esc(csl.title) + "</em>", esc(csl.publisher || ""), esc(year), loc ? esc((loc.locator.includes("-") ? "pp. " : "p. ") + loc.locator) : ""]
+    .filter(Boolean).join(", ") + ".";
 }
 function render() {
   document.title = "Quote #" + q.id + " · Corpus Admin";
@@ -147,7 +152,7 @@ function render() {
     '<p class="sub">' + bookLink(q.current_book_id || q.book_id, q.title) + " · " + esc(q.locator) + " · " + (q.status === "orphaned" ? '<span class="badge bad"><span class="sign">!</span>Orphaned: not found in the current file</span>' : '<span class="badge good"><span class="sign">✓</span>Verified</span>') + "</p>" +
     '<div class="card"><span class="ctx">…' + esc(q.context.before) + '</span><span class="quoted">' + esc(q.text) + '</span><span class="ctx">' + esc(q.context.after) + "…</span>" +
     (q.current_book_id ? '<p class="note"><a href="/admin/books/' + encodeURIComponent(q.current_book_id) + "/read?page=" + q.page + "#quote-" + q.id + '">Open in the reader</a></p>' : "") + "</div>" +
-    '<div class="cols"><div class="card"><h2>Citation</h2><p>' + citationText(q.citation) + "</p>" + (q.citekey ? '<p class="note">Citekey ' + esc(q.citekey) + "</p>" : "") +
+    '<div class="cols"><div class="card"><h2>Citation</h2><p>' + citationText(q.csl, q.csl_locator) + "</p>" + (q.citekey ? '<p class="note">Citekey ' + esc(q.citekey) + "</p>" : "") +
     '<p class="note">Saved ' + esc(when(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " (" + esc(q.source) + ")" + (q.updated_at ? " · edited " + esc(ago(q.updated_at)) + (q.updated_by ? " by " + esc(q.updated_by) : "") : "") + "</p></div>" +
     '<div class="card"><h2>Note and tags</h2><textarea id="note" aria-label="Note"' + dis + ">" + esc(q.note || "") + "</textarea>" +
     '<div style="margin-top:10px"><span class="note">Tags</span><div id="tags"></div></div>' +

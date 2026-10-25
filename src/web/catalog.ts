@@ -62,7 +62,7 @@ export const CITEKEYS_HTML = page({
   nav: "citekeys",
   body: `
 <h1>Citekeys</h1>
-<p class="sub">Keys Concept Clusters assigned when it filed a book in Zotero. Pin, replace, or unpin a key on the book's page.</p>
+<p class="sub">Keys books were given when they were filed in a reference manager. Pin, replace, or unpin a key on the book's page.</p>
 <div class="grid" id="cards"></div>
 <h2>Pinned</h2>
 <div class="scroll"><table><thead><tr><th>Citekey</th><th>Book</th><th>Pinned</th><th>By</th><th>Note</th></tr></thead><tbody id="pinned"></tbody></table></div>`,
