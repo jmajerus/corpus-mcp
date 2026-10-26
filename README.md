@@ -108,6 +108,16 @@ runs exactly the previewed plan, backs up `metadata.db`, and refreshes the
 index. They run on the Calibre-Web host as named commands of the sync key's
 forced command, never as a shell.
 
+Bulk imports are not a job. The library's owner runs
+`calibre-import.sh [--apply] [--tags kindle] <folder>` on the Calibre-Web
+host, which `--source-setup` installs beside the job scripts. Without
+`--apply` it lists the files. With it, it backs up `metadata.db`, adds one
+file at a time, and sorts each into `_done/`, `_duplicates/`, or `_failed/`
+inside the folder. Kindle `.kfx-zip` archives need calibre's DeDRM plugin,
+with the account's keyfile imported, and KFX Input; one still encrypted after
+the add is removed again and counts as failed. The EPUB job then converts
+MOBI, AZW3, and KFX books so they get chapter locators.
+
 Every write needs a verified Cloudflare Access identity
 (`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`). Direct LAN access is
 read-only.

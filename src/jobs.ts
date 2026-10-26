@@ -21,7 +21,7 @@ export const JOB_KINDS: Record<JobKind, JobSpec> = {
   backup: { title: "Back up data.db", calibre: false, previewable: false },
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
   cleanup: { title: "Remove non-subject tags from Calibre", calibre: true, previewable: true },
-  convert: { title: "Add EPUBs for MOBI/AZW3-only books", calibre: true, previewable: true },
+  convert: { title: "Add EPUBs for MOBI/AZW3/KFX-only books", calibre: true, previewable: true },
   zotero: { title: "Sync from Zotero now", calibre: false, previewable: false },
 };
 

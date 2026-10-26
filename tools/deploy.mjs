@@ -83,6 +83,7 @@ async function sourceSetup() {
     CORPUS_SOURCE_SCRIPT: Buffer.from(readScript("corpus-source.sh")).toString("base64"),
     CORPUS_TAGS_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-tags.sh")).toString("base64"),
     CORPUS_CONVERT_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-convert.sh")).toString("base64"),
+    CORPUS_IMPORT_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-import.sh")).toString("base64"),
   });
   console.log("\nSource ready. Next: npm run deploy");
 }
@@ -114,7 +115,9 @@ async function sourceSetupUserKey() {
       + ` -e "s|^TOOLS_DIR=.*|TOOLS_DIR=\\"$HOME/.local/bin\\"|" > ~/.local/bin/corpus-source`,
     `printf %s ${shellQuote(encode("tools/calibre-tags.sh"))} | base64 -d > ~/.local/bin/calibre-tags.sh`,
     `printf %s ${shellQuote(encode("tools/calibre-convert.sh"))} | base64 -d > ~/.local/bin/calibre-convert.sh`,
-    "chmod 0755 ~/.local/bin/corpus-source ~/.local/bin/calibre-tags.sh ~/.local/bin/calibre-convert.sh",
+    // Not reachable through the forced command: the library owner runs it by hand for bulk imports.
+    `printf %s ${shellQuote(encode("tools/calibre-import.sh"))} | base64 -d > ~/.local/bin/calibre-import.sh`,
+    "chmod 0755 ~/.local/bin/corpus-source ~/.local/bin/calibre-tags.sh ~/.local/bin/calibre-convert.sh ~/.local/bin/calibre-import.sh",
     "install -d -m 0700 ~/.ssh",
     "touch ~/.ssh/authorized_keys && chmod 0600 ~/.ssh/authorized_keys",
     // Replace any earlier line for this key (it was forced to rrsync alone).

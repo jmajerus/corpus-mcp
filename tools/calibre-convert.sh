@@ -1,6 +1,7 @@
 #!/bin/bash
-# Adds an EPUB to every book in a Calibre library that has MOBI or AZW3 but no EPUB, so corpus-mcp
-# can cite it by chapter (MuPDF reads no outline from MOBI). Runs on the Calibre host, as the
+# Adds an EPUB to every book in a Calibre library that has MOBI, AZW3, or KFX but no EPUB, so corpus-mcp
+# can cite it by chapter (MuPDF reads no outline from MOBI, and the indexer cannot read KFX at all).
+# KFX needs calibre's KFX Input plugin, installed for the library's owner. Runs on the Calibre host, as the
 # library's owner, with the same ebook-convert + calibredb add_format calls Calibre-Web makes.
 #
 #   calibre-convert.sh [--apply] [library]     (default library: /mnt/Calibre/main)
@@ -19,13 +20,13 @@ import json, sqlite3, sys
 db = sqlite3.connect(f"file:{sys.argv[1]}/metadata.db?mode=ro", uri=True)
 rows = db.execute("""
   SELECT b.id, b.path, d.name, LOWER(d.format), b.title, b.uuid FROM books b JOIN data d ON d.book = b.id
-  WHERE LOWER(d.format) IN ('mobi', 'azw3')
+  WHERE LOWER(d.format) IN ('mobi', 'azw3', 'kfx')
     AND NOT EXISTS (SELECT 1 FROM data e WHERE e.book = b.id AND LOWER(e.format) = 'epub')
-  ORDER BY b.id, CASE LOWER(d.format) WHEN 'azw3' THEN 0 ELSE 1 END""")
+  ORDER BY b.id, CASE LOWER(d.format) WHEN 'azw3' THEN 0 WHEN 'kfx' THEN 1 ELSE 2 END""")
 seen = set()
 for id_, path, name, fmt, title, uuid in rows:
     if id_ in seen:
-        continue  # one source per book; AZW3 (KF8) converts better than old MOBI
+        continue  # one source per book; AZW3 (KF8) converts best, then KFX, then old MOBI
     seen.add(id_)
     # The last field is the change as JSON, printed as an "@@change" line for /admin's change table.
     item = json.dumps({"calibre_id": id_, "uuid": uuid, "title": title, "added_format": "epub", "source_format": fmt})
@@ -34,7 +35,7 @@ EOF
 )
 
 count=$(printf '%s' "$books" | grep -c . || true)
-echo "$count book(s) in $library have MOBI or AZW3 but no EPUB."
+echo "$count book(s) in $library have MOBI, AZW3, or KFX but no EPUB."
 [ "$count" -eq 0 ] && exit 0
 if [ "$apply" -eq 0 ]; then
   printf '%s\n' "$books" | awk -F'\t' '{ printf "  %5s  %s\n@@change %s\n", $1, $3, $4 }'
