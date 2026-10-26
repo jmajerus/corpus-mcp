@@ -1101,6 +1101,22 @@ describe("zotero mirror", () => {
     expect(linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "reject" }, "me").candidates).toEqual([]);
     linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "clear" }, "me");
     expect(linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "confirm" }, "me")).toMatchObject({ pinned: ["writer2010echoes"], match: { matched_by: "confirmed" } });
+
+    // Merged in Zotero: the duplicate goes to the trash, and the kept item records that it replaces it.
+    put("CCCC3333", { title: "Echoes: A Study", creators: [{ creatorType: "author", lastName: "Writer" }], citationKey: "writer2010echoes", deleted: 1 });
+    put("KKKK9999", { title: "Echoes", date: "2010", creators: [{ creatorType: "author", lastName: "Writer" }], citationKey: "writer2010echoesb",
+      relations: { "dc:replaces": ["http://zotero.org/users/1/items/CCCC3333"] } });
+    // Filed for main:1 by UUID, then merged into another item with the UUID line lost.
+    put("GGGG7777", { title: "Networks (2nd printing)", extra: "Calibre UUID: uuid-1", citationKey: "author1986networks", deleted: 1 });
+    put("MMMM0000", { title: "Networks", date: "1986", creators: [{ creatorType: "author", lastName: "Author" }], citationKey: "author1986networks",
+      relations: { "dc:replaces": "http://zotero.org/users/1/items/GGGG7777" } });
+    await syncZotero(c, zconfig);
+    expect(zoteroMatch(c, getBookRow("main:2")).match).toMatchObject({ key: "KKKK9999", matched_by: "confirmed" });
+    expect(zoteroMatch(c, getBookRow("main:1")).match).toMatchObject({ key: "MMMM0000", matched_by: "calibre_uuid" });
+    // The pin stays; the kept item's different key is reported for a person.
+    expect(zoteroReport(c, zconfig).mismatches.map((m) => [m.book_id, m.zotero_key, m.zotero_citekey])).toEqual([
+      ["main:2", "KKKK9999", "writer2010echoesb"], ["main:6", "BBBB2222", "fixed2000strengtha"],
+    ]);
   });
 
   it("keeps the last error and the library version when a sync fails", async () => {

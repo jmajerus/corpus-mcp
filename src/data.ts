@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 9;
+export const DATA_SCHEMA_VERSION = 10;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS zotero_items (
   citekey TEXT,                      -- Better BibTeX's, from the citationKey field or Extra
   calibre_uuid TEXT,                 -- the "Calibre UUID:" line filing wrote to Extra
   trashed INTEGER NOT NULL DEFAULT 0,
+  replaces TEXT NOT NULL DEFAULT '[]', -- JSON: keys of items merged into this one (Zotero's dc:replaces)
   synced_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS zotero_items_uuid ON zotero_items(calibre_uuid);
@@ -165,6 +166,12 @@ export function openDataStore(dbPath: string): DataStore {
   const jobColumns = new Set((db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
   if (!jobColumns.has("items")) db.exec("ALTER TABLE jobs ADD COLUMN items TEXT");
   const quoteColumns = new Set((db.prepare("PRAGMA table_info(quotes)").all() as { name: string }[]).map((c) => c.name));
+  const zoteroColumns = new Set((db.prepare("PRAGMA table_info(zotero_items)").all() as { name: string }[]).map((c) => c.name));
+  if (!zoteroColumns.has("replaces")) {
+    // Mirrors from before merges were followed: add the column and fetch everything again to fill it.
+    db.exec("ALTER TABLE zotero_items ADD COLUMN replaces TEXT NOT NULL DEFAULT '[]'");
+    db.exec("DELETE FROM meta WHERE key = 'zotero_version'");
+  }
   // Schemas 5 to 7 categorized quotes; since 8 a quote's subject is its book's, and tags do the rest.
   for (const column of ["category_mode", "categories"]) if (quoteColumns.has(column)) db.exec(`ALTER TABLE quotes DROP COLUMN ${column}`);
   db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(DATA_SCHEMA_VERSION));

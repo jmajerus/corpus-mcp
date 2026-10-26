@@ -24,6 +24,7 @@ interface ApiItem {
   version: number;
   data: {
     itemType: string; title?: string; date?: string; ISBN?: string; extra?: string; citationKey?: string; deleted?: number | boolean;
+    relations?: Record<string, string | string[]>;
     creators?: { creatorType: string; lastName?: string; firstName?: string; name?: string }[];
   };
 }
@@ -108,8 +109,8 @@ function setMeta(c: Corpus, key: string, value: string | null): void {
 function storeItems(c: Corpus, items: ApiItem[]): void {
   const now = new Date().toISOString();
   const upsert = c.data.prepare(`
-    INSERT OR REPLACE INTO zotero_items (key, version, item_type, title, title_norm, first_creator, year, citekey, calibre_uuid, trashed, synced_at)
-    VALUES (@key, @version, @item_type, @title, @title_norm, @first_creator, @year, @citekey, @calibre_uuid, @trashed, @synced_at)`);
+    INSERT OR REPLACE INTO zotero_items (key, version, item_type, title, title_norm, first_creator, year, citekey, calibre_uuid, trashed, replaces, synced_at)
+    VALUES (@key, @version, @item_type, @title, @title_norm, @first_creator, @year, @citekey, @calibre_uuid, @trashed, @replaces, @synced_at)`);
   const clearIsbns = c.data.prepare("DELETE FROM zotero_isbns WHERE key = ?");
   const addIsbn = c.data.prepare("INSERT OR IGNORE INTO zotero_isbns (isbn, key) VALUES (?, ?)");
   c.data.transaction(() => {
@@ -125,6 +126,8 @@ function storeItems(c: Corpus, items: ApiItem[]): void {
         year: Number(String(d.date ?? "").match(/\b(\d{4})\b/)?.[1]) || null,
         citekey: assignedCitekey(d), calibre_uuid: d.extra?.match(/^Calibre UUID:\s*(\S+)/im)?.[1] ?? null,
         trashed: d.deleted ? 1 : 0, synced_at: now,
+        // Merging duplicates in Zotero keeps one item and records the others it replaces.
+        replaces: JSON.stringify([d.relations?.["dc:replaces"] ?? []].flat().map((uri) => String(uri).split("/").pop()!).filter(Boolean)),
       });
       clearIsbns.run(item.key);
       for (const isbn of isbnsOf(d.ISBN)) addIsbn.run(isbn, item.key);
@@ -191,6 +194,23 @@ interface MirrorItem {
 
 export type MatchKind = "calibre_uuid" | "isbn" | "confirmed";
 
+/** The live item an item was merged into, following merges of merges; the item itself when it was not merged. */
+function survivor(c: Corpus, key: string): MirrorItem | undefined {
+  const byReplaced = c.data.prepare("SELECT i.* FROM zotero_items i, json_each(i.replaces) r WHERE r.value = ? AND i.trashed = 0");
+  const byKey = c.data.prepare("SELECT * FROM zotero_items WHERE key = ?");
+  const seen = new Set<string>();
+  for (let k = key; !seen.has(k); ) {
+    seen.add(k);
+    const merged = byReplaced.get(k) as MirrorItem | undefined;
+    if (!merged) {
+      const item = byKey.get(k) as MirrorItem | undefined;
+      return item && !item.trashed ? item : undefined;
+    }
+    k = merged.key;
+  }
+  return undefined;
+}
+
 export interface ZoteroMatch {
   match: { key: string; citekey: string | null; matched_by: MatchKind; title: string | null } | null;
   /** Title, first author, and year agree, but nothing ties the two together; a person confirms or rejects. */
@@ -217,14 +237,18 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
   const found = (i: MirrorItem, matched_by: MatchKind): ZoteroMatch =>
     ({ match: { key: i.key, citekey: i.citekey, matched_by, title: i.title }, candidates: [], duplicates: lookalikes(i.key) });
 
+  // A confirmed or UUID match survives a merge in Zotero: it moves to the item the duplicate was merged into.
   const confirmed = links.find((l) => l.status === "confirmed");
   if (confirmed) {
-    const [i] = item("key = ?", confirmed.zotero_key);
-    if (i) return found(i, "confirmed");
+    const i = survivor(c, confirmed.zotero_key);
+    if (i && !rejected.has(i.key)) return found(i, "confirmed");
   }
   if (book.uuid) {
-    const [i] = item("calibre_uuid = ?", book.uuid);
-    if (i) return found(i, "calibre_uuid");
+    const filed = c.data.prepare("SELECT key FROM zotero_items WHERE calibre_uuid = ? ORDER BY trashed, key").pluck().all(book.uuid) as string[];
+    for (const key of filed) {
+      const i = survivor(c, key);
+      if (i && !rejected.has(i.key)) return found(i, "calibre_uuid");
+    }
   }
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
   if (isbn) {

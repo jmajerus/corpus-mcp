@@ -594,6 +594,16 @@ time out at 30 s after the item was created):
   two: *Suspicious Minds* (CC's filing on 2026-10-25 made a second copy,
   J2U9WJQC, of 39NZUGQQ) and *We Want Them Infected* (UX3VGXQA, 2022, sparse,
   beside 9ANN23KL, 2023, Redhawk, ISBN 978-1-959346-03-6).
+- **Merges are followed** (data schema 10). Merging duplicates in Zotero
+  trashes the others and records `dc:replaces` on the kept item; the mirror
+  stores those keys, and a confirmed link or Calibre UUID that pointed at a
+  merged-away item moves to the kept one. The pin does not move: if the
+  kept item's key differs, it is reported as a mismatch for a person.
+  Keep the `Calibre UUID:` line in the kept item's Extra, because Zotero
+  eventually empties its trash.
+- **Key origins, for the record:** `howard2023we` is the rule's key (Better
+  BibTeX's skip words do not include "we"); `howard2022infected` came from
+  outside the rule, chosen by hand.
 - **Not yet:** quote export as child notes (stage 2, write key, a
   `Zotero-Write-Token` on every write so a timed-out write can be retried
   without a duplicate).
