@@ -587,6 +587,13 @@ time out at 30 s after the item was created):
   never a match or candidate for this one.
 - **Pinning:** automatic for matched books with no pin and no Calibre key,
   as change source `zotero`; mismatches are reported only.
+- **Duplicates:** beside a match, other items with the same title (without
+  a subtitle), first author, and year within one are listed as possible
+  duplicates on `/admin/zotero`, the dashboard, and the book page. "Not a
+  duplicate" hides one for that book (a rejected link). The first sync found
+  two: *Suspicious Minds* (CC's filing on 2026-10-25 made a second copy,
+  J2U9WJQC, of 39NZUGQQ) and *We Want Them Infected* (UX3VGXQA, 2022, sparse,
+  beside 9ANN23KL, 2023, Redhawk, ISBN 978-1-959346-03-6).
 - **Not yet:** quote export as child notes (stage 2, write key, a
   `Zotero-Write-Token` on every write so a timed-out write can be retried
   without a duplicate).

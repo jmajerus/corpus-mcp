@@ -108,7 +108,7 @@ export async function adminMetrics(c: Corpus, config: Config, version: string) {
       SELECT 'orphaned', COUNT(*) FROM quotes WHERE status = 'orphaned'`).all() as { k: string; n: number }[]).map((r) => [r.k, r.n])),
     zotero: config.zotero ? (() => {
       const z = zoteroReport(c, config.zotero);
-      return { in_zotero: z.books.calibre_uuid + z.books.isbn + z.books.confirmed, candidates: z.books.candidates, mismatches: z.mismatches.length, synced_at: z.sync.synced_at, error: z.sync.error };
+      return { in_zotero: z.books.calibre_uuid + z.books.isbn + z.books.confirmed, candidates: z.books.candidates, mismatches: z.mismatches.length, duplicates: z.duplicates.length, synced_at: z.sync.synced_at, error: z.sync.error };
     })() : null,
     disk: [disk(path.dirname(config.dbPath)), disk(config.booksRoot)],
     neighbors: await probeNeighbors(admin.neighbors),

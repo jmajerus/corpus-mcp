@@ -1086,10 +1086,16 @@ describe("zotero mirror", () => {
     // Incremental: only what changed since version 5, and the deletion log.
     items.delete("AAAA1111"); libraryVersion++; deleted.push({ key: "AAAA1111", version: libraryVersion });
     put("GGGG7777", { title: "Networks (2nd printing)", ISBN: "0-00-000000-X 9780000000002", citationKey: "author1986networks" });
+    // A second copy filed by mistake: same title without its subtitle, same first author and year.
+    put("HHHH8888", { title: "Networks: Ties and Structure", date: "1986", creators: [{ creatorType: "author", lastName: "Author" }], citationKey: "author1986networksa" });
     requests = [];
-    expect(await syncZotero(c, zconfig)).toEqual({ full: false, fetched: 1, removed: 1, version: 7, pinned: [] });
+    expect(await syncZotero(c, zconfig)).toEqual({ full: false, fetched: 2, removed: 1, version: 8, pinned: [] });
     expect(requests).toEqual(["/users/1/items/top?format=json&includeTrashed=1&since=5&limit=100&start=0", "/users/1/deleted?since=5"]);
-    expect(zoteroMatch(c, getBookRow("main:1")).match).toMatchObject({ key: "GGGG7777", matched_by: "isbn" });
+    expect(zoteroMatch(c, getBookRow("main:1"))).toMatchObject({ match: { key: "GGGG7777", matched_by: "isbn" }, duplicates: [{ key: "HHHH8888", citekey: "author1986networksa" }] });
+    expect(zoteroReport(c, zconfig).duplicates).toMatchObject([{ book_id: "main:1", zotero_key: "GGGG7777", duplicates: [{ key: "HHHH8888" }] }]);
+    // Not a duplicate (another edition, say): hidden for this book.
+    linkZotero(c, { book_id: "main:1", key: "HHHH8888", action: "reject" }, "me");
+    expect(zoteroReport(c, zconfig).duplicates).toEqual([]);
 
     // A person settles the candidate: rejecting hides it; confirming links and pins.
     expect(linkZotero(c, { book_id: "main:2", key: "CCCC3333", action: "reject" }, "me").candidates).toEqual([]);

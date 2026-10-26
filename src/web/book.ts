@@ -51,7 +51,9 @@ function zoteroRow() {
   if (!z) return '<span class="note">not synced</span>';
   const how = { calibre_uuid: "by its Calibre UUID", isbn: "by ISBN", confirmed: "confirmed by a person" };
   if (z.match) return '<a href="' + esc(z.link) + '">' + esc(z.match.key) + "</a>" + (z.match.citekey ? " · " + esc(z.match.citekey) : ' · <span class="note">no citekey</span>') +
-    ' <span class="note">' + esc(how[z.match.matched_by] || z.match.matched_by) + "</span>";
+    ' <span class="note">' + esc(how[z.match.matched_by] || z.match.matched_by) + "</span>" +
+    (z.duplicates.length ? '<div><span class="badge warn"><span class="sign" aria-hidden="true">!</span>Also in Zotero</span> ' +
+      z.duplicates.map((x) => esc(x.key) + (x.citekey ? " (" + esc(x.citekey) + ")" : "")).join(", ") + ' <a href="/admin/zotero">review</a></div>' : "");
   if (!z.candidates.length) return '<span class="note">not found</span>';
   const dis = canWrite ? "" : " disabled";
   return z.candidates.map((x) => '<div>Maybe <a href="' + esc(x.link) + '">' + esc(x.key) + "</a> " + esc(x.title || "") + (x.year ? " (" + x.year + ")" : "") + (x.citekey ? " · " + esc(x.citekey) : "") +

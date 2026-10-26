@@ -189,6 +189,8 @@ last library version, with long timeouts, retries, and Zotero's `Backoff` and
 - **Pinning:** a matched item's citekey (Zotero's `citationKey` field, or a
   `Citation Key:` line in Extra) is pinned to a book that has no key yet.
   A key that differs from a pinned or Calibre key is reported, never changed.
+- **Duplicates:** other items with a matched book's title (ignoring a
+  subtitle), first author, and year are listed as possible second copies.
 - **Citing:** `cite_passage` and `cite_quote` add `zotero` (the matched item)
   and warn before filing a book that is already there.
 - **Setup:** make a key with read-only library access at

@@ -195,6 +195,8 @@ export interface ZoteroMatch {
   match: { key: string; citekey: string | null; matched_by: MatchKind; title: string | null } | null;
   /** Title, first author, and year agree, but nothing ties the two together; a person confirms or rejects. */
   candidates: { key: string; citekey: string | null; title: string | null; year: number | null }[];
+  /** With a match: other items with the same title and first author, perhaps a second copy in Zotero. */
+  duplicates: { key: string; citekey: string | null; title: string | null; year: number | null }[];
 }
 
 /** Where a Calibre book is in the Zotero mirror: by the Calibre UUID filing wrote to Extra, its ISBN, or a confirmed link. */
@@ -206,8 +208,14 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
   const item = (sql: string, ...args: unknown[]) =>
     (c.data.prepare(`SELECT * FROM zotero_items WHERE ${live} AND ${sql}`).all(...args) as MirrorItem[])
       .filter((i) => !rejected.has(i.key) && (!i.calibre_uuid || i.calibre_uuid === book.uuid));
+  const sorts = JSON.parse(book.author_sorts) as string[];
+  const family = familyName((sorts[0] ?? "").split(",")[0]);
+  // Same title (without a subtitle), first author, and year within one: a candidate, or beside a match, a duplicate.
+  const lookalikes = (except?: string) => item("title_norm = ?", normalizedTitle(book.title))
+    .filter((i) => i.key !== except && (!family || i.first_creator === family) && (!book.year || !i.year || Math.abs(i.year - book.year) <= 1))
+    .map((i) => ({ key: i.key, citekey: i.citekey, title: i.title, year: i.year }));
   const found = (i: MirrorItem, matched_by: MatchKind): ZoteroMatch =>
-    ({ match: { key: i.key, citekey: i.citekey, matched_by, title: i.title }, candidates: [] });
+    ({ match: { key: i.key, citekey: i.citekey, matched_by, title: i.title }, candidates: [], duplicates: lookalikes(i.key) });
 
   const confirmed = links.find((l) => l.status === "confirmed");
   if (confirmed) {
@@ -224,12 +232,7 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
     // Only an ISBN that names one item; two copies of the same book are for a person to sort out.
     if (byIsbn.length === 1) return found(byIsbn[0], "isbn");
   }
-  const sorts = JSON.parse(book.author_sorts) as string[];
-  const family = familyName((sorts[0] ?? "").split(",")[0]);
-  const candidates = item("title_norm = ?", normalizedTitle(book.title))
-    .filter((i) => (!family || i.first_creator === family) && (!book.year || !i.year || Math.abs(i.year - book.year) <= 1))
-    .map((i) => ({ key: i.key, citekey: i.citekey, title: i.title, year: i.year }));
-  return { match: null, candidates };
+  return { match: null, candidates: lookalikes(), duplicates: [] };
 }
 
 /**
@@ -280,12 +283,14 @@ export function zoteroReport(c: Corpus, config: ZoteroConfig | undefined) {
   const candidates = [];
   const mismatches = [];
   const noCitekey = [];
+  const duplicates = [];
   for (const book of books) {
     const m = zoteroMatch(c, book);
     if (m.match) {
       counts[m.match.matched_by]++;
       const pinned = book.uuid ? pins.get(book.uuid) : undefined;
       const ref = { book_id: book.id, title: book.title, zotero_key: m.match.key, matched_by: m.match.matched_by };
+      if (m.duplicates.length) duplicates.push({ ...ref, citekey: m.match.citekey, duplicates: m.duplicates });
       if (!m.match.citekey) noCitekey.push(ref);
       else if (pinned && pinned.toLowerCase() !== m.match.citekey.toLowerCase()) mismatches.push({ ...ref, pinned, zotero_citekey: m.match.citekey });
       else if (book.calibre_citekey && book.calibre_citekey !== m.match.citekey.toLowerCase()) mismatches.push({ ...ref, calibre: book.calibre_citekey, zotero_citekey: m.match.citekey });
@@ -303,7 +308,7 @@ export function zoteroReport(c: Corpus, config: ZoteroConfig | undefined) {
       error: meta(c, "zotero_error"), every_minutes: config?.intervalMinutes ?? null, items: items.items, trashed: items.trashed ?? 0,
     },
     books: { total: books.length, ...counts },
-    candidates, mismatches, no_citekey: noCitekey,
+    candidates, mismatches, duplicates, no_citekey: noCitekey,
   };
 }
 
