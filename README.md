@@ -27,7 +27,8 @@ books that live in Calibre.
 | `render_page` | Returns a PNG of a PDF page, for figures, tables, and equations. |
 | `cite_passage` | A book's citation as a CSL JSON item, with a CSL locator for a page range, the reading position, and filing data: a BibTeX entry, a valid ISBN, or printed ISBN candidates (see *Citations*). |
 | `pin_citekey` | Records the citekey a book was given elsewhere, such as in the reference manager it was filed in. |
-| `get_tag_vocabulary` | The vocabulary's terms as Calibre tags, the controlled vocabulary for categories. |
+| `get_tag_vocabulary` | The vocabulary's terms as Calibre tags, the controlled vocabulary for categories, with scope notes and, for corpus-mcp's own terms, their status. |
+| `add_provisional_term` | Coins a term during research, usable for tagging at once and marked provisional until a person reviews it. |
 | `tagging_worklist` | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Proposes 1–3 vocabulary tags for a book, for a person to review. |
 | `save_quote` | Saves a passage as a quote after checking it against the book; the book's exact wording is stored. |
@@ -70,15 +71,35 @@ The vocabulary file (`corpus-vocabulary/1`) is a flat list of terms:
 - An id is its parent's id, `.`, and one segment of lowercase letters, digits,
   and single hyphens. A label is the term's own title, without `.` or `›`.
 - `assignable: false` marks a term that only groups others.
+- Optional per term: `scopeNote`, what belongs under it and what doesn't.
 - A retired term with one replacement is re-tagged by the tags job; one that
   was split or dropped waits for a person.
 - The server reads `/var/lib/corpus-mcp/vocabulary.json` (`CORPUS_VOCABULARY`)
   and reloads it when it changes; an invalid file is reported and the last good
-  one stays in use. `npm run deploy -- --vocabulary=<file>` validates and
-  installs one.
+  one stays in use.
+- The owner pushes it to `POST /api/intake/vocabulary` with a Cloudflare Access
+  service token (`CORPUS_VOCABULARY_PUSH_CLIENT_ID`), through an Access
+  application that covers only that path (`CORPUS_VOCABULARY_PUSH_AUD`); the
+  token unlocks nothing else. Answers: 200 with `version` and `terms`, plus
+  `unchanged: true` when that version is already installed; 422 with
+  `problems`, a list of strings, when invalid. `npm run deploy --
+  --vocabulary=<file>` still validates and installs one by hand.
 - `vocabulary_report` (and the categories page) lists retired terms still in
   Calibre, tags shaped like terms that the vocabulary lacks, and books tagged
-  only at a term with narrower ones. corpus-mcp never edits the vocabulary.
+  only at a term with narrower ones.
+
+corpus-mcp never edits a vocabulary another project supplies. Its own terms,
+coined during research, live in the **taxonomy overlay** (`src/taxonomy/`),
+merged over the supplied vocabulary for every tool. An agent adds one with
+`add_provisional_term`; a person confirms, edits, moves, or retires it at
+`/admin/taxonomy`. Overlay terms have opaque, stable ids, a scope note, and a
+history of every change. A moved or retired term's old path is retired in the
+merged vocabulary, so the tags job re-tags its books. When the supplied
+vocabulary gains a term at the same path, it takes over, the overlay term is
+marked superseded, and books keep the tag; so to adopt an overlay term, the
+owner creates it with the same slug under the same parent. An overlay term
+whose parent disappears is left out and reported, never fatal. PLAN.md
+(*Living taxonomy*) has the plan this is the first stage of.
 
 ## Admin
 

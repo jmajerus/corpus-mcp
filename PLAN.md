@@ -691,6 +691,172 @@ zotero-mcp's.
   **Sync** on the MCP Server object, then refresh the Claude connector and
   start a new conversation.
 
+## Living taxonomy (proposed 2026-10-26)
+
+Not built; a direction to come back to. The taxonomy will keep growing:
+missing subcategories now, new fields of knowledge later.
+
+**Where the vocabulary comes from today.** CC's `export-taxonomy.mjs` builds
+it from CC's live category registry (`taxonomySnapshot.js`), so a
+subcategory can exist before any puzzle uses it. But:
+
+- Domains are code (`DOMAINS` in `puzzles/domains.js`): a new field of
+  knowledge needs a CC change and deploy.
+- Renames aren't recorded: the export writes `retired: []`, "kept by hand
+  until Concept Clusters records subcategory id changes", so the automatic
+  re-tag on retire never gets its input.
+- `trivia` and `vocabulary` sit in the tree as top-level terms. In CC they
+  are deliberately domainless browse homes; puzzle type is CC's separate
+  `puzzleKind` field (topic-based | vocabulary-context | trivia-quiz).
+- The export reads only *published* category documents (LAN Postgres), and
+  publishing is immediately live for players. CC has no provisional state,
+  so a subcategory coined during research reaches corpus-mcp only by
+  appearing on the public site.
+
+**The workflow this should serve: research before authoring.**
+
+1. Gather: for a topic, pull books, passages, and quotes from corpus-mcp and
+   papers and notes from zotero-mcp.
+2. Shape: the material suggests structure, sometimes a subcategory that
+   doesn't exist yet.
+3. Author: `plan_puzzle_references` and the draft, built on sources already
+   in hand.
+
+Step 2 today is a detour: define the subcategory in CC, run the export,
+deploy corpus-mcp (`CORPUS_VOCABULARY_SOURCE`), come back. The term id is
+the key that joins every stage: the Calibre tag on books, the tag on saved
+quotes, the natural Zotero tag or collection for the topic, and CC's
+subcategory. A key every stage uses shouldn't be owned by the last stage
+and reach the others by export.
+
+**Destination: a master taxonomy server.** Fields of knowledge maintained
+on their own terms, in a service of its own. CC and corpus-mcp both depend
+on it and neither depends on the other, which dissolves the conflict
+between the dependency direction (CC depends on corpus-mcp, never the
+reverse) and "corpus-mcp never edits the vocabulary": that conflict exists
+only while one of the two holds the taxonomy. Stages 1 and 2 are stepping
+stones, and everything they create carries over. Settled with CC's agent on
+2026-10-26 (it read CC's code; nothing changed on either side yet).
+
+**Stage 1: CC pushes its vocabulary; corpus-mcp keeps an overlay.**
+
+Contract agreed with CC's agent on 2026-10-26; both sides wait for the
+user's go before building.
+
+- *Push, not pull.* corpus-mcp fetching from CC (Postgres or an endpoint)
+  would make corpus-mcp depend on CC at runtime. Instead corpus-mcp offers
+  an intake, `POST /api/intake/vocabulary` (body `corpus-vocabulary/1`, CC's
+  published registry): validate with the existing rules, install, and
+  `VocabularySource` picks it up within 5 s. 200 with `{ version, terms }`;
+  200 with `unchanged: true` when the version hash matches; 422 with
+  `problems`, the same string array CC's `taxonomyVocabulary` throws, so CC
+  logs it unchanged. An invalid file is refused and the last good one
+  stays. No corpus-mcp redeploy and no separate export step.
+- *When CC pushes.* From CC's published-replica drain loop
+  (`modules/publishedReplicaSchedule.js`, every 15 s), not from the publish
+  request: stdio MCP can publish while the LAN server is down, and the loop
+  catches those up when it starts. After each drain CC rebuilds the
+  vocabulary and pushes only when the version differs from the last one
+  corpus-mcp accepted; a failed push retries next tick. Worst case about
+  20 s from publish to corpus-mcp. A manual `authoring:taxonomy:push` stays
+  for catch-up and debugging.
+- *Auth: an Access service token through the tunnel.* SSH from a
+  background loop was rejected: it needs a key on the server, blocks, and
+  gives the authoring server a shell on corpus-mcp. CC sends
+  `CF-Access-Client-Id`/`-Secret` from its `.env` and skips the push
+  (logged, not fatal) when they are unset. corpus-mcp side:
+  `verifyAccessToken` today rejects a token with no `sub`, and service
+  token JWTs carry the client id in `common_name` with `sub` empty. Accept
+  a service identity by `common_name`, and only on the intake: the service
+  token must not unlock the other admin writes
+  (`CORPUS_VOCABULARY_PUSH_CLIENT_ID`).
+- *Cloudflare side (set up 2026-10-26).* Service token
+  `cc-vocabulary-push` (id `325a5b0a-33cb-40d7-8297-f9a87ae48056`, expires
+  2027-10-26; credentials in CC's `.env` as `CF_ACCESS_CLIENT_ID`/`_SECRET`,
+  client id in corpus-mcp's `.env`). A separate Access application,
+  "corpus-mcp vocabulary intake" (`c5b830b1-10c7-4356-9dc7-9dd4dfa17c85`),
+  covers only `corpus-mcp.majerus.us/api/intake/vocabulary`, with one
+  Service Auth policy for that token, so the token passes Access nowhere
+  else. Its own audience tag (`81975844…77683`) means corpus-mcp accepts a
+  second audience on the intake only (`CORPUS_VOCABULARY_PUSH_AUD`). The
+  intake isn't under `/api/vocabulary` because Access paths match by
+  prefix, and the admin pages fetch `/api/vocabulary` and
+  `/api/vocabulary/report` from the browser. Tested: with the token the
+  intake reaches the origin; without it, and on any other path with it,
+  Access answers 401.
+- *The overlay.* corpus-mcp's own terms, for research: coined during
+  research, usable at once for tagging books and quotes, nothing published
+  to players. The vocabulary served to tools is CC's push plus the overlay.
+  When CC publishes a term with the same path, CC's term wins and the
+  overlay entry is marked superseded, so books stay tagged. Agents read the
+  overlay over MCP: `status` and `scopeNote` on `get_tag_vocabulary`, so a
+  research-then-author agent with both servers connected can reuse a
+  provisional term's slug in `update_category`, with no CC code involved.
+  If CC code ever reads it, that is advisory only: an unreachable
+  corpus-mcp never blocks a CC write. Finer terms and
+  fields CC doesn't need can live there without CC maintaining them. The
+  ownership rule gains one exception: corpus-mcp edits its own overlay,
+  never a vocabulary another project supplies.
+- *Built to the master's model, so nothing migrates later:*
+  - its own module (`src/taxonomy/`) and storage, not tangled with books
+    or tags, so it can lift out as the server's seed;
+  - stable opaque ids from day one, with the path as alias;
+  - per term: scope note, alternative labels, status
+    (provisional/confirmed/superseded);
+  - every change logged as an event (added, renamed, moved, merged,
+    retired), which becomes the master's changelog;
+  - consumers stay unaware of the source: `VocabularySource` takes a
+    validated vocabulary from whoever supplies it.
+
+**Stage 2: CC maps its categories to terms.** An optional master-term id on
+CC's category and subcategory documents (CC's proposal). CC slugs stay as
+they are; they are in player URLs, catalogue ids, and share links. A move
+inside CC is CC's business; a move in the master only updates CC's
+mapping. CC's DOMAINS stay CC's own navigation layer, mapped to terms
+rather than replaced. CC's cost (its estimate, moderate): a schema field,
+create/update/get/list_category, a structured field in the category editor
+(no raw-JSON editors), validation, a hosted worker deploy, D1 replication.
+Can come any time before stage 3.
+
+**Stage 3: the master taxonomy server.** Seeded from the overlay and CC's
+taxonomy; CC's export (`export-taxonomy.mjs`, `taxonomySnapshot.js`)
+retires. CC's authoring, including its remote MCP, runs on the LAN behind
+Access, so it can read a master server on the LAN directly. Anything on
+CC's public site or in CI still needs a snapshot CC checks in. Design
+points:
+
+| Area | Decision |
+|---|---|
+| Ids | Opaque stable ids, the path a derived alias Calibre tags keep using. A path id breaks every consumer's tags when a term moves. |
+| Granularity | Each consumer picks its level; deeper tags roll up to the ancestor. "Depth N" means N, or the leaf if shallower; some consumers want a hand-picked set of terms (a profile). CC shows only terms with content. |
+| Changes | A published changelog: added, renamed, moved, split, merged, retired, since version X. Generalizes today's retired-with-one-replacement re-tag. |
+| Terms | Scope note, alternative labels, optional links to Wikidata or LCSH. Seed scope notes from the Scope column of the domains table in CC's `docs/TAXONOMY-ROADMAP.md`, not CC's `info` texts (player-facing copy CC keeps). Roughly SKOS, which also gives an export format. |
+| Top-level terms | The roadmap's admission test, first condition (a real institutional home) as is; its second ("ten puzzles…") is about CC's content, so the master needs its own, e.g. corpus holdings. |
+| Proposals | Consumers propose terms; the owner decides. Fits beside `/admin/proposals`. `vocabulary_report` and tag proposals that found no term are the editor's evidence. |
+| Puzzle kinds | Leave `trivia` and `vocabulary` out of the subject tree; CC keeps them as local categories with no mapping. Whether they leave CC's navigation is a separate decision. |
+
+**Cautions from CC's roadmap.** Its failure mode: "defining the taxonomy
+first and growing content into it produces authoring to fill headings."
+Terms coined during research are content-driven and fine; filling in
+fields ahead of content is not, and is ongoing classification upkeep for
+the editor even when players never see empty terms.
+
+**Topic dossier.** The research phase's working set: a (possibly
+provisional) term, the books and Zotero items gathered under it, and the
+quotes. Since every system shares the term id, it may need no new storage,
+only a view across them filtered by that id, read by the authoring server
+when planning references.
+
+**Applied taxonomy.** What corpus-mcp alone can publish: each term with its
+book counts, pinned citekeys, and tagged quotes, plus the health feed above
+for the taxonomy's owner. First consumer: CC's reference planning ("which
+books I own can back a puzzle in Political Behavior?").
+
+Related: the manuscript toolkit plan
+(`struggle-against-dehumanization/notes/manuscript-toolkit-plan.md`) would
+be another consumer, using these terms for what a passage is *about*
+alongside IASP for what it *does*.
+
 ## Known issues
 
 - **CT 115 ownership.** CT 115 runs as a privileged container, but its root

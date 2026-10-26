@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
-import { accessIdentity } from "./access.js";
+import { accessIdentity, vocabularyPushIdentity } from "./access.js";
 import { adminMetrics } from "./admin.js";
 import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
 import { type Config, loadConfig } from "./config.js";
@@ -20,11 +20,14 @@ import { DASHBOARD_HTML } from "./web/dashboard.js";
 import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
 import { PROPOSALS_HTML } from "./web/proposals.js";
 import { QUOTE_HTML, QUOTES_HTML, READER_HTML } from "./web/quotes.js";
+import { TAXONOMY_HTML } from "./web/taxonomy.js";
 import { ZOTERO_HTML } from "./web/zotero.js";
 import {
   getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport,
 } from "./tagging.js";
 import { VocabularySource } from "./vocabulary.js";
+import { addTerm, changeTerm, installVocabulary, taxonomyOverview, type TermAction } from "./taxonomy/api.js";
+import { Taxonomy } from "./taxonomy/taxonomy.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
@@ -127,6 +130,19 @@ export function createServer(c: Corpus): McpServer {
     inputSchema: {},
     annotations: { title: "Vocabulary report", ...readOnly },
   }, () => run(() => json(vocabularyReport(c))));
+
+  server.registerTool("add_provisional_term", {
+    title: "Add a provisional term",
+    description: "Coin a term for the vocabulary during research, when no existing term fits what the sources are about. It is usable at once with propose_tags (and as a tag filter), marked provisional until a person reviews it on /admin/taxonomy. It lives in corpus-mcp's overlay; if the vocabulary's owner later publishes a term at the same path, theirs takes over and books keep the tag. Prefer an existing term: check get_tag_vocabulary first.",
+    inputSchema: {
+      parent: z.string().describe('The term it goes under, as an id or title path, e.g. "social-sciences.psychology" or "Social Sciences › Psychology"'),
+      label: z.string().min(1).max(80).describe('Its title, e.g. "Moral Injury"'),
+      scope_note: z.string().min(1).max(600).describe("What belongs under the term and what doesn't, in a sentence or two"),
+      slug: z.string().optional().describe("Its id segment (lowercase letters, digits, single hyphens); made from the label when omitted"),
+      alt_labels: z.array(z.string()).optional().describe("Other names for the same subject"),
+    },
+    annotations: { title: "Add a provisional term", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, (args, extra) => run(() => json(addTerm(c, args, accessEmail(extra) ?? "agent"))));
 
   server.registerTool("tagging_worklist", {
     title: "Get books to tag",
@@ -299,14 +315,15 @@ export function createServer(c: Corpus): McpServer {
 function openCorpus(config: Config): Corpus {
   const db = openDatabase(config.dbPath, { readonly: true });
   const data = openDataStore(config.dataDbPath);
-  // Each new vocabulary rewrites stored proposals into its terms (titles to ids, retired ids to their replacement).
-  const source = new VocabularySource(config.vocabularyPath, (vocabulary) => {
+  const source = new VocabularySource(config.vocabularyPath);
+  // Each new merged vocabulary rewrites stored proposals into its terms (titles to ids, retired ids to their replacement).
+  const taxonomy = new Taxonomy(data, source, (vocabulary) => {
     const normalized = normalizeProposalTags({ db, data, booksRoot: config.booksRoot, vocabulary });
     if (normalized) console.error(`rewrote ${normalized} tag proposal(s) into the vocabulary's terms`);
   });
   return {
-    db, data, booksRoot: config.booksRoot, citekeyPreset: config.citekeyPreset, vocabularySource: source,
-    get vocabulary() { return source.current(); },
+    db, data, booksRoot: config.booksRoot, citekeyPreset: config.citekeyPreset, vocabularySource: source, taxonomy,
+    get vocabulary() { return taxonomy.current(); },
   };
 }
 
@@ -370,11 +387,20 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     const pages: Record<string, string> = {
       "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
-      "/admin/quotes": QUOTES_HTML, "/admin/zotero": ZOTERO_HTML,
+      "/admin/quotes": QUOTES_HTML, "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML,
     };
+    const termPath = path.match(/^\/api\/taxonomy\/terms(?:\/([^/]+))?$/);
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages)?$/);
     const quotePath = path.match(/^\/api\/quotes\/(\d+)(\/delete)?$/);
-    if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
+    if (req.method === "POST" && path === "/api/intake/vocabulary") {
+      // The vocabulary's owner pushes it here with its own service token, which unlocks nothing else.
+      const result = await vocabularyPushIdentity(req, admin.access, web.options.accessKeys);
+      if ("error" in result) return sendJson(res, result.status, { error: result.error });
+      if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return sendJson(res, 400, { error: "Send JSON." });
+      const installed = installVocabulary(c, await readJson(req, 2 * 1024 * 1024), result.identity.subject);
+      sendJson(res, installed.status, installed.body);
+    }
+    else if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+$/.test(path)) html(BOOK_HTML);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+\/read$/.test(path)) html(READER_HTML);
@@ -478,6 +504,21 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const result = await accessIdentity(req, admin.access, web.options.accessKeys);
       sendJson(res, 200, "error" in result ? { can_write: false, reason: result.error } : { can_write: true, identity: result.identity });
     } else if (req.method === "GET" && path === "/api/vocabulary") sendJson(res, 200, getTagVocabulary(c));
+    else if (req.method === "GET" && path === "/api/taxonomy") sendJson(res, 200, taxonomyOverview(c));
+    else if (req.method === "POST" && termPath) {
+      const by = await writer();
+      if (by === null) return;
+      const body = (await readJson(req)) as Record<string, unknown>;
+      const text = (v: unknown) => (typeof v === "string" ? v : undefined);
+      const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
+      if (!termPath[1]) {
+        if (!text(body.label)) throw new ToolError("Send label (and parent, scope_note).");
+        sendJson(res, 200, addTerm(c, {
+          parent: text(body.parent) ?? null, label: text(body.label)!, slug: text(body.slug), scope_note: text(body.scope_note),
+          alt_labels: list(body.alt_labels), status: body.status === "confirmed" ? "confirmed" : "provisional",
+        }, by));
+      } else sendJson(res, 200, changeTerm(c, decodeURIComponent(termPath[1]), body as unknown as TermAction, by));
+    }
     else if (req.method === "GET" && path === "/api/tag-proposals") {
       const number = (name: string) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined);
       sendJson(res, 200, listProposals(c, { status: url.searchParams.get("status") ?? undefined, limit: number("limit"), offset: number("offset") }));

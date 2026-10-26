@@ -82,7 +82,7 @@ it("serves the tools over Streamable HTTP", async () => {
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "cite_passage", "cite_quote", "corpus_status", "delete_quote", "get_book_outline", "get_quote", "get_tag_vocabulary", "list_books", "list_shelves",
+    "add_provisional_term", "cite_passage", "cite_quote", "corpus_status", "delete_quote", "get_book_outline", "get_quote", "get_tag_vocabulary", "list_books", "list_shelves",
     "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "save_quote", "search_corpus", "search_quotes", "tagging_worklist", "update_quote", "vocabulary_report",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });

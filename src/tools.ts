@@ -9,6 +9,7 @@ import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
 import type { Vocabulary, VocabularySource } from "./vocabulary.js";
+import type { Taxonomy } from "./taxonomy/taxonomy.js";
 
 export { validIsbn };
 
@@ -26,6 +27,8 @@ export interface Corpus {
   db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary;
   /** Where the vocabulary comes from, when it is a file (the server); tests pass a Vocabulary alone. */
   vocabularySource?: VocabularySource;
+  /** The supplied vocabulary with corpus-mcp's overlay merged over it (the server); `vocabulary` is its current merge. */
+  taxonomy?: Taxonomy;
   /** The citekey preset the index was built with (default "author-year-word"). */
   citekeyPreset?: PresetName;
 }

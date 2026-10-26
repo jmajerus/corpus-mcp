@@ -7,7 +7,8 @@ import fs from "node:fs";
  * and they hold no commas (Calibre's tag separator). Each term carries its own title as a label; lookups
  * accept an id, a title path, or a unique bare name.
  *
- * corpus-mcp reads the vocabulary and never edits it.
+ * corpus-mcp never edits a vocabulary another project supplies. Its own terms, coined during research, live in
+ * the taxonomy overlay (src/taxonomy/), which is merged over the supplied one.
  */
 
 export const VOCABULARY_FORMAT = "corpus-vocabulary/1";
@@ -18,6 +19,10 @@ export interface VocabularyTerm {
   parent?: string | null;
   /** false for a term that only groups others; books are not tagged with it. */
   assignable?: boolean;
+  /** What belongs under the term and what doesn't. */
+  scopeNote?: string;
+  /** Set on overlay terms only: provisional (coined during research) or confirmed. */
+  status?: "provisional" | "confirmed";
 }
 
 export interface RetiredTerm {
@@ -43,6 +48,8 @@ export interface VocabularyTag {
   name: string;
   parent: string | null;
   assignable: boolean;
+  scopeNote?: string;
+  status?: "provisional" | "confirmed";
 }
 
 const SEGMENT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -75,6 +82,7 @@ export function vocabularyProblems(file: VocabularyFile): string[] {
     if ((t.parent ?? null) !== expectedParent) problems.push(`"${t.id}": parent is "${t.parent ?? ""}", but the id says "${expectedParent ?? ""}"`);
     else if (expectedParent && !ids.has(expectedParent)) problems.push(`"${t.id}": parent "${expectedParent}" is not a term`);
     if (!t.label?.trim()) problems.push(`"${t.id}": no label`);
+    if (t.status !== undefined && t.status !== "provisional" && t.status !== "confirmed") problems.push(`"${t.id}": status is "${String(t.status)}", expected provisional or confirmed`);
     else if (/[.›]/.test(t.label)) problems.push(`"${t.id}": the label "${t.label}" contains "." or "›"`);
   }
   for (const r of file.retired ?? []) {
@@ -92,6 +100,8 @@ export class Vocabulary {
   readonly terms: VocabularyTag[];
   readonly version: string | null;
   readonly generatedAt: string | null;
+  /** The file the vocabulary was built from, for merging the overlay over it. */
+  readonly file: VocabularyFile;
   private readonly byId: Map<string, VocabularyTag>;
   private readonly byTitlePath: Map<string, VocabularyTag>;
   /** Each title (loosely compared) to its id segment, for translating title segments in a filter. */
@@ -101,6 +111,7 @@ export class Vocabulary {
   constructor(file: VocabularyFile) {
     const problems = vocabularyProblems(file);
     if (problems.length) throw new Error(`Invalid vocabulary: ${problems.slice(0, 10).join("; ")}${problems.length > 10 ? ` (and ${problems.length - 10} more)` : ""}`);
+    this.file = file;
     this.version = file.version ?? null;
     this.generatedAt = file.generatedAt ?? null;
     const raw = new Map(file.terms.map((t) => [t.id, t]));
@@ -109,7 +120,10 @@ export class Vocabulary {
       return t.parent ? `${path(t.parent)} › ${t.label.trim()}` : t.label.trim();
     };
     this.terms = file.terms
-      .map((t) => ({ tag: t.id, label: path(t.id), name: t.label.trim(), parent: t.parent ?? null, assignable: t.assignable !== false }))
+      .map((t) => ({
+        tag: t.id, label: path(t.id), name: t.label.trim(), parent: t.parent ?? null, assignable: t.assignable !== false,
+        ...(t.scopeNote?.trim() ? { scopeNote: t.scopeNote.trim() } : {}), ...(t.status ? { status: t.status } : {}),
+      }))
       .sort((a, b) => a.tag.localeCompare(b.tag));
     this.tags = this.terms.filter((t) => t.assignable);
     this.byId = new Map(this.terms.map((t) => [t.tag, t]));
@@ -193,6 +207,22 @@ export class VocabularySource {
   current(): Vocabulary {
     if (Date.now() - this.checkedAt >= this.checkEveryMs) this.refresh();
     return this.vocabulary;
+  }
+
+  /**
+   * Installs a vocabulary sent to the intake: validated first, then written beside the file and renamed
+   * over it, so a reader never sees half a file. An invalid one changes nothing and returns its problems.
+   */
+  install(file: VocabularyFile): { problems: string[] } | { vocabulary: Vocabulary; unchanged: boolean } {
+    const problems = vocabularyProblems(file);
+    if (problems.length) return { problems };
+    const current = this.current();
+    if (file.version && file.version === current.version && !this.error) return { vocabulary: current, unchanged: true };
+    const temp = `${this.file}.intake-${process.pid}`;
+    fs.writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`);
+    fs.renameSync(temp, this.file);
+    this.refresh();
+    return { vocabulary: this.vocabulary, unchanged: false };
   }
 
   private refresh(): void {

@@ -1,4 +1,5 @@
 import { recordChanges } from "./data.js";
+import { overlaySummary } from "./taxonomy/api.js";
 import type { BookRow, Corpus } from "./tools.js";
 import { ToolError, getBook, shelvesByBook } from "./tools.js";
 
@@ -45,9 +46,9 @@ export function getTagVocabulary(c: Corpus, args: VocabularyArgs = {}) {
   const under = args.under ? c.vocabulary.toSlugPath(args.under).toLowerCase() : undefined;
   const tags = c.vocabulary.tags
     .filter((t) => !under || t.tag === under || t.tag.startsWith(`${under}.`))
-    .map((t) => ({ tag: t.tag, label: t.label }));
+    .map((t) => ({ tag: t.tag, label: t.label, ...(t.scopeNote ? { scopeNote: t.scopeNote } : {}), ...(t.status ? { status: t.status } : {}) }));
   return {
-    note: "The vocabulary's terms as Calibre tags: ids nested with \".\" (\"parent.child\"), with their title paths in label. propose_tags takes either form. Propose the most specific tag that fits; a broader tag is fine when no narrower one does.",
+    note: "The vocabulary's terms as Calibre tags: ids nested with \".\" (\"parent.child\"), with their title paths in label. propose_tags takes either form. Propose the most specific tag that fits; a broader tag is fine when no narrower one does. scopeNote says what belongs under a term. A term with status is corpus-mcp's own, coined during research: provisional (not yet reviewed) or confirmed; when the vocabulary's owner publishes a term at the same path, theirs takes over. To make one a subcategory there, reuse its slug.",
     version: c.vocabulary.version,
     count: tags.length,
     tags,
@@ -321,7 +322,7 @@ const TERM_LIKE = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/;
  * about it: retired terms still in use (re-tagged automatically when they have one replacement, else
  * for a person), tags shaped like terms that the vocabulary does not have, and books tagged only at a
  * term that has narrower ones, grouped by term. Many books stopping at one term suggests the taxonomy
- * needs a narrower term there; the vocabulary's owner decides, corpus-mcp never edits it.
+ * needs a narrower term there; its owner decides, and corpus-mcp never edits a supplied vocabulary (its own terms are the overlay).
  */
 export function vocabularyReport(c: Corpus) {
   const v = c.vocabulary;
@@ -357,6 +358,7 @@ export function vocabularyReport(c: Corpus) {
     retired_in_use: byCount(retired),
     unknown_terms: byCount(unknown),
     tagged_only_broadly: byCount(broad),
-    note: "retired_in_use with action \"automatic\" is fixed by the tags job; \"review\" needs a person to choose. unknown_terms are Calibre tags shaped like vocabulary ids that it does not have. tagged_only_broadly lists books tagged at a term with narrower terms below it, most first: re-tagging candidates, and a hint where the taxonomy may need a new term.",
+    overlay: overlaySummary(c),
+    note: "retired_in_use with action \"automatic\" is fixed by the tags job; \"review\" needs a person to choose. unknown_terms are Calibre tags shaped like vocabulary ids that it does not have. tagged_only_broadly lists books tagged at a term with narrower terms below it, most first: re-tagging candidates, and a hint where the taxonomy may need a new term (add_provisional_term). overlay lists corpus-mcp's own terms: provisional ones await review on /admin/taxonomy, superseded ones were taken over by the supplied vocabulary, and orphans are left out because their parent is gone.",
   };
 }

@@ -26,7 +26,8 @@ const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source
   --vocabulary[=file]
                   validate the tag vocabulary (default CORPUS_VOCABULARY_SOURCE) and install it as
                   /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
-                  A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set.
+                  A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set, unless the
+                  intake is configured (CORPUS_VOCABULARY_PUSH_CLIENT_ID): then the owner pushes it.
   --zotero        copy CORPUS_ZOTERO_LIBRARY, CORPUS_ZOTERO_API_KEY, and CORPUS_ZOTERO_INTERVAL_MINUTES
                   from .env into the server's /etc/corpus-mcp/env (mode 0640) and restart it;
                   an empty CORPUS_ZOTERO_API_KEY turns the mirror off
@@ -172,10 +173,17 @@ sleep 2
 . "$f"; curl -sf "http://127.0.0.1:\${CORPUS_PORT:-8000}/api/zotero" | head -c 300; echo`);
 }
 
+/** The vocabulary intake's service token (client id, Access audience) from this machine's .env, set on the server when given. */
+function intakeSettings() {
+  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_VOCABULARY_PUSH_AUD"].filter((name) => process.env[name])
+    .map((name) => `sed -i '/^${name}=/d' /etc/corpus-mcp/env && echo ${shellQuote(`${name}=${process.env[name]}`)} >> /etc/corpus-mcp/env\n`).join("");
+}
+
 async function deploy({ skipTests }) {
   execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
   if (!skipTests) execFileSync("npm", ["test"], { cwd: root, stdio: "inherit" });
-  if (process.env.CORPUS_VOCABULARY_SOURCE) await pushVocabulary(process.env.CORPUS_VOCABULARY_SOURCE);
+  // Once the vocabulary's owner pushes it to the intake, a local copy could be older than what it pushed.
+  if (process.env.CORPUS_VOCABULARY_SOURCE && !process.env.CORPUS_VOCABULARY_PUSH_CLIENT_ID) await pushVocabulary(process.env.CORPUS_VOCABULARY_SOURCE);
 
   const id = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
   const tarball = path.join(os.tmpdir(), `corpus-mcp-${id}.tgz`);
@@ -203,7 +211,7 @@ touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp
 # Settings added after first install.
 grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
 grep -q '^CORPUS_ACCESS_AUD=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_AUD=' >> /etc/corpus-mcp/env
-previous=$(readlink /opt/corpus-mcp/current || true)
+${intakeSettings()}previous=$(readlink /opt/corpus-mcp/current || true)
 echo "previous=$previous"
 ln -sfn "$release" /opt/corpus-mcp/current.new && mv -T /opt/corpus-mcp/current.new /opt/corpus-mcp/current
 systemctl daemon-reload

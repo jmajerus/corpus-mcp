@@ -84,7 +84,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     zotero: zoteroConfig(env),
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
-      access: { teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined },
+      access: {
+        teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined,
+        vocabularyPush: { clientId: env.CORPUS_VOCABULARY_PUSH_CLIENT_ID || undefined, audience: env.CORPUS_VOCABULARY_PUSH_AUD || undefined },
+      },
       neighbors: (env.CORPUS_NEIGHBORS ?? DEFAULT_NEIGHBORS).split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {
         const at = pair.indexOf("=");
         return { name: pair.slice(0, at).trim(), url: pair.slice(at + 1).trim() };
