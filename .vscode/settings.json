@@ -1,7 +1,7 @@
 {
   "VsCodeTaskButtons.tasks": [
     {
-      "label": "$(cloud-upload) Deploy Corpus",
+      "label": "$(server) Deploy Corpus",
       "tooltip": "npm run deploy — build, test, install a release on corpus-mcp.localdomain, restart, health-check, roll back on failure",
       "alignment": "left",
       "tasks": [
