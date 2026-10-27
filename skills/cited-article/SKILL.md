@@ -1,13 +1,21 @@
 ---
 name: cited-article
-description: Write a short article or essay in Markdown that quotes books from the Calibre libraries through the Corpus MCP tools. Each passage is saved as a verified quote and cited by Pandoc citekey with a footnote; books not yet in Zotero are filed to a staging collection and their citekeys pinned. Use when asked to write, outline, or verify a piece that quotes or cites books in the corpus.
+description: Write a short article or essay that quotes books from the Calibre libraries through the Corpus MCP tools, for any writer, not only editors. Each passage is saved as a verified quote and cited with a footnote; books not yet in Zotero are filed to a staging collection. Hands over an editable Markdown source and a formatted copy anyone can read. Use when asked to write, outline, check, or format a piece that quotes or cites books in the corpus, such as "write a short piece quoting my books on X".
 ---
 
 # Cited article
 
-The agent finds, checks, files, and drafts. The human picks the passages,
-edits the prose, and publishes. The draft is Markdown for Pandoc: citekeys
-stay in the source, and `pandoc --citeproc` formats them at export.
+The agent finds, checks, files, drafts, and formats. The human picks the
+passages, edits the prose, and publishes. Two files come out:
+
+- `<slug>.md`, the **source**: Markdown with citekeys (`[@key, chap. 2]`)
+  that Pandoc formats. This is the file to edit.
+- `<slug>.formatted.md` (or `.html`, `.docx`), the **formatted copy**: the
+  same piece with citations and a reference list written out. This is the
+  file to read and share. The agent makes it again after every change.
+
+Don't assume the human knows Pandoc, citekeys, or BibTeX. Explain them in
+plain words when they come up, and run every command yourself.
 
 ## Switches
 
@@ -23,6 +31,7 @@ arguments is the brief. Defaults:
 | `project` | the draft's slug | Quote tag, saved as `project:<value>`. |
 | `candidates` | `5` | Passages to offer at the gather checkpoint. |
 | `dir` | `drafts/<slug>/` | Where the draft goes: `<slug>.md` and `references.bib`. Without a `drafts/` folder in the working directory, use the session's scratchpad (or a temporary folder) and say where. |
+| `render` | `md` | Format of the formatted copy: `md`, `html`, `docx`, or `none`. A draft path instead: run only Verify and Format on it (for "check and format my draft"). |
 | `verify` | — | A draft path: run only Verify on it. |
 
 ## Phases and checkpoints
@@ -115,8 +124,16 @@ Start from [template.md](template.md). Rules:
 - **Outline** (`draft=outline`): the same front matter, headings, markers,
   quotes, and citations, with bullet notes in place of prose.
 
-Then run Verify, and hand over the draft with: where it is, its quotes (id,
-book, citekey), what was filed to staging, and any unpinned keys.
+Then run Verify and Format, and hand over:
+
+- where both files are, with the formatted copy named first as the one to read
+- its quotes: book, chapter or page, and citekey
+- what was filed to Zotero staging, and anything there that needs review
+- any unpinned keys
+- how to edit, in plain words: "Edit `<slug>.md`. The bracketed codes such as
+  `[@key, chap. 2]` link each quote to its book, so leave them in, and don't
+  change the words inside quoted passages. Everything else is yours. When
+  you're done, ask me to check and format the draft."
 
 **Checkpoint: the human edits the draft.** They may cut, move, or reword
 anything except quoted text. To shorten a quote, save the shorter passage as
@@ -135,12 +152,37 @@ Run it after drafting, when asked, or with `verify=<path>`:
    against the bibliography and `corpus-unpinned`, and builds with
    `pandoc --citeproc` to collect its warnings. It prints JSON and exits 1
    when something is wrong.
-3. Report the problems. Don't fix quoted text yourself: say where a quote
+3. Report problems in plain words, not the JSON: "Quote 2 no longer matches
+   the book: the draft says '…most honourable…' where the book says '…most
+   respectable…'", "The citation `[@nobody2020]` doesn't match any book in
+   the bibliography". Don't fix quoted text yourself: say where a quote
    differs from its source and let the human decide.
 
-**Checkpoint: the human publishes**, choosing the CSL style and format
-(`pandoc <draft.md> --citeproc --csl <style.csl> -o out.html|.pdf|.docx`).
-The agent doesn't publish.
+### 6. Format
+
+After every draft, and on `render=<path>`, write the formatted copy beside
+the source, in the draft's folder (skip this with `render=none`):
+
+- `md`: `{ echo "# <title>"; echo; pandoc <slug>.md --citeproc -M link-citations=false -t gfm-raw_html; } > <slug>.formatted.md`.
+  This gives plain Markdown that any viewer, including GitHub, shows with
+  citations, footnotes, and references in place.
+- `html`: `pandoc <slug>.md --citeproc -s -o <slug>.formatted.html`
+- `docx`: `pandoc <slug>.md --citeproc -o <slug>.formatted.docx`
+
+Add `--csl <style.csl>` when the human names a citation style; otherwise
+Pandoc uses Chicago author-date, which leaves "p." out of page citations.
+
+**Without Pandoc** (claude.ai, or a machine without it): write
+`<slug>.formatted.md` yourself, replacing each citation with author, year,
+and locator in parentheses, and adding a References list from each book's
+CSL item. Say that it hasn't been checked against a citation style.
+
+The formatted copy is made from the source and replaced every time, so edits
+to it are lost. If the human edited it, carry those edits into the source
+before formatting again.
+
+**Checkpoint: the human publishes** the formatted copy, or asks for another
+format or citation style. The agent doesn't publish.
 
 ## Cleaning up
 

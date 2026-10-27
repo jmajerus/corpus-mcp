@@ -2,13 +2,13 @@
 
 `/cited-article file=auto On curiosity, quoting a book not yet in Zotero`
 
-**Read it:** [on-curiosity.rendered.md](on-curiosity.rendered.md), the draft after
-`pandoc --citeproc` (Chicago author-date, Pandoc's default style).
+**Read it:** [on-curiosity.formatted.md](on-curiosity.formatted.md), the finished piece with
+citations, footnotes, and references written out (Chicago author-date style).
 
-**Edit it:** [on-curiosity.md](on-curiosity.md), the draft as the skill hands it over. It
-shows raw citekeys such as `[@hanh2007fidelity, chap. 4]` and a hidden
-`<!-- corpus:quote <id> -->` marker before each block quote. That's on purpose: editors
-work on this version, and Pandoc formats the citations when it's exported.
+**Edit it:** [on-curiosity.md](on-curiosity.md), the source the formatted copy is made
+from. Its bracketed codes, such as `[@hanh2007fidelity, chap. 4]`, link each quote to its
+book, and a hidden `<!-- corpus:quote <id> -->` marker before each block quote links it to
+the saved passage. The skill turns the codes into citations each time it formats the piece.
 
 - The quotes cite two EPUBs by chapter (`chap. 3`, `chap. 4`) and a PDF by its printed
   page (`p. 211`, physical page 237). None of the three books was in Zotero: the skill
