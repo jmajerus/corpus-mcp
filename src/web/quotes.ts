@@ -76,7 +76,7 @@ function query() {
   return p;
 }
 function card(q) {
-  return '<article class="card qcard"><a class="open" href="/admin/quotes/' + q.id + '">#' + q.id + " →</a><blockquote>" + esc(q.text.length > 500 ? q.text.slice(0, 500) + "…" : q.text) + "</blockquote>" +
+  return '<article class="card qcard"><a class="open" href="/admin/quotes/' + q.id + '">#' + q.id + " →</a><blockquote>" + esc(q.prose.length > 500 ? q.prose.slice(0, 500) + "…" : q.prose) + "</blockquote>" +
     '<div class="qmeta">' + bookLink(q.book_id, q.title) + " · " + esc(q.locator) + (q.status === "orphaned" ? ' · <span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</div>" +
     (q.note ? '<p class="note">' + esc(q.note) + "</p>" : "") +
     "<div>" + q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</div>" +
@@ -150,7 +150,7 @@ function render() {
   const dis = canWrite ? "" : " disabled";
   document.getElementById("quote").innerHTML = "<h1>Quote #" + q.id + "</h1>" +
     '<p class="sub">' + bookLink(q.current_book_id || q.book_id, q.title) + " · " + esc(q.locator) + " · " + (q.status === "orphaned" ? '<span class="badge bad"><span class="sign">!</span>Orphaned: not found in the current file</span>' : '<span class="badge good"><span class="sign">✓</span>Verified</span>') + "</p>" +
-    '<div class="card"><span class="ctx">…' + esc(q.context.before) + '</span><span class="quoted">' + esc(q.text) + '</span><span class="ctx">' + esc(q.context.after) + "…</span>" +
+    '<div class="card"><span class="ctx">…' + esc(q.context.before) + '</span><span class="quoted">' + esc(q.prose) + '</span><span class="ctx">' + esc(q.context.after) + "…</span>" +
     (q.current_book_id ? '<p class="note"><a href="/admin/books/' + encodeURIComponent(q.current_book_id) + "/read?page=" + q.page + "#quote-" + q.id + '">Open in the reader</a></p>' : "") + "</div>" +
     '<div class="cols"><div class="card"><h2>Citation</h2><p>' + citationText(q.csl, q.csl_locator) + "</p>" + (q.citekey ? '<p class="note">Citekey ' + esc(q.citekey) + "</p>" : "") +
     '<p class="note">Saved ' + esc(when(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " (" + esc(q.source) + ")" + (q.updated_at ? " · edited " + esc(ago(q.updated_at)) + (q.updated_by ? " by " + esc(q.updated_by) : "") : "") + "</p></div>" +

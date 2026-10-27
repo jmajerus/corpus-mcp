@@ -35,7 +35,7 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `get_quote` | Get a quote | | One saved quote with the text around it, its locator, and its citation. |
 | `update_quote` | Update a quote | ✓ | Changes a quote's note or tags; the quoted text never changes. |
 | `delete_quote` | Delete a quote | ✓ | Deletes a saved quote. |
-| `cite_quote` | Cite a quote | | A quote's verified text and locator with its citation object. |
+| `cite_quote` | Cite a quote | | A quote's verified text, reflowed as prose, and locator with its citation object. |
 | `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
 
 The tools marked *Writes* declare `readOnlyHint: false`; every other tool is

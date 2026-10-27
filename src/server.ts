@@ -231,7 +231,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("cite_quote", {
     title: "Cite a quote",
-    description: "The quote's verified text and a readable locator (quote_locator), with its citation as cite_passage returns it for the quote's pages: a CSL JSON item, a CSL locator, and filing data.",
+    description: "The quote's verified text, reflowed as prose (line breaks inside sentences become spaces), and a readable locator (quote_locator), with its citation as cite_passage returns it for the quote's pages: a CSL JSON item, a CSL locator, and filing data.",
     inputSchema: { id: z.number().int() },
     annotations: { title: "Cite a quote", ...readOnly },
   }, ({ id }) => run(() => {

@@ -16,7 +16,7 @@ import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
-import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
+import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, reflow, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
 import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport } from "../src/tagging.js";
 import { type ZoteroConfig, linkZotero, syncZotero, zoteroCiteInfo, zoteroMatch, zoteroReport } from "../src/zotero.js";
 import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
@@ -947,6 +947,14 @@ describe("quotes", () => {
       start_page: 0, start_offset: 21, end_page: 1, end_offset: 19, text: "a\nbroken sentence\nthat continues here",
     });
     expect(locate(pages, "not in the text")).toBeNull();
+  });
+
+  it("reflows line-per-block text as prose, keeping paragraph breaks", () => {
+    // Conrad's Chance in the Delphi EPUB: every printed line is a block, and a page break is a single newline.
+    expect(reflow("curiosity. Curiosity about\n\ndaily facts, the most respectable\n\nfaculty of an incurious\nmind. It would be like a chamber"))
+      .toBe("curiosity. Curiosity about daily facts, the most respectable faculty of an incurious mind. It would be like a chamber");
+    expect(reflow("locked up.\n\nBut in this case")).toBe("locked up.\n\nBut in this case");
+    expect(reflow("He said, “Wait.”\nThen left. Mr.  \n\n and so on")).toBe("He said, “Wait.”\n\nThen left. Mr. and so on");
   });
 
   it("saves the book's exact wording, found from the given page or anywhere", () => {

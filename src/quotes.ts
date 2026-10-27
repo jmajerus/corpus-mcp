@@ -58,6 +58,16 @@ function lowerSameLength(text: string): string {
 
 interface PageText { page_index: number; label: string | null; section_path: string | null; text: string }
 
+/**
+ * Stored text as running prose. The extractor keeps each text block as a paragraph, and some EPUBs set
+ * every printed line as its own block, so a break mid-sentence is a line break: it becomes a space. A
+ * break after closing punctuation, before anything but a lowercase letter, stays a paragraph break.
+ */
+export function reflow(text: string): string {
+  return text.replace(/[ \t]*\n\s*/g, (brk: string, at: number, all: string) =>
+    /[.!?:;"'”’)\]]/.test(all[at - 1] ?? "") && !/\p{Ll}/u.test(all[at + brk.length] ?? "") ? "\n\n" : " ");
+}
+
 export interface QuoteAnchor { start_page: number; start_offset: number; end_page: number; end_offset: number; text: string; prefix: string; suffix: string }
 
 /** Finds `needle` across consecutive pages; offsets are into each page's stored text. */
@@ -184,7 +194,7 @@ function present(c: Corpus, r: QuoteRow) {
     ? `p. ${r.page_label}${r.end_page_label && r.end_page_label !== r.page_label ? `–${r.end_page_label}` : ""}`
     : r.section_path ?? (reflowable ? `location ${r.start_page + 1}` : `page ${r.start_page + 1}`);
   return {
-    id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, note: r.note,
+    id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, prose: reflow(r.text), note: r.note,
     book_categories: bookCategories(c, r.calibre_uuid).map(withLabel),
     labels: JSON.parse(r.labels) as string[],
     page: r.start_page + 1, end_page: r.end_page + 1, page_label: r.page_label, end_page_label: r.end_page_label, section: r.section_path,
@@ -249,7 +259,7 @@ export function getQuote(c: Corpus, id: number) {
   }
   const citation = book ? citePassage(c, { book_id: book.id, page: r.start_page + 1, end_page: r.end_page + 1 }) : null;
   return {
-    ...present(c, r), current_book_id: book?.id ?? null, context: { before, after },
+    ...present(c, r), current_book_id: book?.id ?? null, context: { before: reflow(before), after: reflow(after) },
     csl: citation?.csl ?? null, csl_locator: citation?.locator ?? null, citekey: citation?.citekey ?? null,
     citation: citation?.citation ?? null,
   };
@@ -315,12 +325,12 @@ export function deleteQuote(c: Corpus, id: number, by: string | undefined, sourc
   return { deleted: id };
 }
 
-/** A quote's citation (as cite_passage gives it for the quote's pages), with the verified text to quote. */
+/** A quote's citation (as cite_passage gives it for the quote's pages), with the verified text to quote, reflowed as prose. */
 export function citeQuote(c: Corpus, id: number) {
   const q = getQuote(c, id);
   if (!q.current_book_id) throw new ToolError(`Quote ${id}'s book is no longer in the index.`);
   const cite = citePassage(c, { book_id: q.current_book_id, page: q.page, end_page: q.end_page });
-  return { quote: q.text, quote_locator: q.locator, ...cite };
+  return { quote: q.prose, quote_locator: q.locator, ...cite };
 }
 
 /** Quotes on a range of pages of one book, with offsets for highlighting in the reader. */
