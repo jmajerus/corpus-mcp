@@ -92,5 +92,12 @@ installs releases with a health check, and rolls back on failure. Both are
 written for the author's own Proxmox network (`*.localdomain` hosts), so adapt
 the hostnames before using them elsewhere. `npm run deploy` and
 `npm run tags:apply` read their settings from a gitignored `.env` (see
-[`.env.example`](../.env.example)). [PLAN.md](../PLAN.md) records the
+[`.env.example`](../.env.example)). `npm run deploy` installs this
+checkout; `npm run deploy -- --pr <number>` installs an open pull request's head
+commit instead, built and tested in a temporary worktree, so the server can try a
+change before it merges, and `npm run deploy -- --main` switches back to
+`origin/main`. Each deploy records its source on the server in
+`/var/lib/corpus-mcp/deployed.json`, and `npm run deploy -- --current` redeploys
+the latest commit of that same pull request or branch. In VS Code, the Deploy Corpus status-bar button (the Task Buttons
+extension) runs each of these. [PLAN.md](../PLAN.md) records the
 design decisions, the facts about the corpus, and the known issues.

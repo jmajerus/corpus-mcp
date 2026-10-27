@@ -1,0 +1,54 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Deploy Corpus: current",
+      "type": "shell",
+      "command": "npm run deploy -- --current",
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Corpus",
+      "type": "npm",
+      "script": "deploy",
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Corpus: skip tests",
+      "type": "shell",
+      "command": "npm run deploy -- --skip-tests",
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Corpus: main",
+      "type": "shell",
+      "command": "npm run deploy -- --main",
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Corpus: PR",
+      "type": "shell",
+      "command": "npm run deploy -- --pr ${input:corpusPr}",
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Corpus: Zotero",
+      "type": "shell",
+      "command": "npm run deploy -- --zotero",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test",
+      "type": "npm",
+      "script": "test",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "corpusPr",
+      "type": "promptString",
+      "description": "Pull request number to deploy to the corpus server"
+    }
+  ]
+}
