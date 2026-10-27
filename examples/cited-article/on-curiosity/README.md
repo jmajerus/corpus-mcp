@@ -3,12 +3,11 @@
 `/cited-article file=auto On curiosity, quoting a book not yet in Zotero`
 
 **Read it:** the finished piece, with citations, footnotes, and references written out
-(Chicago author-date style), in three formats:
+(Chicago author-date style):
 
-- [on-curiosity.formatted.html](on-curiosity.formatted.html): the skill's default. Download
-  it and open it in a browser (GitHub shows HTML as source).
-- [on-curiosity.formatted.md](on-curiosity.formatted.md): reads directly on GitHub.
-- [on-curiosity.formatted.docx](on-curiosity.formatted.docx): for Word.
+- **[Read it here](on-curiosity.formatted.md)**, as Markdown that GitHub displays.
+- To download: [HTML](on-curiosity.formatted.html), the skill's default format, to open
+  in a browser (GitHub shows HTML as code), or [Word](on-curiosity.formatted.docx).
 
 **Edit it:** [on-curiosity.md](on-curiosity.md), the source the formatted copy is made
 from. Its bracketed codes, such as `[@hanh2007fidelity, chap. 4]`, link each quote to its

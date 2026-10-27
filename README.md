@@ -41,6 +41,17 @@ data, and Calibre changes go through a job a person previews and applies.
 | [Operations](docs/operations.md) | How indexing works, shelves, access, Calibre jobs, bulk imports, configuration, and deployment |
 | [PLAN.md](PLAN.md) | Design decisions, facts about the corpus, and known issues |
 
+## Skills and examples
+
+- **[cited-article](skills/cited-article/SKILL.md)**, a Claude skill that writes an
+  article or book chapter quoting books in the corpus. It saves each passage as a
+  checked quote, files new books in Zotero, and hands over an editable Markdown source
+  with a formatted copy to read. To use it in Claude Code, link the folder into
+  `~/.claude/skills/`.
+- **Example:** [On Curiosity](examples/cited-article/on-curiosity/on-curiosity.formatted.md),
+  a short essay quoting the Brothers Grimm, Thich Nhat Hanh, and Diana Montalion. Its
+  [folder](examples/cited-article/on-curiosity/) also has the source, and HTML and Word copies.
+
 ## Quick start
 
 Requires Node.js 22 or later. `better-sqlite3` compiles natively, so you also
