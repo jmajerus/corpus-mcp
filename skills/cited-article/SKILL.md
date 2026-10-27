@@ -22,7 +22,7 @@ arguments is the brief. Defaults:
 | `bib` | `generate` | `generate`: write `references.bib` beside the draft. A path: use that file and only check it. |
 | `project` | the draft's slug | Quote tag, saved as `project:<value>`. |
 | `candidates` | `5` | Passages to offer at the gather checkpoint. |
-| `dir` | `./<slug>/` | Where the draft goes: `<slug>.md` and `references.bib`. |
+| `dir` | `drafts/<slug>/` | Where the draft goes: `<slug>.md` and `references.bib`. Without a `drafts/` folder in the working directory, use the session's scratchpad (or a temporary folder) and say where. |
 | `verify` | — | A draft path: run only Verify on it. |
 
 ## Phases and checkpoints
