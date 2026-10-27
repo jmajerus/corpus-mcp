@@ -1,0 +1,59 @@
+{
+  "VsCodeTaskButtons.tasks": [
+    {
+      "label": "$(server) Deploy Corpus",
+      "tooltip": "npm run deploy — build, test, install a release on corpus-mcp.localdomain, restart, health-check, roll back on failure",
+      "alignment": "left",
+      "tasks": [
+        {
+          "label": "Redeploy current branch",
+          "task": "Deploy Corpus: current",
+          "description": "$(sync) Pull the branch or PR the server is on and restart"
+        },
+        {
+          "label": "Switch to main",
+          "task": "Deploy Corpus: main",
+          "description": "$(git-branch) --main"
+        },
+        {
+          "label": "Switch to a pull request…",
+          "task": "Deploy Corpus: PR",
+          "description": "$(git-pull-request) --pr <number>"
+        },
+        {
+          "label": "Deploy this checkout",
+          "task": "Deploy Corpus",
+          "description": "$(device-desktop) Local working tree, unpushed changes included"
+        },
+        {
+          "label": "Deploy this checkout without tests",
+          "task": "Deploy Corpus: skip tests",
+          "description": "$(debug-step-over) --skip-tests"
+        },
+        {
+          "label": "Push Zotero settings",
+          "task": "Deploy Corpus: Zotero",
+          "description": "$(key) --zotero — copy the Zotero settings from .env and restart"
+        }
+      ]
+    },
+    {
+      "label": "$(beaker) Test",
+      "task": "Test",
+      "tooltip": "npm test",
+      "alignment": "left"
+    }
+  ],
+  "statusProbe.items": [
+    {
+      "id": "corpus-server",
+      "command": "node tools/corpus-status.mjs",
+      "intervalSeconds": 300,
+      "alignment": "left",
+      "priority": -100,
+      "refreshOnTasks": [
+        "Deploy Corpus*"
+      ]
+    }
+  ]
+}

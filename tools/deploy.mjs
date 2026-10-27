@@ -13,9 +13,15 @@ const CORPUS_HOST = process.env.CORPUS_DEPLOY_HOST ?? "authoring@corpus-mcp.loca
 const SOURCE_HOST = process.env.CORPUS_SOURCE_ADMIN_HOST ?? "authoring@calibre-web.localdomain";
 const ASKPASS = path.join(root, "tools", "askpass.mjs");
 
-const USAGE = `Usage: npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --vocabulary[=file] | --zotero | --skip-tests]
+const USAGE = `Usage: npm run deploy -- [--current | --pr <number> | --main] [--skip-tests]
+       npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --vocabulary[=file] | --zotero]
 
   (no flag)       build, test, install a new release, restart, health-check, roll back on failure
+  --pr <number>   the same from an open pull request's head commit instead of this checkout: it is
+                  checked out in a temporary worktree and its own deploy script runs there
+  --main          the same from origin/main, to switch back after a pull request
+  --current       the same from the latest commit of what the server was last deployed from: the
+                  same pull request, or the same branch on origin (recorded in /var/lib/corpus-mcp/deployed.json)
   --provision     one-time setup of the corpus LXC (Node 22, corpus user, sync key); prints the key
   --source-setup  one-time setup on calibre-web.localdomain: a corpus-sync user limited to
                   read-only rsync of /mnt/Calibre (private denied), keyed to the corpus LXC
@@ -246,10 +252,97 @@ fi
 ls -1dt /opt/corpus-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 `;
   await runAsRoot(CORPUS_HOST, script);
+  if (!process.env.CORPUS_DEPLOY_NESTED) {
+    await writeDeployed({ branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), commit: git(["rev-parse", "HEAD"]), local: true, dirty: git(["status", "--porcelain"]) !== "" });
+  }
+}
+
+function git(args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+}
+
+const DEPLOYED = "/var/lib/corpus-mcp/deployed.json";
+
+/** What the server runs, as the last deploy recorded it: { branch, pr?, commit, at, local? }, or null before the first record. */
+async function readDeployed() {
+  const out = await runAsRoot(CORPUS_HOST, `cat ${DEPLOYED} 2>/dev/null || true`);
+  const line = out.trim().split("\n").pop();
+  return line ? JSON.parse(line) : null;
+}
+
+async function writeDeployed(record) {
+  const encoded = Buffer.from(JSON.stringify({ ...record, at: new Date().toISOString() })).toString("base64");
+  await runAsRoot(CORPUS_HOST, `printf %s ${shellQuote(encoded)} | base64 -d > ${DEPLOYED}.new && chmod 0644 ${DEPLOYED}.new && mv ${DEPLOYED}.new ${DEPLOYED} && echo`);
+}
+
+/** A branch's head on origin. */
+function branchSource(branch) {
+  try {
+    execFileSync("git", ["fetch", "--quiet", "origin", branch], { cwd: root, stdio: ["ignore", "inherit", "pipe"] });
+  } catch {
+    throw new Error(`origin has no branch ${branch}. Use --main or --pr <number>.`);
+  }
+  return { branch, commit: git(["rev-parse", "FETCH_HEAD"]), name: `origin/${branch}` };
+}
+
+/** An open pull request's head commit; refuses one that is closed, merged, or from a fork. */
+function pullRequestSource(pr) {
+  let view;
+  try {
+    view = JSON.parse(execFileSync("gh", ["pr", "view", String(pr), "--json", "state,headRefName,headRefOid,isCrossRepository,title"], { cwd: root, encoding: "utf8" }));
+  } catch (error) {
+    throw new Error(`Could not look up PR #${pr} with gh: ${error.stderr?.toString().trim() || error.message}`);
+  }
+  if (view.state !== "OPEN") throw new Error(`PR #${pr} is ${view.state.toLowerCase()}, not open. Use --main to switch the server back to main.`);
+  if (view.isCrossRepository) throw new Error(`PR #${pr} comes from a fork; deploy only branches of this repository.`);
+  execFileSync("git", ["fetch", "--quiet", "origin", `pull/${pr}/head`], { cwd: root, stdio: "inherit" });
+  const commit = git(["rev-parse", "FETCH_HEAD"]);
+  if (commit !== view.headRefOid) throw new Error(`PR #${pr} moved while fetching (${commit.slice(0, 7)} ≠ ${view.headRefOid.slice(0, 7)}); try again.`);
+  return { branch: view.headRefName, pr: Number(pr), commit, name: `PR #${pr} (${view.headRefName}: ${view.title})` };
+}
+
+/** The latest commit of whatever the server was last deployed from. */
+async function currentSource() {
+  const deployed = await readDeployed();
+  if (!deployed) throw new Error("The server has no record of its branch yet (it predates --current). Use --main or --pr <number> once.");
+  if (deployed.pr) return pullRequestSource(deployed.pr);
+  if (!deployed.branch || deployed.branch === "HEAD") throw new Error("The server was deployed from a detached checkout. Use --main or --pr <number>.");
+  return branchSource(deployed.branch);
+}
+
+/** Deploys a commit from origin by running its own deploy script in a temporary worktree, so its build, tests, and deploy steps are its own. */
+async function deployCommit(source, rest) {
+  console.log(`Deploying ${source.name} at ${source.commit.slice(0, 7)}.`);
+  const tree = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-mcp-deploy-"));
+  execFileSync("git", ["worktree", "add", "--detach", "--quiet", tree, source.commit], { cwd: root, stdio: "inherit" });
+  try {
+    execFileSync("npm", ["ci", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: tree, stdio: "inherit" });
+    // The environment already holds .env, so the worktree's script needs no copy of it, but a relative
+    // vocabulary path in it means this checkout, not the worktree. NESTED: this script records the
+    // source below, which the worktree's (a detached checkout) would get wrong.
+    const vocabulary = process.env.CORPUS_VOCABULARY_SOURCE ? { CORPUS_VOCABULARY_SOURCE: path.resolve(process.env.CORPUS_VOCABULARY_SOURCE) } : {};
+    execFileSync(process.execPath, [path.join(tree, "tools", "deploy.mjs"), ...rest], { cwd: tree, stdio: "inherit", env: { ...process.env, ...vocabulary, CORPUS_DEPLOY_NESTED: "1" } });
+  } finally {
+    execFileSync("git", ["worktree", "remove", "--force", tree], { cwd: root, stdio: "inherit" });
+  }
+  await writeDeployed({ branch: source.branch, ...(source.pr ? { pr: source.pr } : {}), commit: source.commit });
 }
 
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
+  const prIndex = argv.indexOf("--pr");
+  const sources = ["--pr", "--main", "--current"].filter((flag) => argv.includes(flag));
+  if (sources.length) {
+    const pr = prIndex >= 0 ? argv[prIndex + 1] : null;
+    const rest = argv.filter((a, i) => !sources.includes(a) && (prIndex < 0 || i !== prIndex + 1));
+    if (sources.length > 1) throw new Error(`Pass one of ${sources.join(", ")}.\n\n${USAGE}`);
+    if (prIndex >= 0 && !/^\d+$/.test(pr ?? "")) throw new Error(`--pr takes a pull request number.\n\n${USAGE}`);
+    const other = rest.find((a) => a !== "--skip-tests");
+    if (other) throw new Error(`${other} does not combine with ${sources[0]}.\n\n${USAGE}`);
+    if (!password) throw new Error(`AUTHORING_DEPLOY_PASSWORD is not set.\n\n${USAGE}`);
+    const source = pr ? pullRequestSource(pr) : argv.includes("--main") ? branchSource("main") : await currentSource();
+    return deployCommit(source, rest);
+  }
   const known = new Set(["--provision", "--source-setup", "--source-setup-user-key", "--skip-tests", "--vocabulary", "--zotero"]);
   const unknown = argv.find((a) => !known.has(a.split("=")[0]));
   if (unknown) throw new Error(`Unknown argument ${unknown}.\n\n${USAGE}`);

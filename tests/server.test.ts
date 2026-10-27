@@ -64,8 +64,15 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-it("answers health checks", async () => {
-  expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, books: 1 });
+it("answers health checks, with what the last deploy installed", async () => {
+  expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, books: 1, deployed: null });
+  const record = path.join(root, "deployed.json");
+  fs.writeFileSync(record, JSON.stringify({ branch: "fix", pr: 7, commit: "abc1234" }));
+  try {
+    expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, deployed: { branch: "fix", pr: 7 } });
+  } finally {
+    fs.rmSync(record);
+  }
 });
 
 it("answers CORS preflight and refuses GET instead of holding a stream open", async () => {
