@@ -526,7 +526,7 @@ domain › category › subcategory (about 62 categories across 15 domains), so
 
 A one-way dependency: Concept Clusters (CC) depends on corpus-mcp, and
 corpus-mcp knows nothing about CC. Any project can reuse it with its own
-vocabulary and citekey preset. corpus-mcp owns the formats (README); CC
+vocabulary and citekey preset. corpus-mcp owns the formats (docs/categories.md); CC
 adapts. Agreed with CC's agent, in order:
 
 1. **Vocabulary** (done 2026-10-25). The `corpus-vocabulary/1` file, loaded
