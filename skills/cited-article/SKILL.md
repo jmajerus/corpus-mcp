@@ -1,6 +1,6 @@
 ---
 name: cited-article
-description: Write a short article or essay that quotes books from the Calibre libraries through the Corpus MCP tools, for any writer, not only editors. Each passage is saved as a verified quote and cited with a footnote; books not yet in Zotero are filed to a staging collection. Hands over an editable Markdown source and a formatted copy anyone can read. Use when asked to write, outline, check, or format a piece that quotes or cites books in the corpus, such as "write a short piece quoting my books on X".
+description: Write an article, essay, or book chapter or section that quotes books from the Calibre libraries through the Corpus MCP tools, for any writer, not only editors. Each passage is saved as a verified quote and cited with a footnote; books not yet in Zotero are filed to a staging collection. Hands over an editable Markdown source and a formatted copy anyone can read. Use when asked to write, outline, check, or format a piece that quotes or cites books in the corpus, such as "write a short piece quoting my books on X".
 ---
 
 # Cited article
@@ -21,18 +21,20 @@ plain words when they come up, and run every command yourself.
 ## Switches
 
 Read switches from the arguments as `name=value`; anything else in the
-arguments is the brief. Defaults:
+arguments is the brief. `form` sets the defaults for the others; a switch
+given explicitly wins. Defaults:
 
 | Switch | Default | Values |
 |---|---|---|
+| `form` | `article` | `article`: a short piece, 600–900 words. `chapter`: a book chapter or section, 3,000–8,000 words, outlined and approved before any prose (see [Chapters](#chapters)). |
 | `draft` | `full` | `full`: finished prose. `outline`: headings, placed quotes with citations, and bullet notes on what each section argues; no prose. |
 | `file` | `auto` | `auto`: file books that are not in Zotero into the staging collection. `ask`: show the BibTeX and wait for the human to file them. `off`: don't file; keys stay unpinned. |
 | `staging` | `Corpus MCP/Staging` | Zotero collection path for newly filed books. |
-| `bib` | `generate` | `generate`: write `references.bib` beside the draft. A path: use that file and only check it. |
-| `project` | the draft's slug | Quote tag, saved as `project:<value>`. |
-| `candidates` | `5` | Passages to offer at the gather checkpoint. |
+| `bib` | `generate` | `generate`: write `references.bib` beside the draft. A path: a bibliography shared with other pieces, such as a book's other chapters. Add entries for books missing from it at the end, never changing existing ones; if the file says it's generated (a Better BibTeX or Zotero export header), only report what's missing. |
+| `project` | the draft's slug | Quote tag, saved as `project:<value>`. For a chapter, use the book's project and the chapter both: `project:<book>` and `project:<book>/<slug>`. |
+| `candidates` | `5` | Passages to offer at the gather checkpoint. For a chapter, per section: `3`. |
 | `dir` | `drafts/<slug>/` | Where the draft goes: `<slug>.md` and `references.bib`. Without a `drafts/` folder in the working directory, use the session's scratchpad (or a temporary folder) and say where. |
-| `render` | `html` | Formats of the formatted copy, comma-separated: `html`, `md`, `docx`, `epub`, or `none`. A draft path instead: run only Verify and Format on it (for "check and format my draft"). |
+| `render` | `html` (chapter: `html,epub`) | Formats of the formatted copy, comma-separated: `html`, `md`, `docx`, `epub`, or `none`. A draft path instead: run only Verify and Format on it (for "check and format my draft"). |
 | `verify` | — | A draft path: run only Verify on it. |
 
 ## Phases and checkpoints
@@ -42,8 +44,10 @@ answered it (for example by naming the passages to use).
 
 ### 1. Brief
 
-Settle the topic or argument, audience, and length (default 600–900 words).
-Ask only about what the arguments leave open. Pick a short slug.
+Settle the topic or argument, audience, and length (by `form`). Ask only
+about what the arguments leave open. Pick a short slug. For a chapter, also
+ask which book it belongs to, where it sits (what comes before and after),
+and whether there's a shared bibliography to use.
 
 ### 2. Gather
 
@@ -191,6 +195,38 @@ before formatting again.
 
 **Checkpoint: the human publishes** the formatted copy, or asks for another
 format or citation style. The agent doesn't publish.
+
+## Chapters
+
+With `form=chapter`, the phases change like this:
+
+1. **Brief**, as above, plus the book, the chapter's place in it, and the
+   shared bibliography.
+2. **Outline before gathering.** Write the section headings, a line on what
+   each section argues, and what kind of passage it needs. Run a quick
+   `search_corpus` for each section and mark any section the corpus can't
+   support well. **Checkpoint: the human approves the outline:** reorders,
+   cuts, adds, or merges sections.
+3. **Gather and Secure section by section.** Offer `candidates` passages per
+   section, grouped under its heading; the human can choose for all sections
+   at once. Save and cite as in Secure, tagging each quote with both project
+   labels.
+4. **Draft section by section** into the one source file, saving after each
+   section so a long draft survives an interruption.
+   - **Checkpoint after the first section:** show it and ask whether the voice,
+     length, and density of quotation are right before writing the rest.
+   - One `#` title, sections as `##`. Footnote labels unique across the
+     chapter (`[^s2-hanh]`).
+   - Quote a passage once. To come back to it, cite it again
+     (`[@key, chap. 4]`) or paraphrase; don't repeat the block quote.
+   - Add `corpus-book: <book>` to the front matter.
+5. **Verify and Format** as above, with EPUB as well as HTML by default.
+
+A chapter file stands on its own: its own front matter, the shared
+bibliography, and its own footnotes. Putting chapters together into a book
+(cross-references, one bibliography and EPUB for the whole book, front
+matter) is a job for a separate book tool, which can take these files as they
+are.
 
 ## Cleaning up
 
