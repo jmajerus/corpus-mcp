@@ -13,6 +13,7 @@ export const BOOK_HTML = page({
 .kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
 .editor { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .editor .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.editor .row input { flex: 1; min-width: 200px; }
 .editor input { flex: 1; min-width: 180px; }
 .diff .add { background: var(--ok-bg); } .diff .del { background: var(--danger-bg); text-decoration: line-through; }
 .outline { max-height: 360px; overflow: auto; font-size: 0.86rem; margin: 0; padding-left: 0; list-style: none; }
@@ -160,7 +161,7 @@ document.getElementById("book").addEventListener("click", async (e) => {
 Promise.all([ME, VOCAB]).then(([me, labels]) => {
   canWrite = me.can_write;
   const list = document.createElement("datalist"); list.id = "vocab";
-  list.innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag) + "</option>").join("");
+  list.innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag.split(".").pop()) + "</option>").join("");
   document.body.appendChild(list);
   load();
 });`,

@@ -86,7 +86,7 @@ list.addEventListener("click", async (e) => {
 });
 Promise.all([ME, VOCAB]).then(([me, labels]) => {
   canWrite = me.can_write;
-  document.getElementById("vocab").innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag) + "</option>").join("");
+  document.getElementById("vocab").innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag.split(".").pop()) + "</option>").join("");
   load(true);
 });`,
 });
