@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>On Curiosity</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for citations */
+    div.csl-bib-body { }
+    div.csl-entry {
+      clear: both;
+    }
+    .hanging-indent div.csl-entry {
+      margin-left:2em;
+      text-indent:-2em;
+    }
+    div.csl-left-margin {
+      min-width:2em;
+      float:left;
+    }
+    div.csl-right-inline {
+      margin-left:2em;
+      padding-left:1em;
+    }
+    div.csl-indent {
+      margin-left: 2em;
+    }  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">On Curiosity</h1>
+</header>
+<p>Curiosity has a mixed reputation. We praise it in children and
+scientists, and we warn against it in nearly every old story we tell.
+The cat it killed is proverbial. Behind the warnings and the praise is
+one urge, the wish to know what we don’t yet know. What changes is where
+we point it, and what we expect it to give us.</p>
+<p>The fairy tales remember the warning. In the Grimms’ “Our Lady’s
+Child,” a poor woodcutter’s daughter is raised in heaven. At fourteen
+she is given the keys to its thirteen doors and told she may open
+twelve. She opens them one a day, and behind each sits an Apostle in a
+great light. Then:</p>
+<!-- corpus:quote 3 -->
+<blockquote>
+<p>Then the forbidden door alone remained, and she felt a great desire
+to know what could be hidden behind it, and said to the angels, “I will
+not quite open it, and I will not go inside it, but I will unlock it so
+that we can just see a little through the opening.”<a href="#fn1"
+class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a>
+<span class="citation" data-cites="grimm2012complete">(<a
+href="#ref-grimm2012complete" role="doc-biblioref">Grimm 2012, chap.
+3</a>)</span></p>
+</blockquote>
+<p>What makes the scene true is the bargaining. She doesn’t want to go
+in. She only wants to look, and only a little. Twelve rooms full of
+glory haven’t satisfied her, because the thirteenth is the only one she
+hasn’t seen. The story treats this as a moral test, and she fails it.
+But it also describes something we all recognise: curiosity is drawn
+most strongly by whatever is withheld, and the excuse it offers is
+always that this one look will be the last.</p>
+<p>Thich Nhat Hanh, writing about love and loneliness, starts from the
+same urge but finds something gentler at its root:</p>
+<!-- corpus:quote 4 -->
+<blockquote>
+<p>EACH OF US HAS A DEEP DESIRE TO know and understand the world and to
+be known and understood in return. That is a deep natural thirst. But
+often this thirst causes us to wait for something outside of
+ourselves.<a href="#fn2" class="footnote-ref" id="fnref2"
+role="doc-noteref"><sup>2</sup></a> <span class="citation"
+data-cites="hanh2007fidelity">(<a href="#ref-hanh2007fidelity"
+role="doc-biblioref">Hanh 2007, chap. 4</a>)</span></p>
+</blockquote>
+<p>Two things stand out. The first is that the desire runs both ways: to
+know is bound up with being known. Curiosity is not only how we take in
+the world. It is part of how we reach toward other people. The second is
+the warning in the last sentence, which is close to the Grimms’ warning
+but not the same. The danger isn’t that we’ll open the wrong door. It’s
+that we’ll wait at doors, expecting something outside us to satisfy a
+thirst it can’t. Hanh’s own examples are the phone and the inbox:
+checking, again, in case there is something new.</p>
+<p>So curiosity can be a temptation and it can be a distraction. Can it
+also be a discipline? Diana Montalion, writing about how people learn to
+think in systems, takes Einstein’s line as a description of her
+colleagues:</p>
+<!-- corpus:quote 5 -->
+<blockquote>
+<p>“I am only passionately curious.” This describes many of the people
+I’ve worked with in tech. We are curious about different things, but
+generally speaking, the industry attracts curious people.<a href="#fn3"
+class="footnote-ref" id="fnref3" role="doc-noteref"><sup>3</sup></a>
+<span class="citation" data-cites="montalion2024learning">(<a
+href="#ref-montalion2024learning" role="doc-biblioref">Montalion 2024,
+211</a>)</span></p>
+</blockquote>
+<p>Here curiosity isn’t a moral danger or a hunger to be redirected.
+It’s what people do for a living. The curious are drawn to work that
+rewards asking how things fit together. Montalion’s point, in the pages
+that follow, is that this disposition has to be practised, and it can be
+educated out of us. We learn that passing the test matters more than
+understanding the subject, and the habit of asking fades.</p>
+<p>Put the three passages side by side and a single picture appears. The
+girl at the thirteenth door, the person refreshing a screen, and the
+engineer following a question down to its cause share the same urge.
+What separates them is whether curiosity is aimed at what is forbidden,
+at what is merely new, or at understanding. The first two are both kinds
+of waiting, for the door to open or the message to arrive. The third is
+a kind of work.</p>
+<p>That suggests a modest answer to the old warnings. Curiosity is not
+dangerous because it wants to know. It becomes dangerous, or merely
+empty, when it wants a glimpse instead of an understanding. The cure is
+not to suppress it, but to give it something worth knowing, and the
+patience to stay with it once the door is open.</p>
+<h2 class="unnumbered" id="references">References</h2>
+<div id="refs" class="references csl-bib-body hanging-indent"
+role="list">
+<div id="ref-grimm2012complete" class="csl-entry" role="listitem">
+Grimm, Brothers. 2012. <em>The Complete Brothers Grimm’s Fairy
+Tales</em>. Vook, Inc.
+</div>
+<div id="ref-hanh2007fidelity" class="csl-entry" role="listitem">
+Hanh, Thich Nhat. 2007. <em>Fidelity</em>. Parallax Press.
+</div>
+<div id="ref-montalion2024learning" class="csl-entry" role="listitem">
+Montalion, Diana. 2024. <em>Learning Systems Thinking</em>.
+</div>
+</div>
+<aside id="footnotes" class="footnotes footnotes-end-of-document"
+role="doc-endnotes">
+<hr />
+<ol>
+<li id="fn1"><p>Jacob and Wilhelm Grimm, “Our Lady’s Child” (tale 3), in
+<em>The Complete Brothers Grimm’s Fairy Tales</em> (Vook, 2012). EPUB:
+cited by chapter.<a href="#fnref1" class="footnote-back"
+role="doc-backlink">↩︎</a></p></li>
+<li id="fn2"><p>Thich Nhat Hanh, <em>Fidelity</em> (Parallax Press,
+2007), chap. 4, “Transforming Loneliness and Suffering.” The capitals
+are the book’s: the chapter’s opening words are set in small capitals.
+EPUB: cited by chapter.<a href="#fnref2" class="footnote-back"
+role="doc-backlink">↩︎</a></p></li>
+<li id="fn3"><p>Diana Montalion, <em>Learning Systems Thinking</em>
+(2024), chap. 11, “Systems Leadership,” section “Learning Leadership.”
+The opening line is Einstein’s, quoted by Montalion.<a href="#fnref3"
+class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</aside>
+</body>
+</html>

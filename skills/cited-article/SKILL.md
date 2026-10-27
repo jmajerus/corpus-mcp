@@ -10,9 +10,10 @@ passages, edits the prose, and publishes. Two files come out:
 
 - `<slug>.md`, the **source**: Markdown with citekeys (`[@key, chap. 2]`)
   that Pandoc formats. This is the file to edit.
-- `<slug>.formatted.md` (or `.html`, `.docx`), the **formatted copy**: the
-  same piece with citations and a reference list written out. This is the
-  file to read and share. The agent makes it again after every change.
+- `<slug>.formatted.html` (and any other formats asked for), the
+  **formatted copy**: the same piece with citations and a reference list
+  written out. This is the file to read and share. The agent makes it again
+  after every change.
 
 Don't assume the human knows Pandoc, citekeys, or BibTeX. Explain them in
 plain words when they come up, and run every command yourself.
@@ -31,7 +32,7 @@ arguments is the brief. Defaults:
 | `project` | the draft's slug | Quote tag, saved as `project:<value>`. |
 | `candidates` | `5` | Passages to offer at the gather checkpoint. |
 | `dir` | `drafts/<slug>/` | Where the draft goes: `<slug>.md` and `references.bib`. Without a `drafts/` folder in the working directory, use the session's scratchpad (or a temporary folder) and say where. |
-| `render` | `md` | Format of the formatted copy: `md`, `html`, `docx`, or `none`. A draft path instead: run only Verify and Format on it (for "check and format my draft"). |
+| `render` | `html` | Formats of the formatted copy, comma-separated: `html`, `md`, `docx`, `epub`, or `none`. A draft path instead: run only Verify and Format on it (for "check and format my draft"). |
 | `verify` | — | A draft path: run only Verify on it. |
 
 ## Phases and checkpoints
@@ -160,22 +161,29 @@ Run it after drafting, when asked, or with `verify=<path>`:
 
 ### 6. Format
 
-After every draft, and on `render=<path>`, write the formatted copy beside
-the source, in the draft's folder (skip this with `render=none`):
+After every draft, and on `render=<path>`, write the formatted copy in each
+`render` format beside the source, in the draft's folder (skip this with
+`render=none`). Set `lang` to the piece's language (`en` unless it's written
+in another):
 
+- `html` (the default): `pandoc <slug>.md --citeproc -s -M lang=en -o <slug>.formatted.html`.
+  One self-contained page, readable in any browser and by screen readers:
+  it declares its language, and its footnotes and reference list are
+  marked up as such.
 - `md`: `{ echo "# <title>"; echo; pandoc <slug>.md --citeproc -M link-citations=false -t gfm-raw_html; } > <slug>.formatted.md`.
-  This gives plain Markdown that any viewer, including GitHub, shows with
+  Plain Markdown that GitHub and other Markdown viewers show with
   citations, footnotes, and references in place.
-- `html`: `pandoc <slug>.md --citeproc -s -o <slug>.formatted.html`
-- `docx`: `pandoc <slug>.md --citeproc -o <slug>.formatted.docx`
+- `docx`: `pandoc <slug>.md --citeproc -M lang=en -o <slug>.formatted.docx`, for Word.
+- `epub`: `pandoc <slug>.md --citeproc -M lang=en -o <slug>.formatted.epub`, for e-readers.
 
 Add `--csl <style.csl>` when the human names a citation style; otherwise
 Pandoc uses Chicago author-date, which leaves "p." out of page citations.
 
-**Without Pandoc** (claude.ai, or a machine without it): write
-`<slug>.formatted.md` yourself, replacing each citation with author, year,
-and locator in parentheses, and adding a References list from each book's
-CSL item. Say that it hasn't been checked against a citation style.
+**Without Pandoc** (claude.ai, or a machine without it): write the formatted
+copy yourself, as HTML (or Markdown when that's the only format asked for),
+replacing each citation with author, year, and locator in parentheses, and
+adding a References list from each book's CSL item. Say that it hasn't been
+checked against a citation style. Docx and EPUB need Pandoc.
 
 The formatted copy is made from the source and replaced every time, so edits
 to it are lost. If the human edited it, carry those edits into the source
