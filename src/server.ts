@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -557,6 +559,15 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
   }
 }
 
+/** What tools/deploy.mjs last installed (branch, pull request, commit), written beside data.db after the restart, so read per request. */
+function readDeployed(config: Config): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(path.dirname(config.dataDbPath), "deployed.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "POST, OPTIONS",
@@ -584,7 +595,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/health") {
       const books = db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get();
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books }));
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books, deployed: readDeployed(fullConfig) }));
       return;
     }
     if (url.pathname === "/review" || url.pathname === "/admin" || url.pathname.startsWith("/admin/") || url.pathname.startsWith("/api/")) {

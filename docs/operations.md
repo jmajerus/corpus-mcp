@@ -98,6 +98,9 @@ commit instead, built and tested in a temporary worktree, so the server can try 
 change before it merges, and `npm run deploy -- --main` switches back to
 `origin/main`. Each deploy records its source on the server in
 `/var/lib/corpus-mcp/deployed.json`, and `npm run deploy -- --current` redeploys
-the latest commit of that same pull request or branch. In VS Code, the Deploy Corpus status-bar button (the Task Buttons
+the latest commit of that same pull request or branch. `GET /health` returns that record as `deployed`, and
+[`tools/corpus-status.mjs`](../tools/corpus-status.mjs) turns it into a status-bar
+item for the Status Probe extension: the branch or pull request the server runs,
+and how far it is behind origin. In VS Code, the Deploy Corpus status-bar button (the Task Buttons
 extension) runs each of these. [PLAN.md](../PLAN.md) records the
 design decisions, the facts about the corpus, and the known issues.

@@ -1,7 +1,7 @@
 {
   "VsCodeTaskButtons.tasks": [
     {
-      "label": "$(server) Deploy Corpus",
+      "label": "$(cloud-upload) Deploy Corpus",
       "tooltip": "npm run deploy — build, test, install a release on corpus-mcp.localdomain, restart, health-check, roll back on failure",
       "alignment": "left",
       "tasks": [
@@ -42,6 +42,18 @@
       "task": "Test",
       "tooltip": "npm test",
       "alignment": "left"
+    }
+  ],
+  "statusProbe.items": [
+    {
+      "id": "corpus-server",
+      "command": "node tools/corpus-status.mjs",
+      "intervalSeconds": 300,
+      "alignment": "left",
+      "priority": -100,
+      "refreshOnTasks": [
+        "Deploy Corpus*"
+      ]
     }
   ]
 }
