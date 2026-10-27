@@ -416,6 +416,11 @@ zotero-mcp's full text where it is available. Web sources would use the URL
 and access date and would be unverified. Both need a `source_kind` column,
 which the schema includes from the start.
 
+**Superseded (2026-10-27).** A separate Quote MCP is planned to own all
+quotes: those from paper books imported from Zotero notes, and later these.
+corpus-mcp would keep the anchors and the check against Calibre text. See
+`QUOTE-MCP-PLAN.md`.
+
 ## Shelves
 
 Calibre-Web's public shelves (Business, Literature, Main, Misinformation,
