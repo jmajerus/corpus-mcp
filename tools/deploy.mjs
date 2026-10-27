@@ -317,9 +317,11 @@ async function deployCommit(source, rest) {
   execFileSync("git", ["worktree", "add", "--detach", "--quiet", tree, source.commit], { cwd: root, stdio: "inherit" });
   try {
     execFileSync("npm", ["ci", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: tree, stdio: "inherit" });
-    // The environment already holds .env, so the worktree's script needs no copy of it. NESTED: this
-    // script records the source below, which the worktree's (a detached checkout) would get wrong.
-    execFileSync(process.execPath, [path.join(tree, "tools", "deploy.mjs"), ...rest], { cwd: tree, stdio: "inherit", env: { ...process.env, CORPUS_DEPLOY_NESTED: "1" } });
+    // The environment already holds .env, so the worktree's script needs no copy of it, but a relative
+    // vocabulary path in it means this checkout, not the worktree. NESTED: this script records the
+    // source below, which the worktree's (a detached checkout) would get wrong.
+    const vocabulary = process.env.CORPUS_VOCABULARY_SOURCE ? { CORPUS_VOCABULARY_SOURCE: path.resolve(process.env.CORPUS_VOCABULARY_SOURCE) } : {};
+    execFileSync(process.execPath, [path.join(tree, "tools", "deploy.mjs"), ...rest], { cwd: tree, stdio: "inherit", env: { ...process.env, ...vocabulary, CORPUS_DEPLOY_NESTED: "1" } });
   } finally {
     execFileSync("git", ["worktree", "remove", "--force", tree], { cwd: root, stdio: "inherit" });
   }
