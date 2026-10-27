@@ -419,7 +419,7 @@ which the schema includes from the start.
 **Superseded (2026-10-27).** A separate Quote MCP is planned to own all
 quotes: those from paper books imported from Zotero notes, and later these.
 corpus-mcp would keep the anchors and the check against Calibre text. See
-`QUOTE-MCP-PLAN.md`.
+the quote-mcp repo's `PLAN.md`.
 
 ## Shelves
 
