@@ -2,7 +2,7 @@
   "VsCodeTaskButtons.tasks": [
     {
       "label": "$(server) Deploy Corpus",
-      "tooltip": "npm run deploy — build, test, install a release on corpus-mcp.localdomain, restart, health-check, roll back on failure",
+      "tooltip": "npm run deploy \u2014 build, test, install a release on corpus-mcp.localdomain, restart, health-check, roll back on failure",
       "alignment": "left",
       "tasks": [
         {
@@ -16,7 +16,7 @@
           "description": "$(git-branch) --main"
         },
         {
-          "label": "Switch to a pull request…",
+          "label": "Switch to a pull request\u2026",
           "task": "Deploy Corpus: PR",
           "description": "$(git-pull-request) --pr <number>"
         },
@@ -33,7 +33,7 @@
         {
           "label": "Push Zotero settings",
           "task": "Deploy Corpus: Zotero",
-          "description": "$(key) --zotero — copy the Zotero settings from .env and restart"
+          "description": "$(key) --zotero \u2014 copy the Zotero settings from .env and restart"
         }
       ]
     },
@@ -51,6 +51,16 @@
       "intervalSeconds": 300,
       "alignment": "left",
       "priority": -100,
+      "refreshOnTasks": [
+        "Deploy Corpus*"
+      ]
+    },
+    {
+      "id": "corpus-replica",
+      "command": "node tools/replica-status.mjs",
+      "intervalSeconds": 60,
+      "alignment": "left",
+      "priority": -101,
       "refreshOnTasks": [
         "Deploy Corpus*"
       ]
