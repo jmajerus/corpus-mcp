@@ -1,7 +1,7 @@
 // The public catalogue's Worker (worker/index.ts): the public pages from the snapshot's replica in D1.
 // Before the first deploy: `npx wrangler d1 create corpus-mcp-public`, put its id below and in
 // worker/wrangler.proxy.jsonc, apply the schema with
-// `npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`, and set the hostname in routes.
+// `npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`. Served at corpus.majerus.us.
 // Locally: `npm run worker:load` then `npm run worker:dev`. Deploy with `npx wrangler deploy -c worker/wrangler.jsonc`.
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
@@ -9,8 +9,7 @@
   "main": "index.ts",
   "compatibility_date": "2026-08-02",
   "workers_dev": false,
-  // The public hostname, e.g. [{ "pattern": "library.example.org", "custom_domain": true }].
-  "routes": [],
+  "routes": [{ "pattern": "corpus.majerus.us", "custom_domain": true }],
   "d1_databases": [
     {
       "binding": "DB",
