@@ -15,7 +15,7 @@
       "binding": "DB",
       "database_name": "corpus-mcp-public",
       // The same database as worker/wrangler.jsonc's.
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "bb39fcbd-b715-4c90-8045-7590fb8da64f"
     }
   ]
 }
