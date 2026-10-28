@@ -22,6 +22,21 @@ export interface AdminConfig {
 
 const DEFAULT_NEIGHBORS = "zotero-mcp=http://zotero-mcp.localdomain:8000/mcp;calibre-web=http://calibre-web.localdomain:8083/;authoring=http://authoring.localdomain:8787/";
 
+/** The public catalogue site (src/public/); off unless CORPUS_PUBLIC is set. */
+export interface PublicConfig {
+  level: "none" | "catalogue";
+  /** The snapshot the public pages read, rebuilt by `corpus-mcp publish` and by the server on a timer. */
+  file: string;
+  /** A second listener that serves only the public pages, for a proxy without Cloudflare Access. */
+  port?: number;
+  title: string;
+  /** The public base URL, given in site.json. */
+  url: string;
+  /** Other public sites' base URLs, whose key lists link their pages to these books. */
+  links: string[];
+  intervalMinutes: number;
+}
+
 export interface Config {
   /** Directory holding one folder per Calibre library. */
   booksRoot: string;
@@ -43,6 +58,7 @@ export interface Config {
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
   admin?: AdminConfig;
+  public?: PublicConfig;
   host: string;
   port: number;
 }
@@ -54,6 +70,20 @@ function citekeyPreset(name: string | undefined): PresetName {
   if (!name) return DEFAULT_PRESET;
   if (!isPreset(name)) throw new Error(`CORPUS_CITEKEY_PRESET "${name}" is not a citekey preset (author-year-word, bbt-default).`);
   return name;
+}
+
+function publicConfig(env: NodeJS.ProcessEnv): PublicConfig {
+  const level = env.CORPUS_PUBLIC || "none";
+  if (level !== "none" && level !== "catalogue") throw new Error(`CORPUS_PUBLIC "${level}" should be "none" or "catalogue".`);
+  return {
+    level,
+    file: path.resolve(env.CORPUS_PUBLIC_DB ?? "/var/lib/corpus-mcp/public.db"),
+    port: env.CORPUS_PUBLIC_PORT ? Number.parseInt(env.CORPUS_PUBLIC_PORT, 10) : undefined,
+    title: env.CORPUS_PUBLIC_TITLE || "Library",
+    url: (env.CORPUS_PUBLIC_URL ?? "").replace(/\/+$/, ""),
+    links: (env.CORPUS_SITE_LINKS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    intervalMinutes: Number(env.CORPUS_PUBLISH_INTERVAL_MINUTES ?? 10) || 10,
+  };
 }
 
 function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
@@ -99,6 +129,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       syncStatus: env.CORPUS_SYNC_STATUS ?? "/var/lib/corpus-mcp/sync-status.json",
       calibreWebUrl: env.CORPUS_CALIBRE_WEB_URL ?? "http://calibre-web.localdomain:8083",
     },
+    public: publicConfig(env),
     host: env.CORPUS_HOST ?? "0.0.0.0",
     port: Number.parseInt(env.CORPUS_PORT ?? "8000", 10),
   };

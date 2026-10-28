@@ -862,6 +862,50 @@ Related: the manuscript toolkit plan
 be another consumer, using these terms for what a passage is *about*
 alongside IASP for what it *does*.
 
+## Public catalogue (stage 1 built 2026-10-28)
+
+The library's catalogue can be public while everything else stays private:
+titles, authors, year, publisher, ISBN, language, format, subjects (the
+vocabulary terms a book carries, and the terms above them), Calibre-Web's
+public shelves, and citekeys. Book text, page images, quotes, proposals, the
+change log, and `/admin` and `/mcp` are never public. It follows quote-mcp's
+public site (its PLAN.md, "The public site" and "Hosting the public site"),
+and the two link to each other by a convention, not shared code.
+
+- **Settings.** `CORPUS_PUBLIC` is `none` (the default: nothing changes, and
+  `/` redirects to `/admin`) or `catalogue`. `CORPUS_PUBLIC_TITLE` names the
+  site, `CORPUS_PUBLIC_URL` is its public base URL, `CORPUS_SITE_LINKS` lists
+  other public sites, and `CORPUS_PUBLIC_PORT` starts a second listener that
+  serves only the public pages, whatever a proxy sends it.
+- **The snapshot** (`src/public/snapshot.ts`). What's public is copied into
+  its own SQLite file, `public.db`, renamed into place so a reader never sees
+  half of it, and left alone when its content hash hasn't changed. The rules
+  for what's public live only here. The server rebuilds it on start and every
+  `CORPUS_PUBLISH_INTERVAL_MINUTES` (10), which picks up scans, pins, category
+  changes, and Zotero matches; `corpus-mcp publish` rebuilds it by hand.
+- **The pages** (`src/public/site.ts`) read only the snapshot, through a small
+  async store interface (`src/public/store.ts`), so the same code can run over
+  D1 in a Worker. `/` (counts, search, shelves, top-level subjects, linked
+  sites), `/books` (by author, or a search over titles, authors, and
+  subjects), `/books/<id>`, `/subjects[/<tag>]`, and `/shelves[/<id>]`. Pages
+  are cacheable, with the snapshot's hash as their ETag.
+- **Linking with quote-mcp** (agreed with its session 2026-10-28).
+  `/site.json` gives `{ version: 1, name, kind: "library", url, level,
+  citekeys: "/api/public/citekeys" }`. The key list maps each book's citekeys
+  and Zotero item keys (`users/<id>/<key>`) to its page. Only real keys go in:
+  a pinned or Calibre citekey, and the Zotero item the mirror matched the book
+  to, with its citekey; a proposed citekey never does. On each rebuild the
+  server fetches the linked sites' `site.json` and key lists and stores them
+  in the snapshot; a book page links to the same work there ("Quotes from this
+  book"), matched on either key. A site that can't be reached keeps its last
+  links.
+- **Next: off the LAN.** As quote-mcp will, the snapshot's changed rows are
+  to be queued and drained to D1 (concept-clusters' published replica: queue
+  by table and key with a row hash, a 15-second drain in dependency order, D1
+  a replica only), and a Worker serves the same pages from D1 on its own
+  hostname. corpus-mcp copies quote-mcp's queue, drain, and Worker once
+  they're built.
+
 ## Known issues
 
 - **CT 115 ownership.** CT 115 runs as a privileged container, but its root

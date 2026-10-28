@@ -20,7 +20,7 @@ const NAV: [NavKey, string, string][] = [
   ["changes", "Changes", "/admin/changes"],
 ];
 
-const CSS = `
+export const CSS = `
 :root {
   --bg: #f7f7f5; --surface: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --border: #dedcd6; --grid: #ecebe7;
   --accent: #2f5d8a; --accent-text: #ffffff; --bar: #2a78d6; --ok: #2e7d4f; --warn: #a15c07; --danger: #b3261e;
