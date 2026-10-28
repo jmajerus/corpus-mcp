@@ -1,0 +1,21 @@
+// The D1 proxy for corpus-mcp's drain (worker/proxy.ts): D1's REST API shape at /query, through the
+// public catalogue's database binding, guarded by a bearer token (the D1_PROXY_TOKEN secret, set with
+// `npx wrangler secret put D1_PROXY_TOKEN -c worker/wrangler.proxy.jsonc`). The server reads its URL and
+// token as CORPUS_D1_PROXY_URL and CORPUS_D1_PROXY_TOKEN. Locally, `npm run worker:proxy` runs it on the
+// local D1, with the token from worker/.dev.vars; run it and `npm run worker:dev` one at a time, since two
+// `wrangler dev` Workers can't share the local D1 file. Deploy with `npx wrangler deploy -c worker/wrangler.proxy.jsonc`.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "corpus-mcp-d1-proxy",
+  "main": "proxy.ts",
+  "compatibility_date": "2026-08-02",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "corpus-mcp-public",
+      // The same database as worker/wrangler.jsonc's.
+      "database_id": "bb39fcbd-b715-4c90-8045-7590fb8da64f"
+    }
+  ]
+}

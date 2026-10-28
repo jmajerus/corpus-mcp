@@ -179,9 +179,12 @@ sleep 2
 . "$f"; curl -sf "http://127.0.0.1:\${CORPUS_PORT:-8000}/api/zotero" | head -c 300; echo`);
 }
 
-/** The vocabulary intake's service token (client id, Access audience) from this machine's .env, set on the server when given. */
+/**
+ * Settings copied from this machine's .env to the server's on every deploy, when given: the vocabulary
+ * intake's service token (client id, Access audience), and the D1 proxy the public catalogue's drain ships to.
+ */
 function intakeSettings() {
-  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_VOCABULARY_PUSH_AUD"].filter((name) => process.env[name])
+  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_VOCABULARY_PUSH_AUD", "CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN"].filter((name) => process.env[name])
     .map((name) => `sed -i '/^${name}=/d' /etc/corpus-mcp/env && echo ${shellQuote(`${name}=${process.env[name]}`)} >> /etc/corpus-mcp/env\n`).join("");
 }
 
@@ -207,7 +210,9 @@ rm -f /tmp/corpus-mcp-${id}.tgz
 cd "$release"
 npm ci --omit=dev --no-audit --no-fund --loglevel=error
 chmod +x deploy/*.sh
-[ -f /etc/corpus-mcp/env ] || install -m 0644 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
+[ -f /etc/corpus-mcp/env ] || install -m 0640 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
+# It holds secrets (the Zotero key, the D1 proxy's token, which can run any SQL on the replica): root and the service only.
+chown root:corpus /etc/corpus-mcp/env && chmod 0640 /etc/corpus-mcp/env
 install -m 0644 deploy/corpus-mcp.service deploy/corpus-refresh.service deploy/corpus-refresh.timer \
   deploy/corpus-backup.service deploy/corpus-backup.timer /etc/systemd/system/
 # The dashboard's "Refresh now" (polkit) and the refresh log's rotation.
