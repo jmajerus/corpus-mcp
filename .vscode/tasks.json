@@ -38,6 +38,18 @@
       "problemMatcher": []
     },
     {
+      "label": "Deploy Corpus: public Worker",
+      "type": "npm",
+      "script": "worker:deploy",
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Corpus: D1 proxy",
+      "type": "npm",
+      "script": "worker:deploy-proxy",
+      "problemMatcher": []
+    },
+    {
       "label": "Test",
       "type": "npm",
       "script": "test",

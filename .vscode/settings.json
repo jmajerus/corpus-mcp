@@ -34,6 +34,16 @@
           "label": "Push Zotero settings",
           "task": "Deploy Corpus: Zotero",
           "description": "$(key) --zotero \u2014 copy the Zotero settings from .env and restart"
+        },
+        {
+          "label": "Deploy the public Worker",
+          "task": "Deploy Corpus: public Worker",
+          "description": "$(cloud-upload) npm run worker:deploy \u2014 test, then deploy worker/ to corpus.majerus.us"
+        },
+        {
+          "label": "Deploy the D1 proxy",
+          "task": "Deploy Corpus: D1 proxy",
+          "description": "$(cloud-upload) npm run worker:deploy-proxy \u2014 the proxy the server's drain writes D1 through"
         }
       ]
     },
