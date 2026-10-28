@@ -15,6 +15,7 @@ import { type Change, type DataStore, backupDataStore, notYetLogged, openDataSto
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
 import { findPrintedIsbns } from "../src/isbn.js";
+import { findPrintedYears, printedYear } from "../src/years.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
 import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, reflow, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
 import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport } from "../src/tagging.js";
@@ -22,7 +23,7 @@ import { type ZoteroConfig, linkZotero, syncZotero, zoteroCiteInfo, zoteroMatch,
 import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, citePassage, corpusStatus, getBook, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
   tagCleanupPlan, toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -462,6 +463,63 @@ describe("printed ISBNs", () => {
     expect(cite.isbn_candidates?.map((x) => [x.isbn, x.format])).toEqual([["9780306406157", "paperback"], ["9781402894626", null]]);
     expect(cite).toMatchObject({ isbn: null, bibtex: expect.stringMatching(/^@book/) });
     expect(corpusStatus(c).printed_isbns.books.map((b) => b.book_id)).toContain("extra:8");
+  });
+});
+
+describe("printed years", () => {
+  const page = (page_index: number, text: string) => ({ page_index, label: null, text });
+  const years = (text: string) => findPrintedYears([page(3, text)]).map((y) => [y.year, y.kind]);
+  const cited = (text: string, pages?: number) => printedYear(findPrintedYears([page(3, text)], pages))?.year ?? null;
+
+  it("reads the copyright lines publishers print", () => {
+    // From books in the library that Calibre has no year for.
+    expect(cited("Copyright 2016 by Kelly Oliver\n\nAll rights reserved.")).toBe(2016);
+    expect(cited("© 2025 John Majerus All rights reserved.")).toBe(2025);
+    expect(cited("ISBN 978-1-4842-7204-6 e-ISBN 978-1-4842-7205-3 https://doi.org/10.1007/978-1-4842-7205-3\n\n© Kit Eason 2022")).toBe(2022);
+    expect(cited("Copyright © 2020, The Pragmatic Bookshelf.")).toBe(2020);
+    expect(cited("MEAP Edition\n\nCopyright 2024 Manning Publications")).toBe(2024);
+  });
+
+  it("gives the year of the edition in hand", () => {
+    expect(cited("Copyright © 1949 George Orwell\nIntroduction copyright © 2003 by Thomas Pynchon")).toBe(2003);
+    expect(cited("First published 1998\nThis edition published 2005\nReprinted 2011, 2015")).toBe(2005);
+    expect(cited("First published in 1962 by Harper & Row")).toBe(1962);
+    expect(cited("Copyright © 1999, 2004, 2010 by the author")).toBe(2010);
+    expect(years("First published 1998\nReprinted 2011, 2015")).toEqual([[1998, "first_published"], [2011, "reprint"], [2015, "reprint"]]);
+  });
+
+  it("ignores numbers that aren't publication years", () => {
+    expect(years("ISBN 978-1-2019-5555-1\nDOI 10.1007/2016.1234\nCall 1-800-555-2019")).toEqual([]);
+    // A year with no marker before it is a date in the text.
+    expect(years("In 1984 the company moved to Ohio.")).toEqual([]);
+    expect(years(`Copyright © ${new Date().getFullYear() + 5} in the future`)).toEqual([]);
+  });
+
+  it("prefers the front matter to the last pages", () => {
+    const found = findPrintedYears([page(2, "Copyright © 2012"), page(198, "© 2019 Other Press: more books")], 200);
+    expect(printedYear(found)?.year).toBe(2012);
+    expect(printedYear(findPrintedYears([page(198, "© 2019 the author")], 200))?.year).toBe(2019);
+  });
+
+  it("cites and proposes a citekey with the printed year when Calibre has none", () => {
+    config.libraries.push("years");
+    makeLibrary(root, "years", [{ id: 1, title: "Carceral Humanitarianism", authors: ["Kelly Oliver"],
+      files: { pdf: makePdf({ pages: [["Carceral Humanitarianism"], ["Copyright 2016 by Kelly Oliver", "All rights reserved."], ["Body text"]] }) } }]);
+    scanLibraries(config, db);
+    const book = getBook(c, "years:1");
+    expect(book).toMatchObject({ year: null, printed_year: 2016 });
+    expect(JSON.parse(book.citekey_blockers)).toEqual([]);
+    expect(book.proposed_citekey).toMatch(/2016/);
+    const cite = citePassage(c, { book_id: "years:1" });
+    expect(cite).toMatchObject({ year_source: "printed", year_evidence: { page: 2 }, csl: { issued: { "date-parts": [[2016]] } } });
+    expect(cite.bibtex).toMatch(/year\s*=\s*\{?2016/);
+    expect(cite.warnings.join(" ")).toMatch(/Calibre has no publication year; 2016 is from the book's own text/);
+    const status = corpusStatus(c);
+    expect(status.printed_years.books.map((b) => [b.book_id, b.year])).toContainEqual(["years:1", 2016]);
+    expect(status.citekeys.ready_with_printed_year).toBeGreaterThanOrEqual(1);
+    // A rescan rewrites the proposal from Calibre's metadata, then from the printed year again.
+    scanLibraries(config, db);
+    expect(getBook(c, "years:1").proposed_citekey).toMatch(/2016/);
   });
 });
 

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS books (
   printed_isbns TEXT,                -- JSON array of IsbnCandidate found in the text; null until scanned
   printed_isbns_version INTEGER,     -- ISBN_SCAN_VERSION that produced printed_isbns
   text_chars INTEGER,                -- total extracted characters; null until counted
+  printed_years TEXT,                -- JSON array of YearCandidate found in the text; null until scanned
+  printed_years_version INTEGER,     -- YEAR_SCAN_VERSION that produced printed_years
+  printed_year INTEGER,              -- the year to cite from printed_years (src/years.ts printedYear), or null
   tags TEXT NOT NULL,                -- JSON array
   description TEXT,
   folder TEXT NOT NULL,              -- relative to the books root
@@ -134,6 +137,9 @@ const ADDED_BOOK_COLUMNS: Record<string, string> = {
   printed_isbns: "TEXT",
   printed_isbns_version: "INTEGER",
   text_chars: "INTEGER",
+  printed_years: "TEXT",
+  printed_years_version: "INTEGER",
+  printed_year: "INTEGER",
 };
 
 function migrate(db: DB): void {

@@ -82,6 +82,14 @@ function render() {
   document.title = b.title + " · Corpus Admin";
   const printed = b.isbn.printed.length ? '<table style="margin-top:8px"><thead><tr><th>Printed ISBN</th><th>Binding</th><th>Where</th></tr></thead><tbody>' +
     b.isbn.printed.map((p) => "<tr><td>" + esc(p.isbn) + "</td><td>" + esc(p.format || "–") + "</td><td>" + (p.position === "back" ? "back page " : "page ") + p.page + "</td></tr>").join("") + "</tbody></table>" : "";
+  const y = b.publication_year;
+  const yearKinds = { copyright: "copyright", edition: "this edition", first_published: "first published", published: "published", reprint: "reprint (not used)" };
+  const yearCard = '<div class="card"><h2>Publication year</h2>' + kv([
+    ["In Calibre", y.calibre ? String(y.calibre) : '<span class="note">None</span>'],
+    ["Cited as", y.year ? y.year + (y.year_source === "printed" ? ' <span class="note">from the text; add it in Calibre</span>' : "") : null]]) +
+    (y.candidates.length ? '<table style="margin-top:8px"><thead><tr><th>Printed</th><th>As</th><th>Where</th><th>Line</th></tr></thead><tbody>' +
+      y.candidates.map((p) => "<tr><td>" + p.year + "</td><td>" + esc(yearKinds[p.kind] || p.kind) + "</td><td>" + (p.position === "back" ? "back page " : "page ") + p.page +
+        '</td><td class="note">' + esc(p.context) + "</td></tr>").join("") + "</tbody></table>" : "") + "</div>";
   const changes = b.changes.length ? '<div class="scroll"><table><thead><tr><th>When</th><th>Change</th><th>Detail</th><th>Source</th><th>By</th></tr></thead><tbody>' +
     b.changes.map((ch) => "<tr><td>" + esc(when(ch.at)) + "</td><td>" + esc(String(ch.kind).replace("_", " ")) + "</td><td>" +
       (["tag_added", "tag_removed", "tag_proposed", "proposal_approved"].includes(ch.kind) ? tagChip(ch.detail) : esc(ch.detail || "")) + "</td><td>" +
@@ -95,7 +103,7 @@ function render() {
     '<div class="cols">' + categoriesCard() + citekeyCard() +
     '<div class="card"><h2>Shelves and other tags</h2>' + kv([["Shelves", b.shelves.length ? b.shelves.map((s) => '<a class="chip muted" href="/admin/books?shelf=' + encodeURIComponent(s) + '">' + esc(s) + "</a>").join("") : '<span class="note">None</span>'],
       ["Other tags", b.other_tags.length ? b.other_tags.map((t) => '<span class="chip muted" title="' + esc(t.suspect || "") + '">' + esc(t.tag) + (t.suspect ? " ⚠" : "") + "</span>").join("") : '<span class="note">None</span>']]) + "</div>" +
-    '<div class="card"><h2>ISBN</h2>' + kv([["State", badge("isbn", b.isbn.state)], ["In Calibre", b.isbn.calibre ? esc(b.isbn.calibre) + (b.isbn.valid ? "" : ' <span class="note">(fails its check digit)</span>') : null]]) + printed + "</div>" +
+    '<div class="card"><h2>ISBN</h2>' + kv([["State", badge("isbn", b.isbn.state)], ["In Calibre", b.isbn.calibre ? esc(b.isbn.calibre) + (b.isbn.valid ? "" : ' <span class="note">(fails its check digit)</span>') : null]]) + printed + "</div>" + yearCard +
     '<div class="card"><h2>File</h2>' + kv([["Status", esc(b.status) + (b.error ? ' <span class="note">' + esc(b.error) + "</span>" : "")], ["Format", esc((f.format || "–").toUpperCase())],
       ["Length", f.pages ? num(f.pages) + (f.page_kind === "location" ? " locations" : " pages") : null], ["Text", f.text_chars !== null ? num(f.text_chars) + " characters" : null],
       ["Size", f.size ? bytes(f.size) : null], ["Path", f.path ? esc(f.path) : null], ["Same file as", b.same_file_as.length ? b.same_file_as.map((x) => bookLink(x)).join(", ") : null],

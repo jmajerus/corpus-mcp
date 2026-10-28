@@ -285,7 +285,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("cite_passage", {
     title: "Cite a book",
-    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position. PDF locators use printed page labels; EPUB and MOBI locations are not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. The legacy citation and zotero_filing fields remain for one release.",
+    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position. PDF locators use printed page labels; EPUB and MOBI locations are not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. When Calibre has no publication year, the year printed on the book's copyright page is used, with year_source \"printed\" and year_evidence (page and line); confirm it before relying on it. The legacy citation and zotero_filing fields remain for one release.",
     inputSchema: {
       book_id: bookId,
       page: page.optional().describe("Page of the cited passage"),
@@ -311,7 +311,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("corpus_status", {
     title: "Corpus status",
-    description: "Index freshness, book counts by library and format, books that failed, have no text layer, or have no outline, and citekey readiness: pinned keys and books blocked from filing by missing Calibre metadata.",
+    description: "Index freshness, book counts by library and format, books that failed, have no text layer, or have no outline, citekey readiness (pinned keys, and books blocked from filing by missing Calibre metadata), and the ISBNs and publication years books print that Calibre lacks.",
     inputSchema: {},
     annotations: { title: "Corpus status", ...readOnly },
   }, () => run(() => json(corpusStatus(c))));
