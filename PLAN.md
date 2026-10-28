@@ -899,12 +899,28 @@ and the two link to each other by a convention, not shared code.
   in the snapshot; a book page links to the same work there ("Quotes from this
   book"), matched on either key. A site that can't be reached keeps its last
   links.
-- **Next: off the LAN.** As quote-mcp will, the snapshot's changed rows are
-  to be queued and drained to D1 (concept-clusters' published replica: queue
-  by table and key with a row hash, a 15-second drain in dependency order, D1
-  a replica only), and a Worker serves the same pages from D1 on its own
-  hostname. corpus-mcp copies quote-mcp's queue, drain, and Worker once
-  they're built.
+- **Off the LAN** (built 2026-10-28, copied from quote-mcp). The snapshot's
+  changed rows are queued and drained to D1, on concept-clusters' published
+  replica: `src/public/drain.ts` compares each row (table, key, hash) with
+  what was shipped whenever the snapshot's hash changes, queues new, changed,
+  and removed rows in `replica.db` beside the snapshot, and every 15 seconds
+  ships them in batches in dependency order (`src/public/replica.ts`; removals
+  in reverse, `meta` last). A row is recorded as shipped only if its hash
+  still matches; a failure stays queued. D1 is a replica only: nothing else
+  writes it.
+  - The drain reaches D1 through the proxy Worker (`worker/proxy.ts`,
+    `corpus-mcp-d1-proxy`), set by `CORPUS_D1_PROXY_URL` and
+    `CORPUS_D1_PROXY_TOKEN`, which deploy copies from `.env`; or Cloudflare's
+    REST API (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
+    `CORPUS_D1_DATABASE_ID`). `/health` reports its state under `replica`.
+  - The public Worker (`worker/index.ts`, `corpus-mcp-public`) serves the same
+    pages (`src/public/site.ts`) from D1 through `worker/d1.ts`, on its own
+    hostname, and answers 503 until a whole snapshot has arrived.
+  - Its own D1 database, `corpus-mcp-public`, never quote-mcp's: both
+    snapshots have a `meta` table.
+  - `corpus-mcp publish` rebuilds and ships once; `--sql <file>` writes a
+    file that loads a local D1 (`npm run worker:load`, then `worker:dev`);
+    `--status` shows the queue.
 
 ## Known issues
 

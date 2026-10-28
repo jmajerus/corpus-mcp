@@ -8,12 +8,18 @@ import type { Config } from "../src/config.js";
 import { openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
 import { scanLibraries } from "../src/indexer.js";
-import { buildSnapshot, fetchSites, type LinkedSite, type SnapshotOptions } from "../src/public/snapshot.js";
+import { d1Http } from "../src/public/d1-http.js";
+import { openReplicaState, pending, tick } from "../src/public/drain.js";
+import { snapshotRows } from "../src/public/replica.js";
+import { SNAPSHOT_SCHEMA, buildSnapshot, fetchSites, type LinkedSite, type SnapshotOptions } from "../src/public/snapshot.js";
 import { renderPublic } from "../src/public/site.js";
 import { sqliteStore } from "../src/public/store.js";
 import { serveHttp } from "../src/server.js";
 import type { Corpus } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
+import { type D1Database } from "../worker/d1.js";
+import { handle } from "../worker/index.js";
+import { type ProxyEnv, handleProxy } from "../worker/proxy.js";
 import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
 let root: string;
@@ -242,5 +248,116 @@ describe("the server", () => {
     for (const p of ["/admin", "/api/books", "/mcp", "/api/books/main%3A1/pages", "/health"]) {
       expect((await fetch(`${publicBase}${p}`)).status, p).toBe(404);
     }
+  });
+});
+
+describe("the replica in D1", () => {
+  const MIGRATION = path.join(import.meta.dirname, "..", "worker", "migrations", "0001_snapshot.sql");
+  const TOKEN = "test-token";
+
+  /** better-sqlite3 as the D1 binding the proxy uses, with batch() as one transaction, as D1's is. */
+  function proxyBinding(db: Database.Database): ProxyEnv["DB"] {
+    const run = (sql: string, params: unknown[]) => {
+      const s = db.prepare(sql);
+      return { success: true, results: s.reader ? s.all(...params) : (s.run(...params), []) };
+    };
+    const prepared = (sql: string, params: unknown[] = []) => ({ sql, params, bind: (...v: unknown[]) => prepared(sql, v), all: async () => run(sql, params) });
+    return {
+      prepare: (sql) => prepared(sql),
+      batch: async (statements) => db.transaction(() => statements.map((p) => {
+        const { sql, params } = p as unknown as { sql: string; params: unknown[] };
+        return run(sql, params);
+      }))(),
+    };
+  }
+
+  /** better-sqlite3 as the D1 binding the public Worker reads. */
+  function workerBinding(db: Database.Database): D1Database {
+    const prepared = (sql: string, params: unknown[] = []): ReturnType<D1Database["prepare"]> => ({
+      bind: (...v: unknown[]) => prepared(sql, v),
+      all: async <T>() => ({ results: db.prepare(sql).all(...params) as T[] }),
+      first: async <T>() => (db.prepare(sql).get(...params) as T | undefined) ?? null,
+    });
+    return { prepare: (sql) => prepared(sql) };
+  }
+
+  function setup(name: string) {
+    const file = path.join(root, `${name}.db`);
+    buildSnapshot(c, options([quotesSite]), file);
+    const replica = new Database(":memory:");
+    replica.exec(fs.readFileSync(MIGRATION, "utf8"));
+    const env: ProxyEnv = { DB: proxyBinding(replica), D1_PROXY_TOKEN: TOKEN };
+    let fail = false;
+    const calls: number[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (fail) {
+        fail = false;
+        throw new Error("connection reset");
+      }
+      const body = JSON.parse(String(init.body));
+      calls.push(body.batch ? body.batch.length : 1);
+      return handleProxy(new Request(url, init), env);
+    }) as typeof fetch;
+    const d1 = d1Http({ endpoint: "https://proxy.example/query", token: TOKEN }, fetchImpl);
+    const state = openReplicaState(path.join(root, `${name}-replica.db`));
+    const same = () => {
+      const rows = (db: Database.Database) => [...snapshotRows(db)].map((r) => JSON.stringify(r));
+      const snap = new Database(file, { readonly: true });
+      try {
+        return JSON.stringify(rows(replica)) === JSON.stringify(rows(snap));
+      } finally {
+        snap.close();
+      }
+    };
+    return { file, replica, state, calls, same, failNext: () => (fail = true), run: () => tick(file, state, d1) };
+  }
+
+  it("is created with the snapshot's schema", () => {
+    const strip = (sql: string) => sql.replace(/--.*$/gm, "").replace(/\s+/g, " ").trim();
+    expect(strip(fs.readFileSync(MIGRATION, "utf8"))).toBe(strip(SNAPSHOT_SCHEMA));
+  });
+
+  it("ships the snapshot, then only what changed, and keeps a failed batch queued", async () => {
+    const r = setup("drain");
+    const first = await r.run();
+    expect(first.shipped).toBeGreaterThan(10);
+    expect(r.same()).toBe(true);
+    expect(await r.run()).toEqual({ queued: 0, shipped: 0 });
+
+    // A new pin changes one book's row, the key list behind its link, and meta.
+    c.data.prepare("INSERT INTO citekeys (calibre_uuid, citekey, book_id, title, pinned_at) VALUES ('uuid-2', 'writer1999crowds2', 'main:2', 'Crowds', '2026-10-28')").run();
+    try {
+      buildSnapshot(c, options([quotesSite]), r.file);
+      r.failNext();
+      await expect(r.run()).rejects.toThrow(/connection reset/);
+      expect(pending(r.state).rows).toBeGreaterThan(0);
+      const second = await r.run();
+      expect(second.shipped).toBeLessThan(first.shipped);
+      expect(r.same()).toBe(true);
+    } finally {
+      c.data.prepare("DELETE FROM citekeys WHERE calibre_uuid = 'uuid-2'").run();
+    }
+
+    // A site dropped from the settings is removed from the replica, links and all.
+    buildSnapshot(c, options(), r.file);
+    await r.run();
+    expect(r.same()).toBe(true);
+    expect(r.replica.prepare("SELECT COUNT(*) FROM links").pluck().get()).toBe(0);
+    expect(pending(r.state)).toMatchObject({ rows: 0, removals: 0 });
+  });
+
+  it("is what the Worker serves, and nothing else", async () => {
+    const r = setup("worker");
+    const env = { DB: workerBinding(r.replica) };
+    const get = (p: string, init?: RequestInit) => handle(new Request(`https://library.example.org${p}`, init), env);
+    expect((await get("/")).status).toBe(503);
+    await r.run();
+    const page = await get("/books/main%3A1");
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("Quotes from this book on Quotes");
+    expect((await get("/books/main%3A1", { headers: { "if-none-match": page.headers.get("etag")! } })).status).toBe(304);
+    expect(JSON.parse(await (await get("/site.json")).text()).kind).toBe("library");
+    expect((await get("/books", { method: "POST" })).status).toBe(405);
+    for (const p of ["/admin", "/mcp", "/api/books", "/query"]) expect((await get(p)).status, p).toBe(404);
   });
 });

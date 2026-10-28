@@ -6,3 +6,5 @@ dist/
 .env
 .claude/settings.local.json
 drafts
+worker/.wrangler/
+worker/.dev.vars

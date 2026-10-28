@@ -30,6 +30,7 @@ import {
 import { VocabularySource } from "./vocabulary.js";
 import { addTerm, changeTerm, installVocabulary, taxonomyOverview, type TermAction } from "./taxonomy/api.js";
 import { Taxonomy } from "./taxonomy/taxonomy.js";
+import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
@@ -667,6 +668,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const publicOn = fullConfig.public && fullConfig.public.level !== "none";
   const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
   const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
+  // Ships the snapshot's changes to its replica in D1, when the proxy (or the REST API) is configured.
+  const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file)) : null;
   // The public-only listener serves the public pages and nothing else, whatever the proxy in front of it sends.
   const publicServer = publicOn && fullConfig.public!.port !== undefined
     ? http.createServer(async (req, res) => {
@@ -688,7 +691,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     }
     if (url.pathname === "/health") {
       const books = db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get();
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books, deployed: readDeployed(fullConfig) }));
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books, deployed: readDeployed(fullConfig), ...(replica ? { replica: replica() } : {}) }));
       return;
     }
     if (url.pathname === "/review" || url.pathname === "/admin" || url.pathname.startsWith("/admin/") || url.pathname.startsWith("/api/")) {
