@@ -217,18 +217,18 @@ touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp
 # Settings added after first install.
 grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
 grep -q '^CORPUS_ACCESS_AUD=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_AUD=' >> /etc/corpus-mcp/env
-${intakeSettings()}previous=$(readlink /opt/corpus-mcp/current || true)
+${intakeSettings()}# The two settings needed below, read before the release is switched so a failure leaves the server as it
+# was. The file is systemd's EnvironmentFile, not a shell script: a value with parentheses must not run as shell.
+env_value() { sed -n "s/^$1=//p" /etc/corpus-mcp/env | tail -n 1 | tr -d '"'; }
+CORPUS_DB=$(env_value CORPUS_DB); CORPUS_PORT=$(env_value CORPUS_PORT)
+: "\${CORPUS_DB:=/var/lib/corpus-mcp/corpus.db}" "\${CORPUS_PORT:=8000}"
+previous=$(readlink /opt/corpus-mcp/current || true)
 echo "previous=$previous"
 ln -sfn "$release" /opt/corpus-mcp/current.new && mv -T /opt/corpus-mcp/current.new /opt/corpus-mcp/current
 systemctl daemon-reload
 systemctl enable --quiet corpus-mcp.service corpus-refresh.timer corpus-backup.timer
 systemctl start corpus-refresh.timer corpus-backup.timer
 
-# Read only the two settings needed here: the file is systemd's EnvironmentFile, not a shell script,
-# so a value with spaces or parentheses must not be run as shell.
-env_value() { sed -n "s/^$1=//p" /etc/corpus-mcp/env | tail -n 1 | tr -d '"'; }
-CORPUS_DB=$(env_value CORPUS_DB); CORPUS_PORT=$(env_value CORPUS_PORT)
-: "\${CORPUS_DB:=/var/lib/corpus-mcp/corpus.db}" "\${CORPUS_PORT:=8000}"
 if [ ! -f "$CORPUS_DB" ]; then
   systemctl start --no-block corpus-refresh.service
   systemctl restart corpus-mcp.service
