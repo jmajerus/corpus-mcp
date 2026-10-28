@@ -609,6 +609,16 @@ async function servePublic(read: () => PublicStore | null, req: http.IncomingMes
   }
 }
 
+/** The request's URL, or null after answering 400 when it can't be parsed (a target such as "//"). */
+function requestUrl(req: http.IncomingMessage, res: http.ServerResponse): URL | null {
+  try {
+    return new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    res.writeHead(400).end();
+    return null;
+  }
+}
+
 /** Rebuilds the public snapshot now and then on a timer; an unchanged catalogue leaves the file alone. */
 function startPublishing(c: Corpus, config: Config): () => void {
   const p = config.public!;
@@ -660,13 +670,15 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   // The public-only listener serves the public pages and nothing else, whatever the proxy in front of it sends.
   const publicServer = publicOn && fullConfig.public!.port !== undefined
     ? http.createServer(async (req, res) => {
-      const url = new URL(req.url ?? "/", "http://localhost");
+      const url = requestUrl(req, res);
+      if (!url) return;
       if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url);
       else res.writeHead(404).end();
     })
     : null;
   const httpServer = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req, res);
+    if (!url) return;
     if (isPublicPath(url.pathname)) {
       // Without a public site, / is the dashboard's front door, as before.
       if (publicOn) await servePublic(readPublic, req, res, url);

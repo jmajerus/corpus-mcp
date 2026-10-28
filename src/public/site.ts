@@ -209,8 +209,9 @@ async function siteJson(store: PublicStore): Promise<unknown> {
 }
 
 async function keyList(store: PublicStore): Promise<unknown> {
-  const citekeys: Record<string, string> = {};
-  const zotero: Record<string, string> = {};
+  // Without a prototype, so a citekey such as "constructor" is an ordinary key.
+  const citekeys: Record<string, string> = Object.create(null);
+  const zotero: Record<string, string> = Object.create(null);
   for (const b of await store.all<Pick<Book, "id" | "citekeys" | "zotero_keys">>("SELECT id, citekeys, zotero_keys FROM books ORDER BY id")) {
     for (const k of JSON.parse(b.citekeys) as string[]) citekeys[k] ??= bookHref(b.id);
     for (const k of JSON.parse(b.zotero_keys) as string[]) zotero[k] ??= bookHref(b.id);
@@ -224,13 +225,25 @@ export function isPublicPath(pathname: string): boolean {
     || /^\/(books|subjects|shelves)(\/[^/]+)?$/.test(pathname);
 }
 
+/**
+ * An ETag from the response itself (FNV-1a, which needs no crypto API in a Worker), so it changes when the
+ * pages' markup or styles change, not only when the catalogue does.
+ */
+function etagOf(body: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < body.length; i++) h = Math.imul(h ^ body.charCodeAt(i), 0x01000193);
+  return `"${(h >>> 0).toString(16)}-${body.length.toString(16)}"`;
+}
+
 /** A public page or JSON document from the snapshot; null for a path that isn't public. */
 export async function renderPublic(store: PublicStore, pathname: string, params = new URLSearchParams()): Promise<PublicResponse | null> {
   if (!isPublicPath(pathname)) return null;
-  const etag = `"${(await meta(store, "hash")) ?? ""}"`;
   const html = (body: string | null): PublicResponse =>
-    body === null ? { status: 404, type: "text/html; charset=utf-8", body: "<!doctype html><title>Not found</title><p>Not found.</p>" } : { status: 200, type: "text/html; charset=utf-8", body, etag };
-  const json = (value: unknown): PublicResponse => ({ status: 200, type: "application/json", body: JSON.stringify(value), etag });
+    body === null ? { status: 404, type: "text/html; charset=utf-8", body: "<!doctype html><title>Not found</title><p>Not found.</p>" } : { status: 200, type: "text/html; charset=utf-8", body, etag: etagOf(body) };
+  const json = (value: unknown): PublicResponse => {
+    const body = JSON.stringify(value);
+    return { status: 200, type: "application/json", body, etag: etagOf(body) };
+  };
   const segment = pathname.split("/")[2];
   const id = segment === undefined ? undefined : decodeURIComponent(segment);
   if (pathname === "/") return html(await home(store));

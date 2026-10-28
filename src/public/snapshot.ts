@@ -132,7 +132,9 @@ function fill(c: Corpus, snap: Database.Database, o: SnapshotOptions): void {
   for (const site of o.sites) {
     insert("sites", { url: site.url, name: site.name, kind: site.kind, fetched_at: site.fetched_at, keys: JSON.stringify(site.keys) });
     for (const l of links) {
-      const path = l.zotero.map((k) => site.keys.zotero_keys[k]).find(Boolean) ?? l.citekeys.map((k) => site.keys.citekeys[k]).find(Boolean);
+      // Own entries only: a citekey such as "constructor" must not find an object's built-in property.
+      const own = (map: Record<string, string>, k: string) => (Object.hasOwn(map, k) ? map[k] : undefined);
+      const path = l.zotero.map((k) => own(site.keys.zotero_keys, k)).find(Boolean) ?? l.citekeys.map((k) => own(site.keys.citekeys, k)).find(Boolean);
       if (path) insert("links", { book_id: l.book, site_url: site.url, path });
     }
   }
@@ -218,12 +220,20 @@ function previousSites(file: string): Map<string, LinkedSite> {
   return sites;
 }
 
+/** A path on the site itself: "/works/7", never "//host/…" or a URL. */
+const sitePath = (p: unknown): p is string => typeof p === "string" && /^\/(?![/\\])/.test(p);
+
 const keyMap = (v: unknown): Record<string, string> =>
-  Object.fromEntries(Object.entries(v && typeof v === "object" ? v : {}).filter(([k, p]) => k && typeof p === "string" && p.startsWith("/")));
+  Object.fromEntries(Object.entries(v && typeof v === "object" ? v : {}).filter(([k, p]) => k && sitePath(p)));
+
+const MAX_REDIRECTS = 3;
 
 /**
  * Fetches each linked site's `site.json` and key list. A site that can't be reached, or answers with
  * something that isn't version 1, keeps what the snapshot at `file` had for it, or is left out.
+ *
+ * Every request stays on the configured site's origin, redirects included, so a linked site can't point
+ * this server at another host on the LAN.
  */
 export async function fetchSites(urls: string[], file: string, fetchImpl: typeof fetch = fetch): Promise<{ sites: LinkedSite[]; errors: string[] }> {
   const previous = previousSites(file);
@@ -232,14 +242,25 @@ export async function fetchSites(urls: string[], file: string, fetchImpl: typeof
   for (const raw of urls) {
     const url = raw.replace(/\/+$/, "");
     try {
+      const base = new URL(`${url}/`);
+      if (base.protocol !== "https:" && base.protocol !== "http:") throw new Error("not an http(s) URL");
       const get = async (path: string) => {
-        const res = await fetchImpl(new URL(path, `${url}/`), { signal: AbortSignal.timeout(15_000), headers: { accept: "application/json" } });
-        if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-        return (await res.json()) as Record<string, unknown>;
+        let target = new URL(path, base);
+        for (let hops = 0; ; hops++) {
+          if (target.origin !== base.origin) throw new Error(`${path}: leads off the site, to ${target.origin}`);
+          const res = await fetchImpl(target, { signal: AbortSignal.timeout(15_000), headers: { accept: "application/json" }, redirect: "manual" });
+          const location = res.headers.get("location");
+          if (res.status >= 300 && res.status < 400 && location && hops < MAX_REDIRECTS) {
+            target = new URL(location, target);
+            continue;
+          }
+          if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+          return (await res.json()) as Record<string, unknown>;
+        }
       };
       const site = await get("site.json");
-      if (site.version !== 1 || typeof site.name !== "string" || typeof site.citekeys !== "string") throw new Error("site.json isn't version 1");
-      const keys = await get(site.citekeys.replace(/^\//, ""));
+      if (site.version !== 1 || typeof site.name !== "string" || !sitePath(site.citekeys)) throw new Error("site.json isn't version 1");
+      const keys = await get(site.citekeys.slice(1));
       sites.push({
         url, name: site.name, kind: typeof site.kind === "string" ? site.kind : "site", fetched_at: new Date().toISOString(),
         keys: { citekeys: keyMap(keys.citekeys), zotero_keys: keyMap(keys.zotero_keys) },

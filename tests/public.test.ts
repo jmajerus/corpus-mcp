@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -159,6 +160,39 @@ describe("linked sites", () => {
     expect(down.errors[0]).toContain("HTTP 404");
     expect(down.sites[0].keys.citekeys).toEqual({ author2001networks: "/works/7" });
   });
+
+  it("stays on the linked site's origin", async () => {
+    const file = path.join(root, "nowhere.db");
+    const site = (citekeys: string) => ({ "https://quotes.example.org/site.json": { version: 1, name: "Q", kind: "quotes", citekeys } });
+    for (const citekeys of ["http://10.0.0.1/keys", "//10.0.0.1/keys", "api/keys"]) {
+      const r = await fetchSites(["https://quotes.example.org"], file, fake(site(citekeys)));
+      expect(r.errors[0], citekeys).toContain("isn't version 1");
+    }
+    const redirect = (to: string): typeof fetch => (async (url: URL | string) => String(url).endsWith("/site.json")
+      ? new Response(null, { status: 302, headers: { location: to } })
+      : Response.json({ citekeys: {}, zotero_keys: {} })) as typeof fetch;
+    expect((await fetchSites(["https://quotes.example.org"], file, redirect("http://10.0.0.1/site.json"))).errors[0]).toContain("leads off the site");
+    const same = redirect("/v1/site.json");
+    const followed = await fetchSites(["https://quotes.example.org"], file, (async (url: URL | string) => String(url).endsWith("/v1/site.json")
+      ? Response.json({ version: 1, name: "Q", kind: "quotes", citekeys: "/api/public/citekeys" })
+      : same(url)) as typeof fetch);
+    expect(followed.errors).toEqual([]);
+  });
+});
+
+describe("keys that are also object properties", () => {
+  it("lists them and never matches a missing one", async () => {
+    c.data.prepare("UPDATE citekeys SET citekey = 'constructor' WHERE calibre_uuid = 'uuid-1'").run();
+    try {
+      const file = path.join(root, "proto.db");
+      buildSnapshot(c, options([quotesSite]), file);
+      const store = sqliteStore(new Database(file, { readonly: true }));
+      expect((await renderPublic(store, "/books/main:1"))!.body).not.toContain("quotes.example.org");
+      expect(JSON.parse((await renderPublic(store, "/api/public/citekeys"))!.body).citekeys.constructor).toBe("/books/main%3A1");
+    } finally {
+      c.data.prepare("UPDATE citekeys SET citekey = 'author2001networks' WHERE calibre_uuid = 'uuid-1'").run();
+    }
+  });
 });
 
 describe("the server", () => {
@@ -188,6 +222,18 @@ describe("the server", () => {
     expect(await res.text()).toContain("Networks");
     const again = await fetch(`${base}/books/main%3A1`, { headers: { "if-none-match": res.headers.get("etag")! } });
     expect(again.status).toBe(304);
+  });
+
+  it("answers a malformed request target with 400 and keeps running", async () => {
+    const raw = (port: number) => new Promise<number>((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path: "//" }, (res) => {
+        res.resume();
+        resolve(res.statusCode!);
+      }).on("error", reject);
+    });
+    expect(await raw((server.address() as AddressInfo).port)).toBe(400);
+    expect(await raw((server.publicServer!.address() as AddressInfo).port)).toBe(400);
+    expect((await fetch(`${base}/health`)).status).toBe(200);
   });
 
   it("serves only public paths on the public port", async () => {
