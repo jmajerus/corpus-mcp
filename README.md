@@ -26,6 +26,8 @@ books that live in Calibre.
   person reviews them, and approved sets are applied to Calibre.
 - **Administer.** Web pages where a person can see and change everything an
   agent can, and preview and apply changes to Calibre.
+- **Publish.** Optionally, the library's catalogue as a public website, served
+  from Cloudflare, with book text kept private.
 
 corpus-mcp never writes to Calibre on its own: its tools change only its own
 data, and Calibre changes go through a job a person previews and applies.
@@ -39,6 +41,7 @@ data, and Calibre changes go through a job a person previews and applies.
 | [Categories and the taxonomy](docs/categories.md) | The controlled vocabulary, its file format and intake, tagging books, and the overlay of research terms |
 | [Citations, citekeys, and quotes](docs/citations.md) | The citation format, locators, citekeys, the Zotero mirror, and saved quotes |
 | [Operations](docs/operations.md) | How indexing works, shelves, access, Calibre jobs, bulk imports, configuration, and deployment |
+| [The public catalogue](docs/public-site.md) | What's public, the pages, linking with other sites, how the catalogue reaches Cloudflare, and running it |
 | [PLAN.md](PLAN.md) | Design decisions, facts about the corpus, and known issues |
 
 ## Skills and examples

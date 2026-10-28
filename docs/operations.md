@@ -29,6 +29,10 @@ Calibre library ── rsync (read-only) ──▶ books/<library>/…
   search results.
 - **Exclusions.** Only allowlisted libraries are indexed. Books carrying an
   excluded Calibre tag (by default `private`) are never indexed.
+- **The public catalogue.** With `CORPUS_PUBLIC=catalogue`, the server also
+  copies the public part of the catalogue into `public.db` and keeps a copy in
+  Cloudflare D1, which a Worker serves as a website. Book text never leaves the
+  LAN. See [The public catalogue](public-site.md).
 
 ## Shelves
 
@@ -81,8 +85,16 @@ MOBI, AZW3, and KFX books so they get chapter locators.
 | `CORPUS_DATA_DB` | `/var/lib/corpus-mcp/data.db` | Primary data such as pinned citekeys (never rebuilt) |
 | `CORPUS_BACKUP_DIR` | `/var/lib/corpus-mcp/backups` | Where `corpus-mcp backup` writes daily copies of `data.db` (14 kept) |
 | `CORPUS_HOST` / `CORPUS_PORT` | `0.0.0.0` / `8000` | HTTP listen address |
+| `CORPUS_PUBLIC` | `none` | `catalogue` turns on the public catalogue; its other settings are in [The public catalogue](public-site.md#setting-it-up) |
+| `CORPUS_D1_PROXY_URL` / `CORPUS_D1_PROXY_TOKEN` | unset | The D1 proxy the public catalogue uploads through; deploy copies them from `.env` |
 
-The server also answers `GET /health`.
+On the server, these live in `/etc/corpus-mcp/env`. That file is systemd's
+`EnvironmentFile`, not a shell script, so put a value with spaces or parentheses
+in double quotes. It holds secrets (the Zotero key and the D1 proxy's token), so
+every deploy keeps it readable only by root and the `corpus` group.
+
+The server also answers `GET /health`. It reports what's deployed, under
+`deployed`, and the public catalogue's upload queue, under `replica`.
 
 ## Deployment
 
@@ -101,6 +113,13 @@ change before it merges, and `npm run deploy -- --main` switches back to
 the latest commit of that same pull request or branch. `GET /health` returns that record as `deployed`, and
 [`tools/corpus-status.mjs`](../tools/corpus-status.mjs) turns it into a status-bar
 item for the Status Probe extension: the branch or pull request the server runs,
-and how far it is behind origin. In VS Code, the Deploy Corpus status-bar button (the Task Buttons
-extension) runs each of these. [PLAN.md](../PLAN.md) records the
-design decisions, the facts about the corpus, and the known issues.
+and how far it is behind origin. A second item,
+[`tools/replica-status.mjs`](../tools/replica-status.mjs), shows the public
+catalogue's upload queue (see [The public catalogue](public-site.md#day-to-day)).
+
+In VS Code, the Deploy Corpus status-bar button (the Task Buttons extension)
+runs each of these deploys, pushes the Zotero settings, and, with the
+`$(cloud-upload)` items, deploys the public catalogue's two Cloudflare Workers.
+Those Workers aren't part of the LAN deploy: deploy the public Worker after
+changing the public pages. [PLAN.md](../PLAN.md) records the design decisions,
+the facts about the corpus, and the known issues.
