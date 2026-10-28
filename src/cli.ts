@@ -9,9 +9,11 @@ const USAGE = `Usage:
   corpus-mcp index [--force]   Scan the libraries and update the index
   corpus-mcp serve [--stdio]   Serve MCP over Streamable HTTP (default) or stdio
   corpus-mcp backup            Copy data.db (pinned citekeys) to the backup directory
+  corpus-mcp publish           Rebuild the public catalogue snapshot (CORPUS_PUBLIC=catalogue)
 
 Environment: CORPUS_BOOKS_ROOT, CORPUS_LIBRARIES, CORPUS_EXCLUDE_TAGS, CORPUS_DB, CORPUS_DATA_DB,
-CORPUS_BACKUP_DIR, CORPUS_HOST, CORPUS_PORT`;
+CORPUS_BACKUP_DIR, CORPUS_HOST, CORPUS_PORT, CORPUS_PUBLIC, CORPUS_PUBLIC_DB, CORPUS_PUBLIC_PORT,
+CORPUS_PUBLIC_TITLE, CORPUS_PUBLIC_URL, CORPUS_SITE_LINKS, CORPUS_PUBLISH_INTERVAL_MINUTES`;
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...flags] = argv;
@@ -40,6 +42,17 @@ async function main(argv: string[]): Promise<void> {
       const data = openDataStore(config.dataDbPath);
       console.error(`backed up to ${await backupDataStore(data, config.backupDir)}`);
       data.close();
+      break;
+    }
+    case "publish": {
+      const { openCorpus } = await import("./server.js");
+      const { publishSnapshot } = await import("./public/snapshot.js");
+      const c = openCorpus(config);
+      const s = await publishSnapshot(c, config, (line) => console.error(line));
+      console.error(s.changed ? `public snapshot written to ${s.file}` : `public snapshot unchanged (${s.file})`,
+        { books: s.books, subjects: s.subjects, shelves: s.shelves, links: s.links });
+      c.db.close();
+      c.data.close();
       break;
     }
     case "serve": {

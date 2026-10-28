@@ -30,6 +30,9 @@ import {
 import { VocabularySource } from "./vocabulary.js";
 import { addTerm, changeTerm, installVocabulary, taxonomyOverview, type TermAction } from "./taxonomy/api.js";
 import { Taxonomy } from "./taxonomy/taxonomy.js";
+import { publishSnapshot } from "./public/snapshot.js";
+import { isPublicPath, renderPublic } from "./public/site.js";
+import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
@@ -314,7 +317,7 @@ export function createServer(c: Corpus): McpServer {
   return server;
 }
 
-function openCorpus(config: Config): Corpus {
+export function openCorpus(config: Config): Corpus {
   const db = openDatabase(config.dbPath, { readonly: true });
   const data = openDataStore(config.dataDbPath);
   const source = new VocabularySource(config.vocabularyPath);
@@ -359,6 +362,8 @@ export interface WebOptions {
   jobCommands?: JobCommands;
   /** false: no background Zotero sync (tests run it through the job). */
   zoteroTimer?: boolean;
+  /** false: no background rebuild of the public snapshot (tests build it themselves). */
+  publishTimer?: boolean;
 }
 
 interface Web { c: Corpus; config: Config; runner: JobRunner; options: WebOptions }
@@ -568,6 +573,64 @@ function readDeployed(config: Config): unknown {
   }
 }
 
+/**
+ * A public page from the snapshot, for GET and HEAD. With no snapshot yet, a page that says how to build
+ * one. Public pages may be cached, unlike the admin pages.
+ */
+async function servePublic(read: () => PublicStore | null, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { allow: "GET, HEAD" }).end();
+    return;
+  }
+  const store = read();
+  if (!store) {
+    res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" })
+      .end("The public catalogue hasn't been built yet. Run \"corpus-mcp publish\", or wait for the server's next rebuild.");
+    return;
+  }
+  try {
+    const out = await renderPublic(store, url.pathname, url.searchParams);
+    if (!out) {
+      res.writeHead(404).end();
+      return;
+    }
+    const headers: Record<string, string> = { "content-type": out.type, "cache-control": "public, max-age=300" };
+    if (out.etag) {
+      headers.etag = out.etag;
+      if (req.headers["if-none-match"] === out.etag) {
+        res.writeHead(304, headers).end();
+        return;
+      }
+    }
+    res.writeHead(out.status, headers).end(req.method === "HEAD" ? undefined : out.body);
+  } catch (error) {
+    console.error("public page failed", error);
+    if (!res.headersSent) res.writeHead(500).end();
+  }
+}
+
+/** Rebuilds the public snapshot now and then on a timer; an unchanged catalogue leaves the file alone. */
+function startPublishing(c: Corpus, config: Config): () => void {
+  const p = config.public!;
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const s = await publishSnapshot(c, config, (line) => console.error(line));
+      if (s.changed) console.error(`public snapshot rebuilt: ${s.books} books, ${s.subjects} subjects, ${s.shelves} shelves, ${s.links} links`);
+    } catch (error) {
+      console.error("public snapshot failed", error);
+    } finally {
+      running = false;
+    }
+  };
+  void run();
+  const timer = setInterval(run, p.intervalMinutes * 60_000);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "POST, OPTIONS",
@@ -577,7 +640,7 @@ const CORS_HEADERS = {
 };
 
 /** Stateless Streamable HTTP: a fresh server and transport per request, sharing the database handles. */
-export async function serveHttp(config: Config, options: WebOptions = {}): Promise<http.Server> {
+export async function serveHttp(config: Config, options: WebOptions = {}): Promise<http.Server & { publicServer: http.Server | null }> {
   const corpus = openCorpus(config);
   const { db } = corpus;
   const fullConfig: Config = { ...config, admin: config.admin ?? loadConfig({}).admin };
@@ -591,8 +654,26 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     }),
   };
   if (zotero && options.zoteroTimer !== false) zotero.start();
+  const publicOn = fullConfig.public && fullConfig.public.level !== "none";
+  const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
+  const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
+  // The public-only listener serves the public pages and nothing else, whatever the proxy in front of it sends.
+  const publicServer = publicOn && fullConfig.public!.port !== undefined
+    ? http.createServer(async (req, res) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url);
+      else res.writeHead(404).end();
+    })
+    : null;
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+    if (isPublicPath(url.pathname)) {
+      // Without a public site, / is the dashboard's front door, as before.
+      if (publicOn) await servePublic(readPublic, req, res, url);
+      else if (url.pathname === "/") res.writeHead(302, { location: "/admin" }).end();
+      else res.writeHead(404).end();
+      return;
+    }
     if (url.pathname === "/health") {
       const books = db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get();
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books, deployed: readDeployed(fullConfig) }));
@@ -633,8 +714,17 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
       if (!res.headersSent) res.writeHead(500).end();
     }
   });
+  httpServer.on("close", () => {
+    stopPublishing();
+    publicServer?.close();
+  });
+  if (publicServer) {
+    await new Promise<void>((resolve) => publicServer.listen(fullConfig.public!.port, config.host, resolve));
+    const at = publicServer.address();
+    console.error(`public catalogue listening on ${typeof at === "object" && at ? `${at.address}:${at.port}` : fullConfig.public!.port}`);
+  }
   await new Promise<void>((resolve) => httpServer.listen(config.port, config.host, resolve));
   const address = httpServer.address();
   console.error(`corpus-mcp ${VERSION} listening on ${typeof address === "object" && address ? `${address.address}:${address.port}` : config.port}/mcp`);
-  return httpServer;
+  return Object.assign(httpServer, { publicServer });
 }
