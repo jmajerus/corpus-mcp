@@ -1,4 +1,5 @@
 import { isPublicPath, renderPublic } from "../src/public/site.js";
+import { FAVICON_PATHS, favicon } from "../src/web/favicon.js";
 import { type D1Database, d1Store } from "./d1.js";
 
 /**
@@ -33,6 +34,9 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     url = new URL(request.url);
   } catch {
     return text(400, "Bad request");
+  }
+  if (FAVICON_PATHS.has(url.pathname)) {
+    return new Response(request.method === "HEAD" ? null : favicon(), { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
   }
   if (!isPublicPath(url.pathname)) return text(404, "Not found");
   if (request.method !== "GET" && request.method !== "HEAD") return text(405, "Method not allowed", { allow: "GET, HEAD" });

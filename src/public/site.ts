@@ -1,3 +1,4 @@
+import { FAVICON_LINK } from "../web/favicon.js";
 import { CSS } from "../web/layout.js";
 import type { PublicStore } from "./store.js";
 
@@ -57,7 +58,7 @@ async function page(store: PublicStore, title: string | null, section: Section, 
   const site = await siteTitle(store);
   const nav: [Section, string, string][] = [["home", "Home", "/"], ["books", "Books", "/books"], ["subjects", "Subjects", "/subjects"], ["shelves", "Shelves", "/shelves"]];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title ? `${esc(title)} · ` : ""}${esc(site)}</title><style>${CSS}${SITE_CSS}</style></head><body>
+<title>${title ? `${esc(title)} · ` : ""}${esc(site)}</title>${FAVICON_LINK}<style>${CSS}${SITE_CSS}</style></head><body>
 <header class="topbar"><div class="topbar-inner"><a class="brand" href="/" style="color:inherit;text-decoration:none">${esc(site)}</a><nav class="nav">
 ${nav.map(([k, label, href]) => `<a href="${href}"${k === section ? ' aria-current="page"' : ""}>${label}</a>`).join("")}
 </nav></div></header><main>${body}</main></body></html>`;

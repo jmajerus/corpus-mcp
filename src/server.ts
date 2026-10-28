@@ -32,6 +32,7 @@ import { addTerm, changeTerm, installVocabulary, taxonomyOverview, type TermActi
 import { Taxonomy } from "./taxonomy/taxonomy.js";
 import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
+import { FAVICON_PATHS, favicon } from "./web/favicon.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
@@ -620,6 +621,13 @@ function requestUrl(req: http.IncomingMessage, res: http.ServerResponse): URL | 
   }
 }
 
+/** Answers a request for the site's icon, on either listener; false for any other path. */
+function serveFavicon(req: http.IncomingMessage, res: http.ServerResponse, url: URL): boolean {
+  if (!FAVICON_PATHS.has(url.pathname)) return false;
+  res.writeHead(200, { "content-type": "image/png", "cache-control": "public, max-age=86400" }).end(req.method === "HEAD" ? undefined : favicon());
+  return true;
+}
+
 /** Rebuilds the public snapshot now and then on a timer; an unchanged catalogue leaves the file alone. */
 function startPublishing(c: Corpus, config: Config): () => void {
   const p = config.public!;
@@ -674,14 +682,14 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const publicServer = publicOn && fullConfig.public!.port !== undefined
     ? http.createServer(async (req, res) => {
       const url = requestUrl(req, res);
-      if (!url) return;
+      if (!url || serveFavicon(req, res, url)) return;
       if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url);
       else res.writeHead(404).end();
     })
     : null;
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
-    if (!url) return;
+    if (!url || serveFavicon(req, res, url)) return;
     if (isPublicPath(url.pathname)) {
       // Without a public site, / is the dashboard's front door, as before.
       if (publicOn) await servePublic(readPublic, req, res, url);

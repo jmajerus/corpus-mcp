@@ -17,6 +17,7 @@ import { sqliteStore } from "../src/public/store.js";
 import { serveHttp } from "../src/server.js";
 import type { Corpus } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
+import { FAVICON_BASE64 } from "../src/web/favicon.js";
 import { type D1Database } from "../worker/d1.js";
 import { handle } from "../worker/index.js";
 import { type ProxyEnv, handleProxy } from "../worker/proxy.js";
@@ -242,6 +243,18 @@ describe("the server", () => {
     expect((await fetch(`${base}/health`)).status).toBe(200);
   });
 
+  it("serves the icon on both listeners, and the pages link it", async () => {
+    const png = fs.readFileSync(path.join(import.meta.dirname, "..", "assets", "favicon.png"));
+    expect(FAVICON_BASE64).toBe(png.toString("base64"));
+    for (const at of [base, publicBase]) {
+      const res = await fetch(`${at}/favicon.png`);
+      expect(res.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await res.arrayBuffer()).equals(png)).toBe(true);
+    }
+    expect(await (await fetch(`${base}/books`)).text()).toContain('rel="icon"');
+    expect(await (await fetch(`${base}/admin`)).text()).toContain('rel="icon"');
+  });
+
   it("serves only public paths on the public port", async () => {
     expect((await fetch(`${publicBase}/books`)).status).toBe(200);
     expect((await fetch(`${publicBase}/site.json`)).status).toBe(200);
@@ -423,6 +436,7 @@ describe("the replica in D1", () => {
     expect(await page.text()).toContain("Quotes from this book on Quotes");
     expect((await get("/books/main%3A1", { headers: { "if-none-match": page.headers.get("etag")! } })).status).toBe(304);
     expect(JSON.parse(await (await get("/site.json")).text()).kind).toBe("library");
+    expect((await get("/favicon.png")).headers.get("content-type")).toBe("image/png");
     expect((await get("/books", { method: "POST" })).status).toBe(405);
     for (const p of ["/admin", "/mcp", "/api/books", "/query"]) expect((await get(p)).status, p).toBe(404);
   });

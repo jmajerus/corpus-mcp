@@ -4,6 +4,8 @@
  * since a TypeScript template literal would swallow them.
  */
 
+import { FAVICON_LINK } from "./favicon.js";
+
 export type NavKey = "dashboard" | "books" | "quotes" | "categories" | "taxonomy" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes" | "zotero";
 
 const NAV: [NavKey, string, string][] = [
@@ -157,6 +159,7 @@ export function page(opts: { title: string; nav: NavKey; body: string; script: s
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${opts.title}</title>
+${FAVICON_LINK}
 <style>${CSS}${opts.css ?? ""}</style>
 </head>
 <body>
