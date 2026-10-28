@@ -210,7 +210,9 @@ rm -f /tmp/corpus-mcp-${id}.tgz
 cd "$release"
 npm ci --omit=dev --no-audit --no-fund --loglevel=error
 chmod +x deploy/*.sh
-[ -f /etc/corpus-mcp/env ] || install -m 0644 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
+[ -f /etc/corpus-mcp/env ] || install -m 0640 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
+# It holds secrets (the Zotero key, the D1 proxy's token, which can run any SQL on the replica): root and the service only.
+chown root:corpus /etc/corpus-mcp/env && chmod 0640 /etc/corpus-mcp/env
 install -m 0644 deploy/corpus-mcp.service deploy/corpus-refresh.service deploy/corpus-refresh.timer \
   deploy/corpus-backup.service deploy/corpus-backup.timer /etc/systemd/system/
 # The dashboard's "Refresh now" (polkit) and the refresh log's rotation.

@@ -10,7 +10,7 @@ import { openDatabase } from "../src/db.js";
 import { scanLibraries } from "../src/indexer.js";
 import { d1Http } from "../src/public/d1-http.js";
 import { openReplicaState, pending, tick } from "../src/public/drain.js";
-import { snapshotRows } from "../src/public/replica.js";
+import { replicaScript, snapshotRows } from "../src/public/replica.js";
 import { SNAPSHOT_SCHEMA, buildSnapshot, fetchSites, type LinkedSite, type SnapshotOptions } from "../src/public/snapshot.js";
 import { renderPublic } from "../src/public/site.js";
 import { sqliteStore } from "../src/public/store.js";
@@ -288,15 +288,22 @@ describe("the replica in D1", () => {
     replica.exec(fs.readFileSync(MIGRATION, "utf8"));
     const env: ProxyEnv = { DB: proxyBinding(replica), D1_PROXY_TOKEN: TOKEN };
     let fail = false;
-    const calls: number[] = [];
+    let lose = false;
+    const calls: { sql: string; params?: unknown[] }[][] = [];
     const fetchImpl = (async (url: string, init: RequestInit) => {
       if (fail) {
         fail = false;
         throw new Error("connection reset");
       }
       const body = JSON.parse(String(init.body));
-      calls.push(body.batch ? body.batch.length : 1);
-      return handleProxy(new Request(url, init), env);
+      calls.push(body.batch ?? [body]);
+      const response = await handleProxy(new Request(url, init), env);
+      if (lose) {
+        // D1 committed the batch, but its response never arrived.
+        lose = false;
+        throw new Error("response lost");
+      }
+      return response;
     }) as typeof fetch;
     const d1 = d1Http({ endpoint: "https://proxy.example/query", token: TOKEN }, fetchImpl);
     const state = openReplicaState(path.join(root, `${name}-replica.db`));
@@ -309,7 +316,7 @@ describe("the replica in D1", () => {
         snap.close();
       }
     };
-    return { file, replica, state, calls, same, failNext: () => (fail = true), run: () => tick(file, state, d1) };
+    return { file, replica, state, calls, same, failNext: () => (fail = true), loseNext: () => (lose = true), run: () => tick(file, state, d1) };
   }
 
   it("is created with the snapshot's schema", () => {
@@ -344,6 +351,65 @@ describe("the replica in D1", () => {
     expect(r.same()).toBe(true);
     expect(r.replica.prepare("SELECT COUNT(*) FROM links").pluck().get()).toBe(0);
     expect(pending(r.state)).toMatchObject({ rows: 0, removals: 0 });
+  });
+
+  it("writes meta's hash last, so the Worker never serves half a publication", async () => {
+    const r = setup("order");
+    await r.run();
+    const last = r.calls.at(-1)!.at(-1)!;
+    expect(last.sql).toMatch(/INTO meta/);
+    expect(last.params?.[0]).toBe("hash");
+  });
+
+  it("resends what a lost response may have applied", async () => {
+    const r = setup("lost");
+    await r.run();
+    const pin = (key: string | null) => {
+      c.data.prepare("DELETE FROM citekeys WHERE calibre_uuid = 'uuid-2'").run();
+      if (key) c.data.prepare("INSERT INTO citekeys (calibre_uuid, citekey, book_id, title, pinned_at) VALUES ('uuid-2', ?, 'main:2', 'Crowds', '2026-10-28')").run(key);
+    };
+    try {
+      // A change that reached D1 unacknowledged, then reverted: the reverted value is sent again.
+      pin("lostkey2026");
+      buildSnapshot(c, options([quotesSite]), r.file);
+      r.loseNext();
+      await expect(r.run()).rejects.toThrow(/response lost/);
+      pin(null);
+      buildSnapshot(c, options([quotesSite]), r.file);
+      await r.run();
+      expect(r.same()).toBe(true);
+      // Rows that reached D1 unacknowledged and then left the snapshot are deleted.
+      buildSnapshot(c, options(), r.file);
+      buildSnapshot(c, options([{ ...quotesSite, url: "https://other.example.org" }]), r.file);
+      r.loseNext();
+      await expect(r.run()).rejects.toThrow(/response lost/);
+      buildSnapshot(c, options(), r.file);
+      await r.run();
+      expect(r.same()).toBe(true);
+    } finally {
+      pin(null);
+    }
+  });
+
+  it("lets one tick at a time ship", async () => {
+    const r = setup("lease");
+    const [a, b] = await Promise.all([r.run(), r.run()]);
+    expect([a.busy, b.busy].filter(Boolean)).toHaveLength(1);
+    expect(r.same()).toBe(true);
+    expect((await r.run()).busy).toBeUndefined();
+  });
+
+  it("writes a SQL file that loads the snapshot into an empty replica", () => {
+    const file = path.join(root, "script.db");
+    buildSnapshot(c, options([quotesSite]), file);
+    const snap = new Database(file, { readonly: true });
+    const local = new Database(":memory:");
+    local.exec(fs.readFileSync(MIGRATION, "utf8"));
+    local.exec(replicaScript(snap));
+    const rows = (db: Database.Database) => [...snapshotRows(db)].map((x) => JSON.stringify(x));
+    expect(rows(local)).toEqual(rows(snap));
+    expect(rows(snap).some((x) => x.includes("\\u0000"))).toBe(true);
+    snap.close();
   });
 
   it("is what the Worker serves, and nothing else", async () => {

@@ -58,9 +58,8 @@ export function remove(table: string, key: string): Statement {
 function literal(v: unknown): string {
   if (v === null || v === undefined) return "NULL";
   if (typeof v === "number" || typeof v === "bigint") return String(v);
-  const text = String(v);
-  if (text.includes("\0")) throw new Error("A value with a NUL character can't be written as SQL.");
-  return `'${text.replace(/'/g, "''")}'`;
+  // A NUL can't appear inside a SQL string literal (the sort keys use one as a separator), so it's written as char(0).
+  return String(v).split("\0").map((part) => `'${part.replace(/'/g, "''")}'`).join(" || char(0) || ");
 }
 
 /** A statement with its parameters written in, for a SQL file. */

@@ -86,7 +86,8 @@ async function main(argv: string[]): Promise<void> {
         break;
       }
       const shipped = await drain.tick(file, state(), d1Http(d1));
-      console.error(`replica: ${shipped.queued} queued, ${shipped.shipped} shipped to D1`);
+      console.error(shipped.busy ? "replica: the server's drain is shipping now; it will send this snapshot's changes too"
+        : `replica: ${shipped.queued} queued, ${shipped.shipped} shipped to D1`);
       break;
     }
     case "serve": {
