@@ -224,7 +224,10 @@ systemctl daemon-reload
 systemctl enable --quiet corpus-mcp.service corpus-refresh.timer corpus-backup.timer
 systemctl start corpus-refresh.timer corpus-backup.timer
 
-. /etc/corpus-mcp/env
+# Read only the two settings needed here: the file is systemd's EnvironmentFile, not a shell script,
+# so a value with spaces or parentheses must not be run as shell.
+env_value() { sed -n "s/^$1=//p" /etc/corpus-mcp/env | tail -n 1 | tr -d '"'; }
+CORPUS_DB=$(env_value CORPUS_DB); CORPUS_PORT=$(env_value CORPUS_PORT)
 : "\${CORPUS_DB:=/var/lib/corpus-mcp/corpus.db}" "\${CORPUS_PORT:=8000}"
 if [ ! -f "$CORPUS_DB" ]; then
   systemctl start --no-block corpus-refresh.service
