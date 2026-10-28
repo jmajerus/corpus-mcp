@@ -495,6 +495,27 @@ describe("printed years", () => {
     expect(years(`Copyright © ${new Date().getFullYear() + 5} in the future`)).toEqual([]);
   });
 
+  it("reads the edition marker that encloses a first-published one", () => {
+    expect(cited("Copyright © 1984\nThis edition first published 2005")).toBe(2005);
+    expect(years("This edition first published 2005")).toEqual([[2005, "edition"]]);
+  });
+
+  it("reads both ends of a copyright range", () => {
+    expect(cited("Copyright © 2016-2022 by the author")).toBe(2022);
+    expect(cited("© 2016-22 by the author")).toBe(2022);
+    expect(cited("Copyright © 2016–2022 by the author")).toBe(2022);
+  });
+
+  it("never reads a year inside an ISBN printed with spaces", () => {
+    expect(cited("Copyright © 2016 by the author. ISBN 978 1 2019 5555 9")).toBe(2016);
+  });
+
+  it("reads only the copyright page and what comes before it, not the chapters after", () => {
+    const found = findPrintedYears([page(1, "First published 1998"), page(2, "Copyright © 2000 by the author"), page(10, "// Copyright 2006 Example Corp.")], 300);
+    expect(found.map((y) => y.year)).toEqual([1998, 2000, 2006]);
+    expect(printedYear(found)?.year).toBe(2000);
+  });
+
   it("prefers the front matter to the last pages", () => {
     const found = findPrintedYears([page(2, "Copyright © 2012"), page(198, "© 2019 Other Press: more books")], 200);
     expect(printedYear(found)?.year).toBe(2012);

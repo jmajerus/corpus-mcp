@@ -20,11 +20,12 @@ export interface YearCandidate {
 }
 
 /** Bump when findPrintedYears or printedYear changes, so the indexer recomputes stored years (no re-extraction). */
-export const YEAR_SCAN_VERSION = 1;
+export const YEAR_SCAN_VERSION = 2;
 
 /**
- * Words that say what the year after them is, nearest first wins. Order matters within a line only in
- * that each year takes the closest of these before it.
+ * Words that say what the year after them is. Each year takes the marker that ends closest before it;
+ * of two ending at the same place, the one that starts first, so "This edition first published 2005"
+ * is an edition year, not a first-published one.
  */
 const MARKERS: [YearKind, RegExp][] = [
   ["reprint", /\b(?:reprinted|reprint(?:ed)? edition|reissued|\d+(?:st|nd|rd|th)? printing|printing)\b/gi],
@@ -36,6 +37,30 @@ const MARKERS: [YearKind, RegExp][] = [
 
 /** A year on its own: not part of an ISBN, a DOI, a phone number, or a longer number. */
 const YEAR = /(?<![\d./\-])(1[4-9]\d\d|20\d\d)(?![\d/\-]|\.\d)/g;
+
+/** A range of years joined by a hyphen, "2016-2022" or "2016-22", which YEAR's guard against ISBNs would skip. */
+const RANGE = /(?<![\d./\-])(1[4-9]\d\d|20\d\d)\s?-\s?(1[4-9]\d\d|20\d\d|\d\d)(?![\d/\-]|\.\d)/g;
+
+/** An identifier: ten or more digits joined by single spaces or hyphens, as an ISBN is printed ("978 1 2019 5555 9"). */
+const IDENTIFIER = /\d(?:[ \-‐‑–]?[\dXx]){9,}/g;
+
+/** Every year in a line, with where it starts: years in ranges, then years on their own, never inside an identifier. */
+function yearsIn(line: string): { year: number; start: number }[] {
+  const masked = line.replace(IDENTIFIER, (m) => " ".repeat(m.length));
+  const hits: { year: number; start: number }[] = [];
+  const covered: [number, number][] = [];
+  for (const m of masked.matchAll(RANGE)) {
+    const first = Number(m[1]);
+    const second = m[2].length === 2 ? Math.floor(first / 100) * 100 + Number(m[2]) : Number(m[2]);
+    if (second < first) continue;
+    hits.push({ year: first, start: m.index! }, { year: second, start: m.index! + m[0].length - m[2].length });
+    covered.push([m.index!, m.index! + m[0].length]);
+  }
+  for (const m of masked.matchAll(YEAR)) {
+    if (!covered.some(([a, b]) => m.index! >= a && m.index! < b)) hits.push({ year: Number(m[1]), start: m.index! });
+  }
+  return hits.sort((a, b) => a.start - b.start);
+}
 
 /** How far before a year its marker may be, on the same line. */
 const REACH = 100;
@@ -61,13 +86,11 @@ export function findPrintedYears(
   for (const page of pages) {
     for (const line of page.text.split("\n")) {
       if (!/\d{4}/.test(line)) continue;
-      const marks = MARKERS.flatMap(([kind, re]) => [...line.matchAll(re)].map((m) => ({ kind, end: m.index! + m[0].length })));
+      const marks = MARKERS.flatMap(([kind, re]) => [...line.matchAll(re)].map((m) => ({ kind, start: m.index!, end: m.index! + m[0].length })));
       if (!marks.length) continue;
-      for (const m of line.matchAll(YEAR)) {
-        const year = Number(m[1]);
+      for (const { year, start } of yearsIn(line)) {
         if (year > latest) continue;
-        const start = m.index!;
-        const near = marks.filter((x) => x.end <= start && start - x.end <= REACH).sort((a, b) => b.end - a.end)[0];
+        const near = marks.filter((x) => x.end <= start && start - x.end <= REACH).sort((a, b) => b.end - a.end || a.start - b.start)[0];
         if (!near) continue;
         const key = `${page.page_index}:${year}:${near.kind}`;
         if (seen.has(key)) continue;
@@ -88,10 +111,16 @@ export function findPrintedYears(
  * translation's © is later than the original's). A "first published" year counts only when nothing
  * else is printed, and reprint years never do. Front matter is preferred; the last pages are used only
  * when the front has nothing. Null when there's no year to give.
+ *
+ * Only the copyright page counts, with the pages before it and the one after (where a long copyright
+ * page continues): the first page printing a copyright or edition year. Later pages can be the first
+ * chapters, where a code example's "Copyright 2006" is no publication year.
  */
 export function printedYear(candidates: YearCandidate[]): YearCandidate | null {
   for (const position of ["front", "back"] as const) {
-    const here = candidates.filter((c) => c.position === position && c.kind !== "reprint");
+    const all = candidates.filter((c) => c.position === position && c.kind !== "reprint");
+    const anchor = (all.find((c) => c.kind === "copyright" || c.kind === "edition") ?? all[0])?.page;
+    const here = all.filter((c) => c.page <= anchor + 1);
     const edition = here.filter((c) => c.kind !== "first_published");
     const pool = edition.length ? edition : here;
     if (pool.length) return pool.reduce((best, c) => (c.year > best.year ? c : best));
