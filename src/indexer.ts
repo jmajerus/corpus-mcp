@@ -6,6 +6,7 @@ import { chunkPage } from "./chunk.js";
 import type { Change, ChangeKind } from "./data.js";
 import { type PresetName, proposeCitekey } from "./citekey.js";
 import { ISBN_SCAN_VERSION, findPrintedIsbns } from "./isbn.js";
+import { YEAR_SCAN_VERSION, findPrintedYears, printedYear } from "./years.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
@@ -175,7 +176,7 @@ export function scanLibraries(config: Config, db: DB, {
   }
 
   summary.shelves = loadShelves(config, db);
-  fillDerivedColumns(db);
+  fillDerivedColumns(db, config.citekeyPreset);
 
   const stale = (db.prepare("SELECT id FROM books").pluck().all() as string[]).filter((id) => !seen.has(id));
   const staleRow = db.prepare<[string], { title: string; uuid: string | null }>("SELECT title, uuid FROM books WHERE id = ?");
@@ -233,7 +234,7 @@ const BACK_PAGES = 5;
  * Columns computed from the stored page text, filled for books extracted since the last scan or
  * computed by older rules, so the server never scans page text to answer a status request.
  */
-function fillDerivedColumns(db: DB): void {
+function fillDerivedColumns(db: DB, preset: PresetName): void {
   db.prepare(`
     UPDATE books SET text_chars = (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM pages p WHERE p.book_id = books.id)
     WHERE status = 'indexed' AND text_chars IS NULL`).run();
@@ -249,6 +250,35 @@ function fillDerivedColumns(db: DB): void {
     for (const book of books) {
       const text = pages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; label: string | null; text: string }[];
       update.run(JSON.stringify(findPrintedIsbns(text, book.page_count, BACK_PAGES)), ISBN_SCAN_VERSION, book.id);
+    }
+  })();
+
+  // The year the copyright page prints, scanned the same way.
+  const unscanned = db.prepare(`
+    SELECT id, page_count FROM books
+    WHERE status = 'indexed' AND (printed_years_version IS NULL OR printed_years_version != ?)`)
+    .all(YEAR_SCAN_VERSION) as { id: string; page_count: number }[];
+  const updateYears = db.prepare("UPDATE books SET printed_years = ?, printed_year = ?, printed_years_version = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const book of unscanned) {
+      const text = pages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; label: string | null; text: string }[];
+      const years = findPrintedYears(text, book.page_count, BACK_PAGES);
+      updateYears.run(JSON.stringify(years), printedYear(years)?.year ?? null, YEAR_SCAN_VERSION, book.id);
+    }
+  })();
+
+  // A book Calibre has no year for gets its proposed citekey from the printed year. Every scan rewrites
+  // the proposal from Calibre's metadata first, so this runs each time, after it.
+  const noYear = db.prepare(`
+    SELECT id, title, authors, author_sorts, publisher, printed_year FROM books WHERE year IS NULL AND printed_year IS NOT NULL`)
+    .all() as { id: string; title: string; authors: string; author_sorts: string; publisher: string | null; printed_year: number }[];
+  const updateProposal = db.prepare("UPDATE books SET proposed_citekey = ?, citekey_blockers = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const b of noYear) {
+      const proposal = proposeCitekey({
+        title: b.title, authors: JSON.parse(b.authors) as string[], authorSorts: JSON.parse(b.author_sorts) as string[], publisher: b.publisher, year: b.printed_year,
+      }, preset);
+      updateProposal.run(proposal.key, JSON.stringify(proposal.blockers), b.id);
     }
   })();
 }
@@ -274,7 +304,7 @@ function writeBook(db: DB, preset: PresetName, id: string, library: string, fold
     id, library, folder, ...metadataColumns(m, preset),
     format: null, file_path: null, file_size: null, file_mtime: null, sha256: null,
     extractor_version: EXTRACTOR_VERSION, reflowable: null, page_count: null, error: null,
-    printed_isbns: null, printed_isbns_version: null, text_chars: null,
+    printed_isbns: null, printed_isbns_version: null, printed_years: null, printed_years_version: null, printed_year: null, text_chars: null,
     indexed_at: new Date().toISOString(), ...fields,
   };
   const columns = Object.keys(row);

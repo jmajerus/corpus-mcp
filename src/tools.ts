@@ -8,6 +8,7 @@ import { type DataStore, type PinnedCitekey, allPinned, pinnedByKey, pinnedByUui
 import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
+import type { YearCandidate } from "./years.js";
 import type { Vocabulary, VocabularySource } from "./vocabulary.js";
 import type { Taxonomy } from "./taxonomy/taxonomy.js";
 
@@ -37,6 +38,7 @@ export interface BookRow {
   id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;
   publisher: string | null; year: number | null; language: string | null; isbn: string | null;
   calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; printed_isbns: string | null; tags: string;
+  printed_years: string | null; printed_year: number | null;
   description: string | null; format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
   page_count: number | null; status: string; error: string | null; calibre_id: number; file_size: number | null; text_chars: number | null;
 }
@@ -153,6 +155,7 @@ function bookSummary(book: BookRow, pin: PinnedCitekey | undefined, shelves: str
     shelves,
     tags: JSON.parse(book.tags) as string[],
     year: book.year,
+    ...(book.year === null && book.printed_year !== null ? { printed_year: book.printed_year } : {}),
     publisher: book.publisher,
     isbn: book.isbn,
     ...citekeyInfo(book, pin),
@@ -445,6 +448,21 @@ export interface CslItem {
   issued?: { "date-parts": number[][] }; ISBN?: string;
 }
 
+/**
+ * The year to cite: Calibre's, or when Calibre has none, the year the book prints on its copyright page
+ * (src/years.ts), with where it came from.
+ */
+export function bookYear(book: Pick<BookRow, "year" | "printed_year">): { year: number | null; year_source: "calibre" | "printed" | null } {
+  if (book.year) return { year: book.year, year_source: "calibre" };
+  if (book.printed_year) return { year: book.printed_year, year_source: "printed" };
+  return { year: null, year_source: null };
+}
+
+/** The years the book's own text prints, found at index time. */
+export function printedYears(book: Pick<BookRow, "printed_years">): YearCandidate[] {
+  return book.printed_years ? (JSON.parse(book.printed_years) as YearCandidate[]) : [];
+}
+
 /** The book as a CSL JSON item; empty fields are left out. */
 export function cslItem(book: BookRow, citekey: string | null): CslItem {
   const names = calibreNames(JSON.parse(book.authors) as string[], JSON.parse(book.author_sorts) as string[]);
@@ -456,7 +474,7 @@ export function cslItem(book: BookRow, citekey: string | null): CslItem {
     title: book.title,
     ...(names.length ? { author: names } : {}),
     ...(book.publisher ? { publisher: book.publisher } : {}),
-    ...(book.year ? { issued: { "date-parts": [[book.year]] } } : {}),
+    ...(bookYear(book).year ? { issued: { "date-parts": [[bookYear(book).year!]] } } : {}),
     ...(isbn ? { ISBN: isbn } : {}),
   };
 }
@@ -495,7 +513,8 @@ export function citePassage(c: Corpus, args: CiteArgs) {
   const author = joinAuthors(authors.filter((a) => a !== "Unknown"));
   if (author) citation.author = author;
   if (book.publisher) citation.publisher = book.publisher;
-  if (book.year) citation.year = String(book.year);
+  const { year, year_source: yearSource } = bookYear(book);
+  if (year) citation.year = String(year);
 
   let locator: { label: "page"; locator: string } | null = null;
   let position: Record<string, unknown> | null = null;
@@ -526,12 +545,19 @@ export function citePassage(c: Corpus, args: CiteArgs) {
 
   const bibtex = filingKey ? bookBibtex({
     citekey: filingKey, title: book.title, authors, authorSorts: JSON.parse(book.author_sorts) as string[],
-    publisher: book.publisher, year: book.year, isbn: book.isbn, calibreUuid: book.uuid,
+    publisher: book.publisher, year, isbn: book.isbn, calibreUuid: book.uuid,
   }) : null;
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
   // Candidates only: copyright pages often list several editions, and the right one is the edition held.
   const isbnCandidates = isbn ? [] : printedIsbns(book);
-  const result = { csl, locator, position, ...keys, bibtex, isbn, isbn_candidates: isbnCandidates, citation };
+  const printed = yearSource === "printed" ? printedYears(book).find((y) => y.year === year && y.kind !== "reprint") : undefined;
+  const result = {
+    csl, locator, position, ...keys, bibtex, isbn, isbn_candidates: isbnCandidates, year_source: yearSource,
+    ...(printed ? { year_evidence: { page: printed.page, page_label: printed.page_label, context: printed.context } } : {}), citation,
+  };
+  if (printed) {
+    warnings.push(`Calibre has no publication year; ${year} is from the book's own text (${printed.position === "back" ? "back page" : "page"} ${printed.page}: "${printed.context}"). Check it, and add it in Calibre.`);
+  }
   if (keys.citekey_source === "pinned") return { ...result, warnings };
 
   if (!bibtex) warnings.push(...keys.citekey_blockers.map((b) => BLOCKER_FIXES[b]));
@@ -573,7 +599,7 @@ export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: 
   if (book.calibre_citekey && book.calibre_citekey !== citekey.toLowerCase()) {
     warnings.push(`Calibre's citekey identifier "${book.calibre_citekey}" overrides this pin until it is removed in Calibre.`);
   }
-  const metadata = { title: book.title, authors: JSON.parse(book.authors) as string[], authorSorts: JSON.parse(book.author_sorts) as string[], publisher: book.publisher, year: book.year };
+  const metadata = { title: book.title, authors: JSON.parse(book.authors) as string[], authorSorts: JSON.parse(book.author_sorts) as string[], publisher: book.publisher, year: bookYear(book).year };
   const preset = c.citekeyPreset ?? DEFAULT_PRESET;
   if (!followsRule(citekey, metadata, preset)) {
     warnings.push(`"${citekey}" does not follow this server's citekey rule (${preset}; proposed "${book.proposed_citekey ?? ""}"). Pinned as given.`);
@@ -627,6 +653,7 @@ export function corpusStatus(c: Corpus) {
     no_outline: { note: "No chapter locators. For MOBI books, convert to EPUB in Calibre.", books: noOutline },
     citekeys: citekeyReadiness(c),
     printed_isbns: printedIsbnReport(c),
+    printed_years: printedYearReport(c),
     tags: tagHygiene(c),
   };
 }
@@ -704,6 +731,22 @@ function printedIsbnReport(c: Corpus) {
   };
 }
 
+/** Books Calibre has no year for whose text prints one: the year citations use, to confirm and add in Calibre. */
+function printedYearReport(c: Corpus) {
+  const books = c.db.prepare("SELECT * FROM books WHERE status = 'indexed' AND year IS NULL ORDER BY id").all() as BookRow[];
+  const found = books.filter((b) => b.printed_year !== null).map((b) => {
+    const from = printedYears(b).find((y) => y.year === b.printed_year && y.kind !== "reprint")!;
+    return { book_id: b.id, title: b.title, year: b.printed_year, kind: from.kind, page: from.page, position: from.position, context: from.context };
+  });
+  return {
+    note: "Calibre has no publication year for these books, but their text prints one, which citations and proposed citekeys use. Confirm it and add it in Calibre.",
+    books_without_year: books.length,
+    books_printing_year: found.length,
+    books: found.slice(0, 100),
+    ...(found.length > 100 ? { books_truncated: found.length - 100 } : {}),
+  };
+}
+
 function citekeyReadiness(c: Corpus) {
   const pins = allPinned(c.data);
   const books = c.db.prepare("SELECT * FROM books WHERE status != 'no_file' ORDER BY id").all() as BookRow[];
@@ -713,6 +756,7 @@ function citekeyReadiness(c: Corpus) {
   let pinned = 0;
   let calibre = 0;
   let ready = 0;
+  let printedYear = 0;
   for (const b of books) {
     const source = effectiveCitekey(b, b.uuid ? pins.get(b.uuid) : undefined).citekey_source;
     if (source === "calibre") calibre++;
@@ -724,6 +768,7 @@ function citekeyReadiness(c: Corpus) {
       blockedBooks.push({ book_id: b.id, title: b.title, blockers });
     } else {
       ready++;
+      if (bookYear(b).year_source === "printed") printedYear++;
       byProposed.set(b.proposed_citekey!, [...(byProposed.get(b.proposed_citekey!) ?? []), b.id]);
     }
   }
@@ -732,6 +777,8 @@ function citekeyReadiness(c: Corpus) {
     pinned,
     calibre_identifier: calibre,
     ready_to_file: ready,
+    // Ready only because the copyright page gives the year Calibre lacks (see printed_years).
+    ready_with_printed_year: printedYear,
     blocked,
     proposed_collisions: [...byProposed].filter(([, ids]) => ids.length > 1).map(([key, ids]) => ({ key, books: ids })),
     blocked_books: blockedBooks.slice(0, 100),
