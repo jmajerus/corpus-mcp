@@ -23,7 +23,7 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `get_book_outline` | Get book outline | | Returns metadata and the table of contents with the page where each section starts. |
 | `read_book` | Read book text | | Returns contiguous text for a page range or a named section, within a character budget, and says where to continue. |
 | `render_page` | Render PDF page | | Returns a PNG of a PDF page, for figures, tables, and equations. |
-| `cite_passage` | Cite a book | | A book's citation as a CSL JSON item, with a CSL locator for a page range, the reading position, and filing data: a BibTeX entry, a valid ISBN, or printed ISBN candidates (see [Citations](citations.md)). |
+| `cite_passage` | Cite a book | | A book's citation as a CSL JSON item, with a CSL locator for a page range, the reading position, and filing data: a BibTeX entry, a valid ISBN, or printed ISBN candidates, and the printed year when Calibre has none (see [Citations](citations.md)). |
 | `pin_citekey` | Pin a book's citekey | ✓ | Records the citekey a book was given elsewhere, such as in the reference manager it was filed in. |
 | `get_tag_vocabulary` | Get tag vocabulary | | The vocabulary's terms as Calibre tags, the controlled vocabulary for categories, with scope notes and, for corpus-mcp's own terms, their status. |
 | `vocabulary_report` | Vocabulary report | | How Calibre's tags stand against the vocabulary: retired terms still in use, tags shaped like terms the vocabulary lacks, and books tagged only at a broad term. |
@@ -36,7 +36,7 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `update_quote` | Update a quote | ✓ | Changes a quote's note or tags; the quoted text never changes. |
 | `delete_quote` | Delete a quote | ✓ | Deletes a saved quote. |
 | `cite_quote` | Cite a quote | | A quote's verified text, reflowed as prose, and locator with its citation object. |
-| `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, and which books are ready for a citekey. |
+| `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs and years books print that Calibre lacks. |
 
 The tools marked *Writes* declare `readOnlyHint: false`; every other tool is
 annotated read-only. Clients that group or gate tools by permission, as Claude web

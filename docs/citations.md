@@ -67,6 +67,20 @@ or ebook) when one is printed beside it. Copyright pages often list several
 editions, and back pages often advertise other books, so these are offered for
 someone to confirm, never filed automatically.
 
+When Calibre has no publication year, the index reads the one the book prints
+on its copyright page: "Copyright 2016 by …", "© Kit Eason 2022", "This edition
+published 2005". It reads only the front matter, or the last pages when the
+front has none, since a book's body can mention copyright with any year. The
+year to cite is the edition in hand's: the latest copyright, edition, or
+publication year printed, so a reissue's "© 1949 … introduction © 2003" gives
+2003. A "first published" year counts only when nothing else is printed, and
+reprint years never count. Citations, BibTeX, and proposed citekeys then use
+that year, so the book is no longer blocked by "no year". `cite_passage` marks
+it with `year_source: "printed"` and `year_evidence` (the page and line), and
+warns that it should be confirmed and added in Calibre. `corpus_status` lists
+these books under `printed_years`, and the admin book page shows every year
+found.
+
 ## Zotero
 
 corpus-mcp can mirror a Zotero library, read-only, to see which Calibre books
