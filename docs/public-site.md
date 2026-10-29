@@ -77,11 +77,14 @@ corpus.db + data.db ──▶ public.db ──▶ queue (replica.db) ──▶ D
 4. **The public Worker** serves the same pages as the LAN server, read from D1.
    It answers "hasn't been published yet" until the first complete upload.
 
-`CORPUS_PUBLIC_PORT` (say `8001`) starts a listener of its own that serves the
-same pages from `public.db`, and nothing else. With D1 configured, it's a
+The catalogue has a listener of its own, on `CORPUS_PUBLIC_PORT` (by default
+`8001`; `off` turns it off), that serves the same pages from `public.db`, and
+nothing else. With D1 configured, it's a
 preview of what goes out next, and each page says so in a banner. Without D1,
 it's the public site itself, for hosting behind a proxy without Cloudflare. The
 server's main port never shows the catalogue: `/` there is the admin dashboard.
+Before 2026-10-29 the main port served it at `/`; a proxy that pointed there for
+the catalogue should now point at the catalogue's port.
 
 ## Setting it up
 
@@ -93,7 +96,7 @@ server's main port never shows the catalogue: `/` there is the admin dashboard.
 | `CORPUS_PUBLIC_TITLE` | `"A Library (books on work)"` | The site's name. Quote a value with spaces or parentheses |
 | `CORPUS_PUBLIC_URL` | `https://corpus.majerus.us` | The public address, given in `site.json` |
 | `CORPUS_SITE_LINKS` | `https://quotes.majerus.us` | Other public sites to link to, comma-separated |
-| `CORPUS_PUBLIC_PORT` | `8001` | Optional: a listener that serves only the public pages, the LAN preview |
+| `CORPUS_PUBLIC_PORT` | `8001` | The listener that serves only the public pages (the default); `off` for none |
 | `CORPUS_PUBLIC_DB` | `/var/lib/corpus-mcp/public.db` | Where the snapshot is written |
 | `CORPUS_PUBLISH_INTERVAL_MINUTES` | `10` | How often the snapshot is rebuilt |
 

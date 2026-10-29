@@ -218,7 +218,7 @@ describe("the server", () => {
     c.db.close();
     c.db = openDatabase(config.dbPath);
     server = await serveHttp({
-      ...config, admin: { access: { lanActor: "me@lan" }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x", refreshLog: "x", syncStatus: "x" },
+      ...config, admin: { access: { lanActor: "me@lan", lanHosts: ["corpus.lan"] }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x", refreshLog: "x", syncStatus: "x" },
       public: { level: "catalogue", file: file(), port: 0, title: "Served", url: "", links: [], intervalMinutes: 10 },
     }, { publishTimer: false, zoteroTimer: false });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -252,6 +252,23 @@ describe("the server", () => {
     expect(await whoami({ "cf-connecting-ip": "203.0.113.9" })).toMatchObject({ can_write: false });
     const job = await fetch(`${base}/api/admin/jobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "backup" }) });
     expect(job.status).toBe(202);
+  });
+
+  it("goes by whether a CDN's headers are there at all, and lets only the server's own names through", async () => {
+    const port = (server.address() as AddressInfo).port;
+    const whoami = (headers: Record<string, string>) => new Promise<{ can_write: boolean; reason?: string }>((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path: "/api/whoami", headers }, (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk)).on("end", () => resolve(JSON.parse(body)));
+      }).on("error", reject);
+    });
+    expect(await whoami({ "cf-ray": "" })).toMatchObject({ can_write: false });
+    expect(await whoami({ "cdn-loop": "fastly" })).toMatchObject({ can_write: false });
+    // DNS rebinding: an attacker's name, re-pointed at the server, is never a LAN name.
+    expect(await whoami({ host: `rebind.attacker.example:${port}` })).toMatchObject({ can_write: false, reason: expect.stringContaining("CORPUS_LAN_HOSTS") });
+    expect(await whoami({ host: `localhost:${port}` })).toMatchObject({ can_write: true });
+    expect(await whoami({ host: `[::1]:${port}` })).toMatchObject({ can_write: true });
+    expect(await whoami({ host: `corpus.lan:${port}` })).toMatchObject({ can_write: true });
   });
 
   it("answers a malformed request target with 400 and keeps running", async () => {

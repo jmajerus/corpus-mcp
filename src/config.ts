@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { DEFAULT_PRESET, type PresetName, isPreset } from "./citekey.js";
 import type { ZoteroConfig } from "./zotero.js";
@@ -78,7 +79,8 @@ function publicConfig(env: NodeJS.ProcessEnv): PublicConfig {
   return {
     level,
     file: path.resolve(env.CORPUS_PUBLIC_DB ?? "/var/lib/corpus-mcp/public.db"),
-    port: env.CORPUS_PUBLIC_PORT ? Number.parseInt(env.CORPUS_PUBLIC_PORT, 10) : undefined,
+    // Its own listener, on by default so a catalogue served from the LAN keeps a port of its own.
+    port: /^(?:off|none|false|no)$/i.test(env.CORPUS_PUBLIC_PORT ?? "") ? undefined : Number.parseInt(env.CORPUS_PUBLIC_PORT || "8001", 10),
     title: env.CORPUS_PUBLIC_TITLE || "Library",
     url: (env.CORPUS_PUBLIC_URL ?? "").replace(/\/+$/, ""),
     links: (env.CORPUS_SITE_LINKS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
@@ -119,6 +121,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         vocabularyPush: { clientId: env.CORPUS_VOCABULARY_PUSH_CLIENT_ID || undefined, audience: env.CORPUS_VOCABULARY_PUSH_AUD || undefined },
         // Edits made directly on the LAN, recorded under this name: on unless CORPUS_LAN_EDITS is off.
         lanActor: /^(?:off|false|no|0)$/i.test(env.CORPUS_LAN_EDITS ?? "") ? undefined : env.CORPUS_LAN_ACTOR || "LAN",
+        // The names the server answers to on the LAN; by default its host name, with and without .localdomain.
+        lanHosts: env.CORPUS_LAN_HOSTS ? env.CORPUS_LAN_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+          : [os.hostname(), `${os.hostname().split(".")[0]}.localdomain`],
       },
       neighbors: (env.CORPUS_NEIGHBORS ?? DEFAULT_NEIGHBORS).split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {
         const at = pair.indexOf("=");
