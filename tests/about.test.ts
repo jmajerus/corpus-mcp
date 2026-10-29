@@ -3,7 +3,7 @@ import { aboutSource } from "../src/about.js";
 import type { Config } from "../src/config.js";
 
 const config = {
-  admin: { access: { teamDomain: "https://team.example", audience: "aud", lanActor: "me@lan" } },
+  admin: { access: { teamDomain: "https://team.example", audience: "aud", lanActor: "me@lan", lanHosts: ["corpus-mcp", "corpus-mcp.localdomain"] } },
   public: { level: "catalogue", file: "/x/public.db", port: 8001, title: "Library", url: "https://library.example.org", links: [], intervalMinutes: 10 },
 } as unknown as Config;
 
@@ -33,11 +33,21 @@ describe("the About page's data", () => {
     const about = aboutSource(config, "0.2.0", "me/repo", f.impl);
     const a = await about(state({ branch: "printed-years", pr: 4, commit: "aaa", at: "2026-10-29T00:00:00Z" }));
     expect(a.origin).toMatchObject({ pr_state: "open", pr_title: "Printed years", behind: 2 });
-    expect(a.public).toMatchObject({ url: "https://library.example.org", published: "yes", preview_port: 8001 });
+    // The preview by a LAN name, which works however the page was reached (not the tunnel's hostname).
+    expect(a.public).toMatchObject({ url: "https://library.example.org", published: "yes", preview_port: 8001, preview_url: "http://corpus-mcp.localdomain:8001/" });
     expect(a.editing).toEqual({ lan: true, lan_actor: "me@lan", access: true });
     const asked = f.calls.length;
     await about(state({ branch: "printed-years", pr: 4, commit: "aaa" }));
     expect(f.calls.length).toBe(asked);
+  });
+
+  it("asks once for a burst of requests that arrive together", async () => {
+    const f = fake({ [`${api}/branches/main`]: { commit: { sha: "bbb" } }, [`${api}/compare/aaa...bbb`]: { ahead_by: 3 }, "https://library.example.org/": 503 });
+    const about = aboutSource(config, "0.2.0", "me/repo", f.impl);
+    const all = await Promise.all(Array.from({ length: 5 }, () => about(state({ branch: "main", commit: "aaa" }))));
+    expect(all.map((a) => a.origin?.behind)).toEqual([3, 3, 3, 3, 3]);
+    expect(all[0].public.published).toBe("not yet");
+    expect(f.calls).toHaveLength(3);
   });
 
   it("says a merged pull request is no longer open, and a branch that's current is 0 behind", async () => {

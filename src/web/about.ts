@@ -66,7 +66,7 @@ function editing(a) {
 function catalogue(a) {
   const p = a.public, r = p.replica;
   if (p.level === "none") return card("Public catalogue", "Off", [], "Set CORPUS_PUBLIC=catalogue to publish the catalogue (docs/public-site.md).");
-  const preview = p.preview_port ? "http://" + location.hostname + ":" + p.preview_port + "/" : null;
+  const preview = p.preview_url;
   let top = "In step", cls = "good", note = "";
   if (!r) { top = "No drain"; cls = "warn"; note = "The server reports no upload queue."; }
   else if (r.phase === "off") { top = "Not uploading"; cls = "warn"; note = "The server has no D1 settings. Put CORPUS_D1_PROXY_URL and CORPUS_D1_PROXY_TOKEN in .env and deploy."; }
@@ -76,7 +76,7 @@ function catalogue(a) {
   return card("Public catalogue", top, [
     ["Public site", p.url ? '<a href="' + esc(p.url) + '">' + esc(p.url) + "</a>" : '<span class="note">No CORPUS_PUBLIC_URL</span>'],
     ["Published", p.published ? esc(p.published) : null],
-    ["Preview", preview ? '<a href="' + esc(preview) + '">' + esc(preview) + "</a>" : '<span class="note">No CORPUS_PUBLIC_PORT</span>'],
+    ["Preview", preview ? '<a href="' + esc(preview) + '">' + esc(preview) + '</a> <span class="note">on the LAN</span>' : '<span class="note">No CORPUS_PUBLIC_PORT</span>'],
     ["Upload queue", r ? esc(r.phase) : null],
     ["Waiting", r ? num(r.pending) : null],
     ["Last uploaded", r ? esc(ago(r.shipped_at)) : null],

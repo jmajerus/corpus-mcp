@@ -27,6 +27,8 @@ export interface About {
     level: string;
     url: string | null;
     preview_port: number | null;
+    /** The catalogue's own port by a LAN name, which works however the admin page was reached. */
+    preview_url: string | null;
     replica: DrainStatus | null;
     /** "yes", "not yet" (503), or why it can't be told. */
     published: string | null;
@@ -36,13 +38,22 @@ export interface About {
 const CACHE_MS = 5 * 60_000;
 const TIMEOUT_MS = 5_000;
 
-interface Cached<T> { key: string; at: number; value: T }
+/**
+ * One remembered answer per key, for a few minutes. Requests that arrive while it's being worked out
+ * share that one lookup, so a burst of page loads asks GitHub once, not once each.
+ */
+function cached<A, T>(keyOf: (arg: A) => string, work: (arg: A) => Promise<T>): (arg: A) => Promise<T> {
+  let last: { key: string; at: number; value: Promise<T> } | null = null;
+  return (arg) => {
+    const key = keyOf(arg);
+    if (!last || last.key !== key || Date.now() - last.at >= CACHE_MS) last = { key, at: Date.now(), value: work(arg) };
+    return last.value;
+  };
+}
 
 /** Builds the About page's data on request, with GitHub and the public site asked at most every few minutes. */
 export function aboutSource(config: Config, version: string, repository = process.env.CORPUS_GITHUB_REPO ?? "jmajerus/corpus-mcp", fetchImpl: typeof fetch = fetch) {
   const started = new Date().toISOString();
-  let origin: Cached<About["origin"]> | null = null;
-  let published: Cached<string | null> | null = null;
 
   async function github(path: string): Promise<Record<string, unknown>> {
     const res = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
@@ -52,11 +63,8 @@ export function aboutSource(config: Config, version: string, repository = proces
     return (await res.json()) as Record<string, unknown>;
   }
 
-  async function originOf(d: Deployed | null): Promise<About["origin"]> {
-    if (!d?.commit || (!d.pr && !d.branch)) return null;
-    const key = `${d.pr ?? d.branch}@${d.commit}`;
-    if (origin && origin.key === key && Date.now() - origin.at < CACHE_MS) return origin.value;
-    let value: About["origin"];
+  // Keyed by what's deployed, so a new deploy is looked up at once. The lookups never reject.
+  const origin = cached((d: Deployed) => `${d.pr ?? d.branch}@${d.commit}`, async (d): Promise<About["origin"]> => {
     try {
       let head: string | null = null;
       let state: string | undefined;
@@ -70,37 +78,39 @@ export function aboutSource(config: Config, version: string, repository = proces
         head = String(((await github(`/branches/${encodeURIComponent(d.branch!)}`)).commit as { sha?: string })?.sha ?? "");
       }
       const behind = !head ? null : head === d.commit ? 0 : Number((await github(`/compare/${d.commit}...${head}`)).ahead_by);
-      value = { ...(state ? { pr_state: state, pr_title: title } : {}), behind: Number.isInteger(behind) ? behind : null, checked_at: new Date().toISOString() };
+      return { ...(state ? { pr_state: state, pr_title: title } : {}), behind: Number.isInteger(behind) ? behind : null, checked_at: new Date().toISOString() };
     } catch (error) {
-      value = { behind: null, checked_at: null, error: `GitHub couldn't be asked (${(error as Error).message})` };
+      return { behind: null, checked_at: null, error: `GitHub couldn't be asked (${(error as Error).message})` };
     }
-    origin = { key, at: Date.now(), value };
-    return value;
+  });
+  function originOf(d: Deployed | null): Promise<About["origin"]> {
+    if (!d?.commit || (!d.pr && !d.branch)) return Promise.resolve(null);
+    return origin(d);
   }
 
-  async function publishedAt(url: string | null): Promise<string | null> {
-    if (!url) return null;
-    if (published && published.key === url && Date.now() - published.at < CACHE_MS) return published.value;
-    let value: string;
+  const publishedAt = cached((url: string) => url, async (url): Promise<string> => {
     try {
       const res = await fetchImpl(`${url}/`, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) });
-      value = res.status === 200 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
+      return res.status === 200 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
     } catch (error) {
-      value = `unreachable (${(error as Error).message})`;
+      return `unreachable (${(error as Error).message})`;
     }
-    published = { key: url, at: Date.now(), value };
-    return value;
-  }
+  });
 
   return async (state: { books: number; last_scan: string | null; deployed: Deployed | null; replica: DrainStatus | null }): Promise<About> => {
     const p = config.public;
     const access = config.admin?.access;
     const url = p?.level === "catalogue" && p.url ? p.url : null;
-    const [o, pub] = await Promise.all([originOf(state.deployed), publishedAt(url)]);
+    // A LAN name: the first with a domain ("corpus-mcp.localdomain"), else the first. Through the tunnel,
+    // the browser's own address would be Cloudflare's, which doesn't reach this port.
+    const names = access?.lanHosts ?? [];
+    const previewHost = names.find((n) => n.includes(".")) ?? names[0];
+    const previewUrl = p?.level === "catalogue" && p.port && previewHost ? `http://${previewHost}:${p.port}/` : null;
+    const [o, pub] = await Promise.all([originOf(state.deployed), url ? publishedAt(url) : null]);
     return {
       version, node: process.version, started_at: started, books: state.books, last_scan: state.last_scan, repository, deployed: state.deployed, origin: o,
       editing: { lan: !!access?.lanActor, lan_actor: access?.lanActor ?? null, access: !!(access?.teamDomain && access.audience) },
-      public: { level: p?.level ?? "none", url, preview_port: p?.port ?? null, replica: state.replica, published: pub },
+      public: { level: p?.level ?? "none", url, preview_port: p?.port ?? null, preview_url: previewUrl, replica: state.replica, published: pub },
     };
   };
 }
