@@ -239,6 +239,13 @@ describe("the server", () => {
     expect(await (await fetch(`${publicBase}/`)).text()).not.toContain("not yet published");
   });
 
+  it("has an About page with what the status bar shows", async () => {
+    expect(await (await fetch(`${base}/admin/about`)).text()).toContain("<title>About · Corpus Admin</title>");
+    expect(await (await fetch(`${base}/api/about`)).json()).toMatchObject({
+      version: expect.any(String), books: expect.any(Number), editing: { lan: true, lan_actor: "me@lan" }, public: { level: "catalogue" },
+    });
+  });
+
   it("keeps the main port for working on the corpus", async () => {
     const root = await fetch(`${base}/`, { redirect: "manual" });
     expect([root.status, root.headers.get("location")]).toEqual([302, "/admin"]);

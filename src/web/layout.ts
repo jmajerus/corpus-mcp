@@ -6,7 +6,7 @@
 
 import { FAVICON_LINK } from "./favicon.js";
 
-export type NavKey = "dashboard" | "books" | "quotes" | "categories" | "taxonomy" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes" | "zotero";
+export type NavKey = "dashboard" | "books" | "quotes" | "categories" | "taxonomy" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes" | "zotero" | "about";
 
 const NAV: [NavKey, string, string][] = [
   ["dashboard", "Dashboard", "/admin"],
@@ -20,6 +20,7 @@ const NAV: [NavKey, string, string][] = [
   ["shelves", "Shelves", "/admin/shelves"],
   ["jobs", "Jobs", "/admin/jobs"],
   ["changes", "Changes", "/admin/changes"],
+  ["about", "About", "/admin/about"],
 ];
 
 export const CSS = `

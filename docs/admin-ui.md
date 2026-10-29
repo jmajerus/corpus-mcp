@@ -4,7 +4,7 @@ The admin pages are corpus-mcp's web interface, served by the corpus server
 at `/admin`. They show the current state of the corpus, and anything an MCP agent
 can change, a person can change here too. Every page shares one navigation bar:
 Dashboard, Books, Quotes, Categories, Taxonomy, Citekeys, Zotero, Proposals,
-Shelves, Jobs, and Changes.
+Shelves, Jobs, Changes, and About.
 
 ## Where to find them
 
@@ -255,3 +255,25 @@ The history behind the other pages: every change, when, from where, and by
 whom. Filter by time range, source (admin jobs, admin pages, command line,
 seen in Calibre, review, agents), book, tag, job number, or person. Press a
 change type to show only that type. The chart shows changes per day.
+
+## About (`/admin/about`)
+
+What the server runs and how it stands: the same as the two VS Code status-bar
+items, for when VS Code isn't at hand. It refreshes every minute.
+
+- **Running:** the branch or pull request the server was deployed from, its
+  commit, when it was deployed, and how many commits it's behind origin. It also
+  notes a merged or closed pull request, or a deploy from a local checkout, and
+  says what to do about it.
+- **Server:** the version, Node, when it started, the books indexed, and the
+  last scan.
+- **Editing:** whether edits work on the LAN and who they're recorded as, and
+  whether Cloudflare Access is set up.
+- **Public catalogue:** the public site and whether it answers as published,
+  the LAN preview, and the upload queue (waiting rows, the last upload, and any
+  error).
+
+How far behind origin, and whether the public site answers, come from GitHub's
+API and from the site itself, checked every few minutes. While the Internet is
+down they show as unknown or unreachable, and the rest of the page is current.
+
