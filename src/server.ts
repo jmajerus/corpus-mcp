@@ -8,6 +8,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { accessIdentity, vocabularyPushIdentity } from "./access.js";
+import { type About, type Deployed, aboutSource } from "./about.js";
 import { adminMetrics } from "./admin.js";
 import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
 import { type Config, loadConfig } from "./config.js";
@@ -22,6 +23,7 @@ import { DASHBOARD_HTML } from "./web/dashboard.js";
 import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
 import { PROPOSALS_HTML } from "./web/proposals.js";
 import { QUOTE_HTML, QUOTES_HTML, READER_HTML } from "./web/quotes.js";
+import { ABOUT_HTML } from "./web/about.js";
 import { TAXONOMY_HTML } from "./web/taxonomy.js";
 import { ZOTERO_HTML } from "./web/zotero.js";
 import {
@@ -368,7 +370,7 @@ export interface WebOptions {
   publishTimer?: boolean;
 }
 
-interface Web { c: Corpus; config: Config; runner: JobRunner; options: WebOptions }
+interface Web { c: Corpus; config: Config; runner: JobRunner; options: WebOptions; about?: () => Promise<About> }
 
 /**
  * The tag review page, the admin dashboard, and their JSON API. Reads are open on the LAN; every
@@ -396,7 +398,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     const pages: Record<string, string> = {
       "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
-      "/admin/quotes": QUOTES_HTML, "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML,
+      "/admin/quotes": QUOTES_HTML, "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
     const termPath = path.match(/^\/api\/taxonomy\/terms(?:\/([^/]+))?$/);
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages)?$/);
@@ -509,6 +511,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
       }));
     }
+    else if (req.method === "GET" && path === "/api/about" && web.about) sendJson(res, 200, await web.about());
     else if (req.method === "GET" && path === "/api/whoami") {
       const result = await accessIdentity(req, admin.access, web.options.accessKeys);
       sendJson(res, 200, "error" in result ? { can_write: false, reason: result.error } : { can_write: true, identity: result.identity });
@@ -678,6 +681,12 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
   // Ships the snapshot's changes to its replica in D1, when the proxy (or the REST API) is configured.
   const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file)) : null;
+  const about = aboutSource(fullConfig, VERSION);
+  web.about = () => about({
+    books: db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get() as number,
+    last_scan: (db.prepare("SELECT value FROM meta WHERE key = 'last_scan'").pluck().get() as string | undefined) ?? null,
+    deployed: readDeployed(fullConfig) as Deployed | null, replica: replica ? replica() : null,
+  });
   // The public catalogue has its own listener, which serves its pages and nothing else, whatever a proxy
   // in front of it sends. With D1 configured, the public site is the Worker, and this port is a preview
   // of what goes out next, and says so.
