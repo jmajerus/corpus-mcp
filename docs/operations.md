@@ -53,14 +53,17 @@ The LAN is trusted. A request made directly on the LAN can read and write, as
 tunnel, where every write needs a verified Access identity
 (`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`) and is recorded under its
 email. Tunnelled requests also arrive from a LAN address, so "on the LAN" means
-a private address with no Cloudflare headers. `CORPUS_LAN_EDITS=off` makes
-direct LAN access read-only again.
+a private address with none of the headers a CDN or Cloudflare adds. A LAN
+request must also name the server by one of its LAN names (`CORPUS_LAN_HOSTS`)
+or an IP address, so that a web page can't use DNS rebinding to make changes
+from a browser on the LAN. `CORPUS_LAN_EDITS=off` makes direct LAN access
+read-only again.
 
 | Address | What it is |
 |---|---|
 | `http://corpus-mcp.localdomain:8000` | The server, on the LAN: `/` is the dashboard, plus `/mcp` |
 | `https://corpus-mcp.majerus.us` | The same server from anywhere, through the tunnel and an Access sign-in |
-| `http://corpus-mcp.localdomain:8001` | The public catalogue's preview, when `CORPUS_PUBLIC_PORT` is set |
+| `http://corpus-mcp.localdomain:8001` | The public catalogue's own port (`CORPUS_PUBLIC_PORT`): a preview, with D1 |
 | `https://corpus.majerus.us` | The published public catalogue: a copy in D1, read-only |
 
 ## Calibre jobs
@@ -99,6 +102,7 @@ MOBI, AZW3, and KFX books so they get chapter locators.
 | `CORPUS_HOST` / `CORPUS_PORT` | `0.0.0.0` / `8000` | HTTP listen address |
 | `CORPUS_LAN_EDITS` | `on` | `off` makes direct LAN access read-only |
 | `CORPUS_LAN_ACTOR` | `LAN` | The name changes made directly on the LAN are recorded under, such as your email |
+| `CORPUS_LAN_HOSTS` | the host name, and it with `.localdomain` | Comma-separated names the server is reached by on the LAN; IP addresses always work |
 | `CORPUS_PUBLIC` | `none` | `catalogue` turns on the public catalogue; its other settings are in [The public catalogue](public-site.md#setting-it-up) |
 | `CORPUS_D1_PROXY_URL` / `CORPUS_D1_PROXY_TOKEN` | unset | The D1 proxy the public catalogue uploads through; deploy copies them from `.env` |
 

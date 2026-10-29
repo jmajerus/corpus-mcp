@@ -5,7 +5,7 @@ import { validIsbn } from "./isbn.js";
 import { searchQuotes } from "./quotes.js";
 import { categoryDiff } from "./tagging.js";
 import {
-  type BookRow, type Corpus, ToolError, getBook, printedIsbns, shelvesByBook, suspectTagReason, tagFilter, tagFilterValue,
+  type BookRow, type Corpus, ToolError, bookYear, getBook, printedIsbns, printedYears, shelvesByBook, suspectTagReason, tagFilter, tagFilterValue,
 } from "./tools.js";
 
 /**
@@ -142,6 +142,7 @@ export function adminBook(c: Corpus, config: Config, id: string) {
       blockers: JSON.parse(b.citekey_blockers) as string[],
     },
     isbn: { calibre: b.isbn, valid: b.isbn ? validIsbn(b.isbn) : null, state: s.isbn, printed: printedIsbns(b) },
+    publication_year: { calibre: b.year, printed: b.printed_year, ...bookYear(b), candidates: printedYears(b) },
     problems: s.problems,
     outline: outline.map((o) => ({ level: o.level, title: o.title, page: o.start_page === null ? null : o.start_page + 1, page_label: o.label })),
     calibre_web_url: admin?.calibreWebUrl && b.library === config.shelvesLibrary ? `${admin.calibreWebUrl}/book/${b.calibre_id}` : null,

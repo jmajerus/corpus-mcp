@@ -55,7 +55,7 @@ export function mergedAuthorName(name: string): boolean {
 export type CitekeyBlocker = "unknown_author" | "merged_authors" | "no_year" | "malformed";
 
 /** The proposed key, and what keeps it from being a usable key (empty when it is ready). */
-export function proposeCitekey(m: BookMetadata, preset: PresetName = DEFAULT_PRESET): { key: string; blockers: CitekeyBlocker[] } {
+export function proposeCitekey(m: Pick<BookMetadata, "title" | "authors" | "authorSorts" | "publisher" | "year">, preset: PresetName = DEFAULT_PRESET): { key: string; blockers: CitekeyBlocker[] } {
   const item = calibreCsl(m);
   const key = ruleKey(item, preset);
   const blockers: CitekeyBlocker[] = [];

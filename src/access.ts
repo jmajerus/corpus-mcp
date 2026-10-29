@@ -10,6 +10,10 @@ import { type JWTVerifyGetKey, createRemoteJWKSet, jwtVerify } from "jose";
  * Cloudflare headers, may write too, recorded under the configured LAN actor (`lanActor`; off when
  * unset). A request through the tunnel also arrives from the LAN, from wherever cloudflared runs, so the
  * Cloudflare headers are what keep an Internet request from passing as a LAN one.
+ *
+ * A LAN request must also name the server by one of its own LAN names (`lanHosts`) or by an IP address.
+ * Otherwise a web page could use DNS rebinding (its own domain name, re-pointed at this server's address)
+ * to send same-origin requests from a browser on the LAN, which no CORS rule would stop.
  */
 
 export interface AccessConfig {
@@ -24,6 +28,8 @@ export interface AccessConfig {
   vocabularyPush?: { clientId?: string; audience?: string };
   /** The name LAN edits are recorded under; unset, direct LAN requests are read-only. */
   lanActor?: string;
+  /** The names the server is reached by on the LAN, besides IP addresses ("corpus-mcp.localdomain"). */
+  lanHosts?: string[];
 }
 
 export interface AccessIdentity { subject: string; email?: string; via?: "access" | "lan" }
@@ -58,10 +64,27 @@ export function privateAddress(address: string | undefined): boolean {
   return a === "::1" || /^f[cd][0-9a-f]{2}:/.test(a) || /^fe[89ab][0-9a-f]:/.test(a);
 }
 
-/** True for a request made directly on the LAN: from a private address, and not through Cloudflare. */
+/**
+ * True for a request made directly on the LAN: from a private address, with none of the headers a CDN or
+ * Cloudflare adds (present at all, whatever their value).
+ */
 export function lanRequest(req: http.IncomingMessage): boolean {
-  const viaCloudflare = Boolean(req.headers["cf-ray"] || req.headers["cf-connecting-ip"] || /cloudflare/i.test(String(req.headers["cdn-loop"] ?? "")));
-  return !viaCloudflare && privateAddress(req.socket.remoteAddress);
+  const viaProxy = ["cf-ray", "cf-connecting-ip", "cdn-loop"].some((h) => h in req.headers);
+  return !viaProxy && privateAddress(req.socket.remoteAddress);
+}
+
+/** The host a request names, without its port: "corpus-mcp.localdomain", "192.168.1.20", or "::1". */
+function requestHost(req: http.IncomingMessage): string {
+  const host = String(req.headers.host ?? "").trim().toLowerCase();
+  const v6 = host.match(/^\[([^\]]+)\]/);
+  return v6 ? v6[1] : host.replace(/:\d+$/, "");
+}
+
+/** True when the request names the server by an IP address or one of its LAN names, never another site's name. */
+export function lanHostAllowed(req: http.IncomingMessage, lanHosts: string[] = []): boolean {
+  const host = requestHost(req);
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":")) return true;
+  return host === "localhost" || lanHosts.some((h) => h.toLowerCase() === host);
 }
 
 /** The identity behind a request: a verified Access identity, or the LAN actor for a direct LAN request; or why there is none. */
@@ -69,8 +92,11 @@ export async function accessIdentity(req: http.IncomingMessage, config: AccessCo
   const token = req.headers["cf-access-jwt-assertion"];
   if (typeof token !== "string" || !token) {
     if (lanRequest(req)) {
-      if (config.lanActor) return { identity: { subject: "lan", email: config.lanActor, via: "lan" } };
-      return { status: 401, error: "Edits on the LAN are turned off (CORPUS_LAN_EDITS=off); sign in through Cloudflare Access to make changes." };
+      if (!config.lanActor) return { status: 401, error: "Edits on the LAN are turned off (CORPUS_LAN_EDITS=off); sign in through Cloudflare Access to make changes." };
+      if (!lanHostAllowed(req, config.lanHosts)) {
+        return { status: 403, error: `This request names the server "${requestHost(req)}", not one of its LAN names (CORPUS_LAN_HOSTS) or an IP address, so it can't make changes.` };
+      }
+      return { identity: { subject: "lan", email: config.lanActor, via: "lan" } };
     }
     return { status: 401, error: "Sign in through Cloudflare Access to make changes." };
   }
