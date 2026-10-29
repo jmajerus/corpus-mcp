@@ -81,6 +81,21 @@ warns that it should be confirmed and added in Calibre. `corpus_status` lists
 these books under `printed_years`, and the admin book page shows every year
 found.
 
+Authors and titles are read the same way, for books whose Calibre metadata has
+no author, several people in one author record, or a file name for a title
+("awscloudprojects", "Book-layout1.indd"). The index looks for an "About the
+author(s)" section (stopping before the reviewers), "by …" lines, and the
+copyright holder (never a publisher, or the holder of a translation or an
+introduction), and uses the title page to order the names and confirm them. A
+name printed only on the title page counts when its line holds one name, since
+"Rahul Sharma Vesa Kaihlavirta" is two people. A title that's a file name is
+matched to the printed line it was squashed from. Unlike a printed year, these
+are only candidates: a wrong author does more harm than a missing one, so they
+never go into a citation or a citekey. `corpus_status` lists them under
+`title_pages`, and the admin book page and the dashboard's Authors card show
+them for someone to confirm and fix in Calibre. Books with no text on their
+first pages, such as scans, are for a person to read and fix by hand.
+
 ## Zotero
 
 corpus-mcp can mirror a Zotero library, read-only, to see which Calibre books

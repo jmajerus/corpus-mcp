@@ -90,6 +90,16 @@ function render() {
     (y.candidates.length ? '<table style="margin-top:8px"><thead><tr><th>Printed</th><th>As</th><th>Where</th><th>Line</th></tr></thead><tbody>' +
       y.candidates.map((p) => "<tr><td>" + p.year + "</td><td>" + esc(yearKinds[p.kind] || p.kind) + "</td><td>" + (p.position === "back" ? "back page " : "page ") + p.page +
         '</td><td class="note">' + esc(p.context) + "</td></tr>").join("") + "</tbody></table>" : "") + "</div>";
+  const tp = b.title_page;
+  const fromLabels = { about: "About the author", by: "a by-line", copyright: "the copyright line", title_page: "the title page" };
+  const authorNote = { calibre: "", printed: "Calibre has no author; these are printed in the book. Confirm them and add them in Calibre.",
+    none: "Calibre has no author, and none was found printed in the book.", merged: "Calibre has several people in one author record; these are printed separately in the book." };
+  const titlePageCard = (tp.authors.length || tp.title || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
+    (tp.title_is_file_name ? kv([["Printed title", tp.title ? esc(tp.title.title) + ' <span class="note">page ' + tp.title.page + ", for Calibre's file name of a title</span>" : '<span class="note">Not found</span>']]) : "") +
+    (tp.authors.length ? '<table style="margin-top:8px"><thead><tr><th>Author</th><th>From</th><th>Where</th><th>Line</th></tr></thead><tbody>' +
+      tp.authors.map((a) => "<tr><td>" + esc(a.name) + "</td><td>" + esc(a.sources.map((x) => fromLabels[x] || x).join(", ")) + "</td><td>page " + a.page +
+        '</td><td class="note">' + esc(a.context) + "</td></tr>").join("") + "</tbody></table>" : "") +
+    (authorNote[tp.author_state] ? '<p class="note">' + esc(authorNote[tp.author_state]) + "</p>" : "") + "</div>" : "";
   const changes = b.changes.length ? '<div class="scroll"><table><thead><tr><th>When</th><th>Change</th><th>Detail</th><th>Source</th><th>By</th></tr></thead><tbody>' +
     b.changes.map((ch) => "<tr><td>" + esc(when(ch.at)) + "</td><td>" + esc(String(ch.kind).replace("_", " ")) + "</td><td>" +
       (["tag_added", "tag_removed", "tag_proposed", "proposal_approved"].includes(ch.kind) ? tagChip(ch.detail) : esc(ch.detail || "")) + "</td><td>" +
@@ -103,7 +113,7 @@ function render() {
     '<div class="cols">' + categoriesCard() + citekeyCard() +
     '<div class="card"><h2>Shelves and other tags</h2>' + kv([["Shelves", b.shelves.length ? b.shelves.map((s) => '<a class="chip muted" href="/admin/books?shelf=' + encodeURIComponent(s) + '">' + esc(s) + "</a>").join("") : '<span class="note">None</span>'],
       ["Other tags", b.other_tags.length ? b.other_tags.map((t) => '<span class="chip muted" title="' + esc(t.suspect || "") + '">' + esc(t.tag) + (t.suspect ? " ⚠" : "") + "</span>").join("") : '<span class="note">None</span>']]) + "</div>" +
-    '<div class="card"><h2>ISBN</h2>' + kv([["State", badge("isbn", b.isbn.state)], ["In Calibre", b.isbn.calibre ? esc(b.isbn.calibre) + (b.isbn.valid ? "" : ' <span class="note">(fails its check digit)</span>') : null]]) + printed + "</div>" + yearCard +
+    '<div class="card"><h2>ISBN</h2>' + kv([["State", badge("isbn", b.isbn.state)], ["In Calibre", b.isbn.calibre ? esc(b.isbn.calibre) + (b.isbn.valid ? "" : ' <span class="note">(fails its check digit)</span>') : null]]) + printed + "</div>" + yearCard + titlePageCard +
     '<div class="card"><h2>File</h2>' + kv([["Status", esc(b.status) + (b.error ? ' <span class="note">' + esc(b.error) + "</span>" : "")], ["Format", esc((f.format || "–").toUpperCase())],
       ["Length", f.pages ? num(f.pages) + (f.page_kind === "location" ? " locations" : " pages") : null], ["Text", f.text_chars !== null ? num(f.text_chars) + " characters" : null],
       ["Size", f.size ? bytes(f.size) : null], ["Path", f.path ? esc(f.path) : null], ["Same file as", b.same_file_as.length ? b.same_file_as.map((x) => bookLink(x)).join(", ") : null],

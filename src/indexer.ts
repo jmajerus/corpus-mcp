@@ -7,6 +7,7 @@ import type { Change, ChangeKind } from "./data.js";
 import { type PresetName, proposeCitekey } from "./citekey.js";
 import { ISBN_SCAN_VERSION, findPrintedIsbns } from "./isbn.js";
 import { YEAR_SCAN_VERSION, findPrintedYears, printedYear } from "./years.js";
+import { TITLE_PAGE_SCAN_VERSION, scanTitlePage } from "./titlepage.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
@@ -267,6 +268,23 @@ function fillDerivedColumns(db: DB, preset: PresetName): void {
     }
   })();
 
+  // Author and title candidates, from the front matter, the last pages, and any "About the author(s)"
+  // section wherever the outline puts it (O'Reilly's are at the back).
+  const unread = db.prepare(`
+    SELECT id, title, page_count FROM books
+    WHERE status = 'indexed' AND (title_page_version IS NULL OR title_page_version != ?)`)
+    .all(TITLE_PAGE_SCAN_VERSION) as { id: string; title: string; page_count: number }[];
+  const titlePages = db.prepare(`
+    SELECT page_index, section_path, text FROM pages
+    WHERE book_id = ? AND (page_index < ? OR page_index >= ? OR lower(section_path) LIKE '%about the author%') ORDER BY page_index`);
+  const updateTitlePage = db.prepare("UPDATE books SET title_page = ?, title_page_version = ? WHERE id = ?");
+  db.transaction(() => {
+    for (const book of unread) {
+      const text = titlePages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; section_path: string | null; text: string }[];
+      updateTitlePage.run(JSON.stringify(scanTitlePage(text, book.title)), TITLE_PAGE_SCAN_VERSION, book.id);
+    }
+  })();
+
   // A book Calibre has no year for gets its proposed citekey from the printed year. Every scan rewrites
   // the proposal from Calibre's metadata first, so this runs each time, after it.
   const noYear = db.prepare(`
@@ -304,7 +322,7 @@ function writeBook(db: DB, preset: PresetName, id: string, library: string, fold
     id, library, folder, ...metadataColumns(m, preset),
     format: null, file_path: null, file_size: null, file_mtime: null, sha256: null,
     extractor_version: EXTRACTOR_VERSION, reflowable: null, page_count: null, error: null,
-    printed_isbns: null, printed_isbns_version: null, printed_years: null, printed_years_version: null, printed_year: null, text_chars: null,
+    printed_isbns: null, printed_isbns_version: null, printed_years: null, printed_years_version: null, printed_year: null, title_page: null, title_page_version: null, text_chars: null,
     indexed_at: new Date().toISOString(), ...fields,
   };
   const columns = Object.keys(row);

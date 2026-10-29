@@ -313,7 +313,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("corpus_status", {
     title: "Corpus status",
-    description: "Index freshness, book counts by library and format, books that failed, have no text layer, or have no outline, citekey readiness (pinned keys, and books blocked from filing by missing Calibre metadata), and the ISBNs and publication years books print that Calibre lacks.",
+    description: "Index freshness, book counts by library and format, books that failed, have no text layer, or have no outline, citekey readiness (pinned keys, and books blocked from filing by missing Calibre metadata), and the ISBNs, publication years, authors, and titles books print that Calibre lacks.",
     inputSchema: {},
     annotations: { title: "Corpus status", ...readOnly },
   }, () => run(() => json(corpusStatus(c))));
@@ -474,6 +474,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         citekey: oneOf(p.get("citekey"), ["calibre", "pinned", "ready", "blocked"] as const),
         isbn: oneOf(p.get("isbn"), ["valid", "invalid", "printed", "none"] as const),
         year: oneOf(p.get("year"), ["calibre", "printed", "none"] as const),
+        author: oneOf(p.get("author"), ["calibre", "printed", "none", "merged"] as const),
         problem: oneOf(p.get("problem"), ["failed", "no_file", "no_text", "no_outline"] as const),
         sort: oneOf(p.get("sort"), ["title", "year", "id"] as const),
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,

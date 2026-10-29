@@ -64,6 +64,10 @@ async function loadMetrics() {
     card("ISBNs", go("/admin/books?isbn=printed", num(m.printed_isbns.books_printing_isbn)) + ' <span class="note">printed only</span>', [[go("/admin/books?isbn=none", "No ISBN"), "→"], [go("/admin/books?isbn=valid", "Valid in Calibre"), "→"]]),
     card("Years", go("/admin/books?year=printed", num(m.printed_years.books_printing_year)) + ' <span class="note">printed only</span>', [
       [go("/admin/books?year=none", "No year"), "→"], [go("/admin/books?year=calibre", "In Calibre"), "→"]]),
+    card("Authors", go("/admin/books?author=printed", num(m.title_pages.unknown_author_found)) + ' <span class="note">printed only</span>', [
+      [go("/admin/books?author=none", "No author"), num(m.title_pages.unknown_author - m.title_pages.unknown_author_found), m.title_pages.unknown_author - m.title_pages.unknown_author_found ? "warn" : ""],
+      [go("/admin/books?author=merged", "Several in one record"), num(m.title_pages.merged_authors), m.title_pages.merged_authors ? "warn" : ""],
+      ["Titles that are file names", num(m.title_pages.mangled_titles) + (m.title_pages.mangled_titles ? " (" + num(m.title_pages.mangled_titles_found) + " found)" : "")]]),
     card("Last refresh", ago(m.index.last_scan), run ? [["Took", run.seconds.toFixed(1) + " s"], ["Extracted", num(run.extracted)], ["Failed", num(run.failed), run.failed ? "warn" : ""],
       ["Unreadable libraries", num((run.unreadable_libraries || []).length), (run.unreadable_libraries || []).length ? "bad" : ""]] : [], staleScan ? "warn" : ""),
     card("Last pull", sync ? ago(sync.finished_at) : "no status", sync ? Object.entries(sync.libraries || {}).map(([k, v]) => ["Library " + esc(k), esc(v), v === "ok" ? "good" : "bad"])

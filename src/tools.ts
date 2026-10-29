@@ -9,6 +9,7 @@ import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
 import type { YearCandidate } from "./years.js";
+import { type TitlePageScan, mangledTitle } from "./titlepage.js";
 import type { Vocabulary, VocabularySource } from "./vocabulary.js";
 import type { Taxonomy } from "./taxonomy/taxonomy.js";
 
@@ -38,7 +39,7 @@ export interface BookRow {
   id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;
   publisher: string | null; year: number | null; language: string | null; isbn: string | null;
   calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; printed_isbns: string | null; tags: string;
-  printed_years: string | null; printed_year: number | null;
+  printed_years: string | null; printed_year: number | null; title_page: string | null;
   description: string | null; format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
   page_count: number | null; status: string; error: string | null; calibre_id: number; file_size: number | null; text_chars: number | null;
 }
@@ -463,6 +464,23 @@ export function printedYears(book: Pick<BookRow, "printed_years">): YearCandidat
   return book.printed_years ? (JSON.parse(book.printed_years) as YearCandidate[]) : [];
 }
 
+/** The author and title candidates read from the book's own pages, found at index time. */
+export function titlePageScan(book: Pick<BookRow, "title_page">): TitlePageScan {
+  return book.title_page ? (JSON.parse(book.title_page) as TitlePageScan) : { authors: [], title: null };
+}
+
+/**
+ * Where a book's author stands: in Calibre; missing there but printed in the book; missing in both; or
+ * several people in one Calibre author record.
+ */
+export type AuthorState = "calibre" | "printed" | "none" | "merged";
+export function authorState(book: Pick<BookRow, "citekey_blockers" | "title_page">): AuthorState {
+  const blockers = JSON.parse(book.citekey_blockers) as string[];
+  if (blockers.includes("merged_authors")) return "merged";
+  if (!blockers.includes("unknown_author")) return "calibre";
+  return titlePageScan(book).authors.length ? "printed" : "none";
+}
+
 /** The book as a CSL JSON item; empty fields are left out. */
 export function cslItem(book: BookRow, citekey: string | null): CslItem {
   const names = calibreNames(JSON.parse(book.authors) as string[], JSON.parse(book.author_sorts) as string[]);
@@ -654,6 +672,7 @@ export function corpusStatus(c: Corpus) {
     citekeys: citekeyReadiness(c),
     printed_isbns: printedIsbnReport(c),
     printed_years: printedYearReport(c),
+    title_pages: titlePageReport(c),
     tags: tagHygiene(c),
   };
 }
@@ -742,6 +761,41 @@ function printedYearReport(c: Corpus) {
     note: "Calibre has no publication year for these books, but their text prints one, which citations and proposed citekeys use. Confirm it and add it in Calibre.",
     books_without_year: books.length,
     books_printing_year: found.length,
+    books: found.slice(0, 100),
+    ...(found.length > 100 ? { books_truncated: found.length - 100 } : {}),
+  };
+}
+
+/**
+ * Books whose Calibre author is missing or merged, or whose title is a file name, with the authors and
+ * title their own pages print: candidates to confirm and fix in Calibre. Never used in citations.
+ */
+function titlePageReport(c: Corpus) {
+  const books = c.db.prepare("SELECT * FROM books WHERE status = 'indexed' ORDER BY id").all() as BookRow[];
+  const counts = { unknown_author: 0, unknown_author_found: 0, merged_authors: 0, merged_authors_found: 0, mangled_titles: 0, mangled_titles_found: 0 };
+  const found = [];
+  for (const b of books) {
+    const state = authorState(b);
+    const scan = titlePageScan(b);
+    const mangled = mangledTitle(b.title);
+    if (state === "printed" || state === "none") counts.unknown_author++;
+    if (state === "printed") counts.unknown_author_found++;
+    if (state === "merged") counts.merged_authors++;
+    if (state === "merged" && scan.authors.length) counts.merged_authors_found++;
+    if (mangled) counts.mangled_titles++;
+    if (mangled && scan.title) counts.mangled_titles_found++;
+    const authors = state === "printed" || state === "merged" ? scan.authors : [];
+    const title = mangled ? scan.title : null;
+    if (authors.length || title) {
+      found.push({
+        book_id: b.id, title: b.title, calibre_authors: JSON.parse(b.authors) as string[],
+        authors: authors.map((a) => ({ name: a.name, from: a.sources, page: a.page })), printed_title: title?.title ?? null,
+      });
+    }
+  }
+  return {
+    note: "Authors and titles printed in these books, where Calibre has no author, several people in one author record, or a file name for a title. Candidates only: confirm them and fix Calibre.",
+    ...counts,
     books: found.slice(0, 100),
     ...(found.length > 100 ? { books_truncated: found.length - 100 } : {}),
   };

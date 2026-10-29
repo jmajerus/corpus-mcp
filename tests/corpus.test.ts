@@ -23,7 +23,7 @@ import { type ZoteroConfig, linkZotero, syncZotero, zoteroCiteInfo, zoteroMatch,
 import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBook, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, authorState, citePassage, corpusStatus, getBook, getBookOutline, titlePageScan, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
   tagCleanupPlan, toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -546,6 +546,31 @@ describe("printed years", () => {
     expect(list.rows.map((r) => r.book_id)).toContain("years:1");
     expect(list.rows.every((r) => r.year_state === "printed")).toBe(true);
     expect(list.facets.year.printed).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("title pages", () => {
+  it("offers the authors and title a book prints when Calibre has none, as candidates only", () => {
+    config.libraries.push("packt");
+    makeLibrary(root, "packt", [{ id: 1, title: "awscloudprojects", authors: ["Unknown"], pubdate: "2024-01-01 00:00:00+00:00",
+      files: { pdf: makePdf({ pages: [
+        [""],
+        ["AWS Cloud Projects", "Strengthen your AWS skills through practical projects", "Ivo Pinto", "Pedro Santos"],
+        ["Copyright © 2024 Packt Publishing", "Technical Editor: Rajat Sharma"],
+        ["Contributors", "About the authors", "Ivo Pinto, CISSP, is a principal solutions architect.", "Pedro Santos is a senior solutions architect.", "About the reviewers", "Jane Reviewer is a cloud engineer."],
+        ["Chapter 1"],
+      ] }) } }]);
+    scanLibraries(config, db);
+    const book = getBook(c, "packt:1");
+    expect(authorState(book)).toBe("printed");
+    expect(titlePageScan(book)).toMatchObject({ authors: [{ name: "Ivo Pinto" }, { name: "Pedro Santos" }], title: { title: "AWS Cloud Projects" } });
+    const report = corpusStatus(c).title_pages;
+    expect(report.books.find((b) => b.book_id === "packt:1")).toMatchObject({ authors: [{ name: "Ivo Pinto" }, { name: "Pedro Santos" }], printed_title: "AWS Cloud Projects" });
+    expect(report.unknown_author_found).toBeGreaterThanOrEqual(1);
+    expect(adminBooks(c, { author: "printed" }).rows.map((r) => r.book_id)).toContain("packt:1");
+    // Never in a citation: the citekey stays blocked by the missing author.
+    expect(JSON.parse(book.citekey_blockers)).toContain("unknown_author");
+    expect(citePassage(c, { book_id: "packt:1" }).csl.author).toBeUndefined();
   });
 });
 
