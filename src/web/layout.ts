@@ -141,12 +141,13 @@ const STATES = {
   problem: { failed: ["Extraction failed", "!", "bad"], no_file: ["No readable file", "!", "bad"], no_text: ["No text layer", "!", "warn"], no_outline: ["No outline", "○", "warn"] },
 };
 const badge = (group, key) => { const [name, sign, tone] = (STATES[group] || {})[key] || [key, "", ""]; return '<span class="badge ' + tone + '"><span class="sign" aria-hidden="true">' + esc(sign) + "</span>" + esc(name) + "</span>"; };
-// Who is signed in: every change needs Cloudflare Access; direct LAN access is read-only.
+// Who changes are recorded as: a Cloudflare Access identity, or the LAN actor for edits made directly on the LAN.
 const ME = fetch("/api/whoami").then((r) => r.json()).catch(() => ({ can_write: false, reason: "Could not check sign-in." }));
 ME.then((me) => {
   const el = document.getElementById("who");
-  el.textContent = me.can_write ? "Signed in as " + (me.identity.email || me.identity.subject) : "Read-only";
-  el.title = me.can_write ? "" : me.reason || "";
+  const name = me.can_write ? me.identity.email || me.identity.subject : "";
+  el.textContent = !me.can_write ? "Read-only" : me.identity.via === "lan" ? "On the LAN, as " + name : "Signed in as " + name;
+  el.title = !me.can_write ? me.reason || "" : me.identity.via === "lan" ? "Edits made directly on the LAN are recorded as " + name + " (CORPUS_LAN_ACTOR)." : "";
   el.className = "who" + (me.can_write ? " ok" : "");
 });
 `;

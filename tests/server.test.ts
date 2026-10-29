@@ -154,7 +154,7 @@ it("serves the admin dashboard and metrics, read-only without Access", async () 
   expect(metrics.index.runs[0]).toMatchObject({ extracted: 1 });
   expect(await (await fetch(`${base}/api/whoami`)).json()).toMatchObject({ can_write: false });
   expect(await (await fetch(`${base}/api/whoami`, { headers: { "cf-access-jwt-assertion": token } })).json())
-    .toEqual({ can_write: true, identity: { subject: "user-1", email: "me@example.com" } });
+    .toEqual({ can_write: true, identity: { subject: "user-1", email: "me@example.com", via: "access" } });
   expect((await startJob({ kind: "backup" }, {})).status).toBe(401);
 });
 

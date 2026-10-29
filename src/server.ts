@@ -579,7 +579,7 @@ function readDeployed(config: Config): unknown {
  * A public page from the snapshot, for GET and HEAD. With no snapshot yet, a page that says how to build
  * one. Public pages may be cached, unlike the admin pages.
  */
-async function servePublic(read: () => PublicStore | null, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+async function servePublic(read: () => PublicStore | null, req: http.IncomingMessage, res: http.ServerResponse, url: URL, preview = false): Promise<void> {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { allow: "GET, HEAD" }).end();
     return;
@@ -591,7 +591,7 @@ async function servePublic(read: () => PublicStore | null, req: http.IncomingMes
     return;
   }
   try {
-    const out = await renderPublic(store, url.pathname, url.searchParams);
+    const out = await renderPublic(store, url.pathname, url.searchParams, { preview });
     if (!out) {
       res.writeHead(404).end();
       return;
@@ -678,23 +678,25 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
   // Ships the snapshot's changes to its replica in D1, when the proxy (or the REST API) is configured.
   const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file)) : null;
-  // The public-only listener serves the public pages and nothing else, whatever the proxy in front of it sends.
+  // The public catalogue has its own listener, which serves its pages and nothing else, whatever a proxy
+  // in front of it sends. With D1 configured, the public site is the Worker, and this port is a preview
+  // of what goes out next, and says so.
+  const preview = () => !!replica && replica().phase !== "off";
   const publicServer = publicOn && fullConfig.public!.port !== undefined
     ? http.createServer(async (req, res) => {
       const url = requestUrl(req, res);
       if (!url || serveFavicon(req, res, url)) return;
-      if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url);
+      if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url, preview());
       else res.writeHead(404).end();
     })
     : null;
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
     if (!url || serveFavicon(req, res, url)) return;
-    if (isPublicPath(url.pathname)) {
-      // Without a public site, / is the dashboard's front door, as before.
-      if (publicOn) await servePublic(readPublic, req, res, url);
-      else if (url.pathname === "/") res.writeHead(302, { location: "/admin" }).end();
-      else res.writeHead(404).end();
+    // This port is for working on the corpus: / is the dashboard. The public catalogue is on its own port
+    // (CORPUS_PUBLIC_PORT) and, published, on its own hostname, never here.
+    if (url.pathname === "/") {
+      res.writeHead(302, { location: "/admin" }).end();
       return;
     }
     if (url.pathname === "/health") {

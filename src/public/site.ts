@@ -43,6 +43,7 @@ dl.entry { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px;
 dl.entry dt { color: var(--muted); }
 dl.entry dd { margin: 0; overflow-wrap: anywhere; }
 .pager { display: flex; gap: 12px; margin: 14px 0; }
+.preview-banner { background: var(--warn-bg); color: var(--text); border-bottom: 1px solid var(--border); padding: 8px 16px; text-align: center; font-size: 0.9rem; }
 `;
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -54,6 +55,8 @@ const authorsOf = (b: Pick<Book, "authors">) => (JSON.parse(b.authors) as string
 
 type Section = "home" | "books" | "subjects" | "shelves";
 
+const PREVIEW_BANNER = '<div class="preview-banner">Preview: the LAN copy of the public catalogue, not yet published. The published site may be a few seconds behind it.</div>';
+
 async function page(store: PublicStore, title: string | null, section: Section, body: string): Promise<string> {
   const site = await siteTitle(store);
   const nav: [Section, string, string][] = [["home", "Home", "/"], ["books", "Books", "/books"], ["subjects", "Subjects", "/subjects"], ["shelves", "Shelves", "/shelves"]];
@@ -61,7 +64,7 @@ async function page(store: PublicStore, title: string | null, section: Section, 
 <title>${title ? `${esc(title)} · ` : ""}${esc(site)}</title>${FAVICON_LINK}<style>${CSS}${SITE_CSS}</style></head><body>
 <header class="topbar"><div class="topbar-inner"><a class="brand" href="/" style="color:inherit;text-decoration:none">${esc(site)}</a><nav class="nav">
 ${nav.map(([k, label, href]) => `<a href="${href}"${k === section ? ' aria-current="page"' : ""}>${label}</a>`).join("")}
-</nav></div></header><main>${body}</main></body></html>`;
+</nav></div></header>${(store as PublicStore & { preview?: boolean }).preview ? PREVIEW_BANNER : ""}<main>${body}</main></body></html>`;
 }
 
 async function meta(store: PublicStore, key: string): Promise<string | null> {
@@ -237,8 +240,10 @@ function etagOf(body: string): string {
 }
 
 /** A public page or JSON document from the snapshot; null for a path that isn't public. */
-export async function renderPublic(store: PublicStore, pathname: string, params = new URLSearchParams()): Promise<PublicResponse | null> {
+export async function renderPublic(store: PublicStore, pathname: string, params = new URLSearchParams(), o: { preview?: boolean } = {}): Promise<PublicResponse | null> {
   if (!isPublicPath(pathname)) return null;
+  // A preview's pages say they aren't the published site; the flag travels with the store, per request.
+  if (o.preview) store = { ...store, preview: true } as PublicStore;
   const html = (body: string | null): PublicResponse =>
     body === null ? { status: 404, type: "text/html; charset=utf-8", body: "<!doctype html><title>Not found</title><p>Not found.</p>" } : { status: 200, type: "text/html; charset=utf-8", body, etag: etagOf(body) };
   const json = (value: unknown): PublicResponse => {

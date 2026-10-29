@@ -117,6 +117,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       access: {
         teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined,
         vocabularyPush: { clientId: env.CORPUS_VOCABULARY_PUSH_CLIENT_ID || undefined, audience: env.CORPUS_VOCABULARY_PUSH_AUD || undefined },
+        // Edits made directly on the LAN, recorded under this name: on unless CORPUS_LAN_EDITS is off.
+        lanActor: /^(?:off|false|no|0)$/i.test(env.CORPUS_LAN_EDITS ?? "") ? undefined : env.CORPUS_LAN_ACTOR || "LAN",
       },
       neighbors: (env.CORPUS_NEIGHBORS ?? DEFAULT_NEIGHBORS).split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {
         const at = pair.indexOf("=");
