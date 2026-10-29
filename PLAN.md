@@ -825,7 +825,9 @@ create/update/get/list_category, a structured field in the category editor
 (no raw-JSON editors), validation, a hosted worker deploy, D1 replication.
 Can come any time before stage 3.
 
-**Stage 3: the master taxonomy server.** Seeded from the overlay and CC's
+**Stage 3: the master taxonomy server** (working name terminology-mcp,
+after FHIR-style terminology servers: code systems, value sets, and concept
+maps are close to our schemes, concept sets, and stage 2's mapping). Seeded from the overlay and CC's
 taxonomy; CC's export (`export-taxonomy.mjs`, `taxonomySnapshot.js`)
 retires. CC's authoring, including its remote MCP, runs on the LAN behind
 Access, so it can read a master server on the LAN directly. Anything on
@@ -841,6 +843,46 @@ points:
 | Top-level terms | The roadmap's admission test, first condition (a real institutional home) as is; its second ("ten puzzles…") is about CC's content, so the master needs its own, e.g. corpus holdings. |
 | Proposals | Consumers propose terms; the owner decides. Fits beside `/admin/proposals`. `vocabulary_report` and tag proposals that found no term are the editor's evidence. |
 | Puzzle kinds | Leave `trivia` and `vocabulary` out of the subject tree; CC keeps them as local categories with no mapping. Whether they leave CC's navigation is a separate decision. |
+
+**Stage 3: subscribers, impact, and holds** (brainstorm 2026-10-29). How
+the master manages its dependents and shows what a proposed change would
+break.
+
+- *Additions are free.* Adding a term to a scheme, adding it to a named
+  concept set, adding a relation, or editing a scope note goes out to every
+  subscriber at once. Renames, moves, merges, splits, retires, and removed
+  relations are the breaking kinds, and only those go through the steps
+  below.
+- *Subscribers and cursors.* The changelog is numbered. Each consumer (CC,
+  corpus-mcp, quote-mcp, a Zotero tag sync) registers and keeps an "applied
+  through N" cursor. The server notifies on change, but the log is the
+  truth: a subscriber that was down catches up from its cursor, the same
+  lesson as CC's drain loop.
+- *Usage reports.* Subscribers report which term ids they use and how much
+  (puzzles, books, quotes, concepts). A proposed breaking change is shown
+  with its impact before it's applied ("retire X: CC 4 puzzles, corpus-mcp
+  12 books and 30 quotes"). This is the dependency view; without it, a hold
+  or a veto has nothing to go on.
+- *Holding delivery* (each subscriber alone, always available). A
+  subscriber stops advancing its cursor while it's mid-migration; changes
+  queue and replay in order on release. Nobody else waits.
+- *Gates* (opt-in per subscriber and per change kind). A breaking change is
+  proposed first; gate subscribers answer ok or "blocked because…" (CC:
+  "this slug is in 40 player URLs"). A veto with a reason, not a lock.
+  Consumers that key on ids mostly see renames as label changes; slug-keyed
+  consumers (CC's URLs and catalogue ids) are the ones that need a gate.
+- *Edit holds* (rare escape hatch). Scoped to a term or subtree, never the
+  whole taxonomy; a lease with an owner and an expiry, renewed while
+  needed, logged when it lapses. Edits made under a hold are queued as
+  pending, not refused. This reverses stage 1's "an unreachable consumer
+  never blocks a write" on purpose, which is why it's opt-in and bounded.
+- *Relations, not an ontology.* Schemes (topic hierarchies), collections
+  (named concept sets, like quote-mcp's sets), broader/narrower, and
+  associative links: `related` plus a small, named set of typed relations
+  such as quote-mcp's `opposite`. The server stores and serves them and
+  does not reason over them (no OWL, no inference); a new relation type is
+  a deliberate addition. Full connectivity through these links is the goal
+  for concept terms, and feeds graph views like WorkCreatively's.
 
 **Cautions from CC's roadmap.** Its failure mode: "defining the taxonomy
 first and growing content into it produces authoring to fill headings."
