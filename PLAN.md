@@ -641,7 +641,9 @@ time out at 30 s after the item was created):
   `Cf-Access-Jwt-Assertion` token verified with `jose` against the team's
   keys, issuer, and the corpus application's AUD tag (`src/access.ts`, on
   the pattern of concept-clusters' `accessAuth.js`). Without both settings
-  every write is refused. Direct LAN access is read-only.
+  every write is refused. Direct LAN access was read-only until 2026-10-29;
+  now the LAN is trusted, as `/mcp` always was, and LAN edits are recorded
+  under `CORPUS_LAN_ACTOR` (see docs/operations.md, *Access*).
 - **Verified.** The polkit rule allows starting the refresh and refuses a
   restart of corpus-mcp or a stop of the refresh. The dispatcher runs the
   named commands and refuses a shell, injection, and an rsync write.

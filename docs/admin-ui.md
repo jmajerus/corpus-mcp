@@ -6,18 +6,34 @@ can change, a person can change here too. Every page shares one navigation bar:
 Dashboard, Books, Quotes, Categories, Taxonomy, Citekeys, Zotero, Proposals,
 Shelves, Jobs, and Changes.
 
+## Where to find them
+
+The admin pages, and everything they change, live on the corpus server on
+your LAN. There are two ways to reach them, both to the same server and data:
+
+| Address | From | Editing |
+|---|---|---|
+| `http://corpus-mcp.localdomain:8000/admin` | Home, on the LAN | Yes, recorded as `CORPUS_LAN_ACTOR` |
+| `https://corpus-mcp.majerus.us/admin` | Anywhere, through a Cloudflare tunnel and an Access sign-in | Yes, recorded as your Access email |
+
+`/` on either address opens the dashboard. The public catalogue is something
+else: a published copy, at its own address and read-only (see
+[The public catalogue](public-site.md)).
+
 ## Signing in
 
-The top right of every page says whether you can make changes:
+The top right of every page says who your changes are recorded as:
 
+- **On the LAN, as you@example.com**: you're on the LAN directly. The name is
+  the server's `CORPUS_LAN_ACTOR`, and every button works.
 - **Signed in as you@example.com**: you came through Cloudflare Access, and
   every button works.
-- **Read-only**: you reached the server directly on the LAN, or Access didn't
-  vouch for you. Hover over it for the reason. You can browse everything, but
-  editing buttons are disabled.
+- **Read-only**: you came through Cloudflare without an Access sign-in, or LAN
+  editing is turned off (`CORPUS_LAN_EDITS=off`). Hover over it for the reason.
+  You can browse everything, but editing buttons are disabled.
 
-Every change is recorded with the signed-in person's email, on the
-[Changes](#changes) page and wherever the change shows up.
+Every change is recorded with that name, on the [Changes](#changes) page and
+wherever the change shows up.
 
 ## Dashboard (`/admin`)
 

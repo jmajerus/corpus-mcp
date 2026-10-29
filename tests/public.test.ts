@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { privateAddress } from "../src/access.js";
 import type { Config } from "../src/config.js";
 import { openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
@@ -136,6 +137,11 @@ describe("the pages", () => {
     expect((await get("/books/main:2")).body).toContain("https://quotes.example.org/works/9");
   });
 
+  it("marks a preview's pages as not yet published", async () => {
+    expect((await renderPublic(store, "/books", new URLSearchParams(), { preview: true }))!.body).toContain("not yet published");
+    expect((await get("/books")).body).not.toContain("not yet published");
+  });
+
   it("describes itself for other sites", async () => {
     expect(JSON.parse((await get("/site.json")).body)).toEqual({
       version: 1, name: "Test Library", kind: "library", url: "https://library.example.org", level: "catalogue", citekeys: "/api/public/citekeys",
@@ -212,7 +218,7 @@ describe("the server", () => {
     c.db.close();
     c.db = openDatabase(config.dbPath);
     server = await serveHttp({
-      ...config, admin: { access: {}, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x", refreshLog: "x", syncStatus: "x" },
+      ...config, admin: { access: { lanActor: "me@lan", lanHosts: ["corpus.lan"] }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x", refreshLog: "x", syncStatus: "x" },
       public: { level: "catalogue", file: file(), port: 0, title: "Served", url: "", links: [], intervalMinutes: 10 },
     }, { publishTimer: false, zoteroTimer: false });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -220,15 +226,49 @@ describe("the server", () => {
   });
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  it("says how to build the snapshot, then serves it", async () => {
-    expect((await fetch(`${base}/`)).status).toBe(503);
+  it("says how to build the snapshot, then serves it on its own port", async () => {
+    expect((await fetch(`${publicBase}/`)).status).toBe(503);
     buildSnapshot(c, { ...options(), title: "Served" }, file());
-    const res = await fetch(`${base}/books/main%3A1`);
+    const res = await fetch(`${publicBase}/books/main%3A1`);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toContain("public");
     expect(await res.text()).toContain("Networks");
-    const again = await fetch(`${base}/books/main%3A1`, { headers: { "if-none-match": res.headers.get("etag")! } });
+    const again = await fetch(`${publicBase}/books/main%3A1`, { headers: { "if-none-match": res.headers.get("etag")! } });
     expect(again.status).toBe(304);
+    // Without D1, the public port is the public site, so it isn't marked as a preview.
+    expect(await (await fetch(`${publicBase}/`)).text()).not.toContain("not yet published");
+  });
+
+  it("keeps the main port for working on the corpus", async () => {
+    const root = await fetch(`${base}/`, { redirect: "manual" });
+    expect([root.status, root.headers.get("location")]).toEqual([302, "/admin"]);
+    for (const p of ["/books", "/site.json", "/subjects"]) expect((await fetch(`${base}${p}`)).status, p).toBe(404);
+  });
+
+  it("lets edits made directly on the LAN through, and never one through Cloudflare without a token", async () => {
+    const whoami = (headers: Record<string, string> = {}) => fetch(`${base}/api/whoami`, { headers }).then((r) => r.json());
+    expect(await whoami()).toEqual({ can_write: true, identity: { subject: "lan", email: "me@lan", via: "lan" } });
+    expect(await whoami({ "cf-ray": "8a1b2c3d4e5f-LAX" })).toMatchObject({ can_write: false });
+    expect(await whoami({ "cf-connecting-ip": "203.0.113.9" })).toMatchObject({ can_write: false });
+    const job = await fetch(`${base}/api/admin/jobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "backup" }) });
+    expect(job.status).toBe(202);
+  });
+
+  it("goes by whether a CDN's headers are there at all, and lets only the server's own names through", async () => {
+    const port = (server.address() as AddressInfo).port;
+    const whoami = (headers: Record<string, string>) => new Promise<{ can_write: boolean; reason?: string }>((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path: "/api/whoami", headers }, (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk)).on("end", () => resolve(JSON.parse(body)));
+      }).on("error", reject);
+    });
+    expect(await whoami({ "cf-ray": "" })).toMatchObject({ can_write: false });
+    expect(await whoami({ "cdn-loop": "fastly" })).toMatchObject({ can_write: false });
+    // DNS rebinding: an attacker's name, re-pointed at the server, is never a LAN name.
+    expect(await whoami({ host: `rebind.attacker.example:${port}` })).toMatchObject({ can_write: false, reason: expect.stringContaining("CORPUS_LAN_HOSTS") });
+    expect(await whoami({ host: `localhost:${port}` })).toMatchObject({ can_write: true });
+    expect(await whoami({ host: `[::1]:${port}` })).toMatchObject({ can_write: true });
+    expect(await whoami({ host: `corpus.lan:${port}` })).toMatchObject({ can_write: true });
   });
 
   it("answers a malformed request target with 400 and keeps running", async () => {
@@ -251,7 +291,7 @@ describe("the server", () => {
       expect(res.headers.get("content-type")).toBe("image/png");
       expect(Buffer.from(await res.arrayBuffer()).equals(png)).toBe(true);
     }
-    expect(await (await fetch(`${base}/books`)).text()).toContain('rel="icon"');
+    expect(await (await fetch(`${publicBase}/books`)).text()).toContain('rel="icon"');
     expect(await (await fetch(`${base}/admin`)).text()).toContain('rel="icon"');
   });
 
@@ -261,6 +301,15 @@ describe("the server", () => {
     for (const p of ["/admin", "/api/books", "/mcp", "/api/books/main%3A1/pages", "/health"]) {
       expect((await fetch(`${publicBase}${p}`)).status, p).toBe(404);
     }
+  });
+});
+
+describe("the LAN", () => {
+  it("is private, loopback, or link-local addresses", () => {
+    for (const a of ["192.168.1.20", "10.0.0.5", "172.16.0.1", "172.31.255.1", "127.0.0.1", "::1", "::ffff:192.168.1.20", "fd12:3456::1", "fe80::1", "169.254.1.1"]) {
+      expect(privateAddress(a), a).toBe(true);
+    }
+    for (const a of ["203.0.113.9", "172.32.0.1", "8.8.8.8", "2001:db8::1", "::ffff:8.8.8.8", undefined]) expect(privateAddress(a), String(a)).toBe(false);
   });
 });
 

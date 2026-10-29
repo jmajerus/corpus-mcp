@@ -181,10 +181,11 @@ sleep 2
 
 /**
  * Settings copied from this machine's .env to the server's on every deploy, when given: the vocabulary
- * intake's service token (client id, Access audience), and the D1 proxy the public catalogue's drain ships to.
+ * intake's service token (client id, Access audience), the D1 proxy the public catalogue's drain ships to, and
+ * who edits made directly on the LAN are recorded as.
  */
 function intakeSettings() {
-  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_VOCABULARY_PUSH_AUD", "CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN"].filter((name) => process.env[name])
+  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_VOCABULARY_PUSH_AUD", "CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN", "CORPUS_LAN_ACTOR", "CORPUS_LAN_EDITS"].filter((name) => process.env[name])
     .map((name) => `sed -i '/^${name}=/d' /etc/corpus-mcp/env && echo ${shellQuote(`${name}=${process.env[name]}`)} >> /etc/corpus-mcp/env\n`).join("");
 }
 
