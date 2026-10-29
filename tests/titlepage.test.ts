@@ -56,6 +56,29 @@ describe("title-page scan", () => {
     expect(scanTitlePage([page(1, "Mastering Go\n\nFourth Edition")], "masteringgo fourthedition").title?.title).toBe("Mastering Go");
   });
 
+  it("keeps a company's suffix with it, so a publisher holding the copyright is no author", () => {
+    expect(names(scanTitlePage([page(1, "Copyright © 1962 by Alfred A. Knopf, Inc.")], "A Book"))).toEqual([]);
+  });
+
+  it("tells apart names in any script", () => {
+    const r = scanTitlePage([page(3, "Об авторах\n\nAbout the authors\n\nИван Иванов is a historian.\n\nАнна Петрова is a linguist.", "Contributors")], "Книга");
+    expect(names(r)).toEqual(["Иван Иванов", "Анна Петрова"]);
+  });
+
+  it("reads an About the authors section onto the next page, up to the reviewers", () => {
+    const r = scanTitlePage([
+      page(4, "About the authors\n\nAda Lovelace is a mathematician.", "Contributors"),
+      page(5, "Charles Babbage is an engineer.\n\nAbout the reviewers\n\nGrace Hopper is a reviewer.", "Contributors"),
+      page(6, "Alan Turing is in chapter one.", "Chapter 1"),
+    ], "Engines");
+    expect(names(r)).toEqual(["Ada Lovelace", "Charles Babbage"]);
+  });
+
+  it("prefers the page marked Title Page to a cover that carries only the title", () => {
+    const r = scanTitlePage([page(0, "AWS Cloud Projects", "Cover"), page(1, "AWS Cloud Projects\n\nIvo Pinto\n\nPedro Santos", "Title Page")], "AWS Cloud Projects");
+    expect(names(r)).toEqual(["Ivo Pinto", "Pedro Santos"]);
+  });
+
   it("tidies names", () => {
     expect(personName("Dr. Jane Q. Public")).toBe("Jane Q. Public");
     expect(personName("Ludwig van Beethoven")).toBe("Ludwig van Beethoven");

@@ -25,10 +25,15 @@ export interface AuthorCandidate {
 
 export interface TitleCandidate { title: string; page: number }
 
-export interface TitlePageScan { authors: AuthorCandidate[]; title: TitleCandidate | null }
+export interface TitlePageScan {
+  authors: AuthorCandidate[];
+  title: TitleCandidate | null;
+  /** The Calibre title the scan was made for: what's a title line, and whether it's a file name, depend on it. */
+  for_title?: string;
+}
 
 /** Bump when scanTitlePage changes, so the indexer recomputes stored candidates (no re-extraction). */
-export const TITLE_PAGE_SCAN_VERSION = 1;
+export const TITLE_PAGE_SCAN_VERSION = 2;
 
 export interface ScanPage { page_index: number; section_path: string | null; text: string }
 
@@ -70,10 +75,17 @@ export function personName(raw: string): string | null {
   return tidy + suffix;
 }
 
-/** Splits "A, B and C" into names, keeping a ", Jr." with its name. */
+/**
+ * Splits "A, B and C" into names, keeping a ", Jr." with its name and a ", Inc." with its company, so
+ * "Alfred A. Knopf, Inc." stays whole and is seen to be a publisher.
+ */
 function splitNames(list: string): string[] {
-  return list.split(/\s*(?:,(?!\s*(?:jr|sr|ii|iii|iv)\b)|;|\s+and\s+|\s*&\s*)\s*/i).map((s) => s.trim()).filter(Boolean);
+  return list.split(/\s*(?:,(?!\s*(?:jr|sr|ii|iii|iv|inc|llc|ltd|co|corp|plc|gmbh|ag|s\.?a|pty|limited|incorporated)\b)|;|\s+and\s+|\s*&\s*)\s*/i)
+    .map((s) => s.trim()).filter(Boolean);
 }
+
+/** A biography's opening name: "Rahul Sharma is…", "Ivo Pinto, CISSP, is…". */
+const LEAD = /^\s*((?:(?:Dr|Prof)\.?\s+)?\p{Lu}[\p{L}'’.-]*(?:\s+(?:\p{Lu}[\p{L}'’.-]*|de|da|di|del|der|van|von|la|le|bin|al)){1,3})(?=,|\s+(?:is|has|was|works|holds|serves|leads|lives|joined|started|spent|currently|began|brings|teaches)\b)/u;
 
 const lineAt = (text: string, at: number, width = 90) => {
   const start = text.lastIndexOf("\n", at) + 1;
@@ -82,8 +94,11 @@ const lineAt = (text: string, at: number, width = 90) => {
   return line.length > width ? `${line.slice(0, width).trim()}…` : line.trim();
 };
 
-/** Letters and digits only, lower case: what a title squashed into a file name keeps. */
-export const squash = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+/**
+ * Letters and digits only, lower case, accents dropped: what a title squashed into a file name keeps, and
+ * the key that tells two names apart. Letters of any script are kept ("Иван Иванов" isn't empty).
+ */
+export const squash = (s: string) => s.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").replace(/[^\p{L}\p{N}]/gu, "");
 
 /**
  * True for a Calibre title that's really a file name: an extension ("Book-layout1.indd"), a word
@@ -96,9 +111,13 @@ export function mangledTitle(title: string): boolean {
     || (title === title.toLowerCase() && title.split(/\s+/).some((w) => /^[a-z0-9+#-]{10,}$/.test(w)));
 }
 
-function isTitlePage(p: ScanPage): boolean {
-  return /title page|^cover$|half title/i.test(p.section_path ?? "");
+/** How surely a page is the title page by its outline section: 2 for "Title Page", 1 for a cover or half title. */
+function titlePageRank(p: ScanPage): number {
+  const section = p.section_path ?? "";
+  return /title page/i.test(section) ? 2 : /^cover$|cover page|half title/i.test(section) ? 1 : 0;
 }
+
+const isTitlePage = (p: ScanPage) => titlePageRank(p) > 0;
 
 /**
  * The front-page line a squashed title was made from: the line whose squashed form and the title's start
@@ -132,6 +151,7 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
     const name = personName(raw);
     if (!name) return;
     const key = squash(name.replace(/,.*$/, ""));
+    if (!key) return;
     const seen = found.get(key);
     if (seen) {
       if (!seen.sources.includes(source)) seen.sources.push(source);
@@ -140,17 +160,26 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
     found.set(key, { name, sources: [source], page: page.page_index + 1, context: lineAt(page.text, at) });
   };
 
+  // "About the author(s)", up to the reviewers or editors that often follow. A section can run onto the
+  // next pages: it carries on while they follow on directly, until a boundary or another section.
+  const ABOUT = /\babout the authors?\b/i;
+  const BOUNDARY = /\babout the (?:technical )?(?:reviewers?|editors?|translators?|illustrators?)\b|\babout the cover\b/i;
+  let about: { page_index: number; section: string | null } | null = null;
   for (const p of pages) {
     const text = p.text;
-    // "About the author(s)", up to the reviewers or editors that often follow.
-    for (const m of text.matchAll(/\babout the authors?\b/gi)) {
-      const rest = text.slice(m.index! + m[0].length);
-      const end = rest.search(/\babout the (?:technical )?(?:reviewers?|editors?|translators?|illustrators?)\b|\babout the cover\b/i);
-      const section = end < 0 ? rest.slice(0, 6000) : rest.slice(0, end);
+    const continues = !!about && p.page_index === about.page_index + 1 && (p.section_path === about.section || ABOUT.test(p.section_path ?? ""));
+    const heading = text.match(ABOUT);
+    const from = heading ? heading.index! + heading[0].length : continues || ABOUT.test(p.section_path ?? "") ? 0 : -1;
+    about = null;
+    if (from >= 0) {
+      const rest = text.slice(from);
+      const stop = rest.search(BOUNDARY);
+      const section = stop < 0 ? rest : rest.slice(0, stop);
       for (const para of section.split(/\n+/)) {
-        const lead = para.match(/^\s*((?:(?:Dr|Prof)\.?\s+)?\p{Lu}[\p{L}'’.-]*(?:\s+(?:\p{Lu}[\p{L}'’.-]*|de|da|di|del|der|van|von|la|le|bin|al)){1,3})(?=,|\s+(?:is|has|was|works|holds|serves|leads|lives|joined|started|spent|currently|began|brings|teaches)\b)/u);
-        if (lead) add(lead[1], "about", p, m.index! + m[0].length + section.indexOf(para));
+        const lead = para.match(LEAD);
+        if (lead) add(lead[1], "about", p, from + section.indexOf(para));
       }
+      if (stop < 0) about = { page_index: p.page_index, section: p.section_path };
     }
     for (const line of text.split("\n")) {
       const at = text.indexOf(line);
@@ -172,7 +201,9 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
   const titles = [calibreTitle, title?.title ?? ""].map(squash).filter((t) => t.length >= 6);
 
   // The title page orders the names it shows, and adds a name printed alone on its own line.
-  const titlePage = pages.find((p) => isTitlePage(p) && p.text.trim()) ?? pages.find((p) => p.text.split("\n").filter((l) => l.trim()).length >= 2);
+  // The page marked "Title Page" in the outline, before a cover, which may carry only the title.
+  const titlePage = pages.find((p) => titlePageRank(p) === 2 && p.text.trim()) ?? pages.find((p) => titlePageRank(p) === 1 && p.text.trim())
+    ?? pages.find((p) => p.text.split("\n").filter((l) => l.trim()).length >= 2);
   const order: string[] = [];
   if (titlePage) {
     for (const line of titlePage.text.split("\n")) {

@@ -272,7 +272,7 @@ function fillDerivedColumns(db: DB, preset: PresetName): void {
   // section wherever the outline puts it (O'Reilly's are at the back).
   const unread = db.prepare(`
     SELECT id, title, page_count FROM books
-    WHERE status = 'indexed' AND (title_page_version IS NULL OR title_page_version != ?)`)
+    WHERE status = 'indexed' AND (title_page_version IS NULL OR title_page_version != ? OR json_extract(title_page, '$.for_title') IS NOT title)`)
     .all(TITLE_PAGE_SCAN_VERSION) as { id: string; title: string; page_count: number }[];
   const titlePages = db.prepare(`
     SELECT page_index, section_path, text FROM pages
@@ -281,7 +281,7 @@ function fillDerivedColumns(db: DB, preset: PresetName): void {
   db.transaction(() => {
     for (const book of unread) {
       const text = titlePages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; section_path: string | null; text: string }[];
-      updateTitlePage.run(JSON.stringify(scanTitlePage(text, book.title)), TITLE_PAGE_SCAN_VERSION, book.id);
+      updateTitlePage.run(JSON.stringify({ ...scanTitlePage(text, book.title), for_title: book.title }), TITLE_PAGE_SCAN_VERSION, book.id);
     }
   })();
 

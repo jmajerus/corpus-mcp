@@ -571,6 +571,12 @@ describe("title pages", () => {
     // Never in a citation: the citekey stays blocked by the missing author.
     expect(JSON.parse(book.citekey_blockers)).toContain("unknown_author");
     expect(citePassage(c, { book_id: "packt:1" }).csl.author).toBeUndefined();
+    // A title fixed in Calibre is scanned again: no longer a file name, so no printed title is offered.
+    const calibre = new Database(path.join(root, "packt", "metadata.db"));
+    calibre.prepare("UPDATE books SET title = 'AWS Cloud Projects' WHERE id = 1").run();
+    calibre.close();
+    scanLibraries(config, db);
+    expect(JSON.parse(getBook(c, "packt:1").title_page!)).toMatchObject({ for_title: "AWS Cloud Projects", title: null, authors: [{ name: "Ivo Pinto" }, { name: "Pedro Santos" }] });
   });
 });
 
