@@ -36,7 +36,7 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `update_quote` | Update a quote | ✓ | Changes a quote's note or tags; the quoted text never changes. |
 | `delete_quote` | Delete a quote | ✓ | Deletes a saved quote. |
 | `cite_quote` | Cite a quote | | A quote's verified text, reflowed as prose, and locator with its citation object. |
-| `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs and years books print that Calibre lacks. |
+| `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs, years, authors, and titles books print that Calibre lacks. |
 
 The tools marked *Writes* declare `readOnlyHint: false`; every other tool is
 annotated read-only. Clients that group or gate tools by permission, as Claude web

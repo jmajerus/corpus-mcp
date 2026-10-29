@@ -99,6 +99,10 @@ export async function adminMetrics(c: Corpus, config: Config, version: string) {
     },
     printed_isbns: { books_without_isbn: status.printed_isbns.books_without_isbn, books_printing_isbn: status.printed_isbns.books_printing_isbn },
     printed_years: { books_without_year: status.printed_years.books_without_year, books_printing_year: status.printed_years.books_printing_year },
+    title_pages: {
+      unknown_author: status.title_pages.unknown_author, unknown_author_found: status.title_pages.unknown_author_found,
+      merged_authors: status.title_pages.merged_authors, mangled_titles: status.title_pages.mangled_titles, mangled_titles_found: status.title_pages.mangled_titles_found,
+    },
     tags: {
       tagged_books: status.tags.tagged_books, distinct: status.tags.distinct, used_once: status.tags.used_once,
       suspect: status.tags.suspect.length + ((status.tags as { suspect_truncated?: number }).suspect_truncated ?? 0),

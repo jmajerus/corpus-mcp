@@ -2,10 +2,11 @@ import { zoteroItemLink, zoteroMatch, zoteroSynced } from "./zotero.js";
 import type { Config } from "./config.js";
 import { allPinned, pinnedByUuid, queryChanges } from "./data.js";
 import { validIsbn } from "./isbn.js";
+import { mangledTitle } from "./titlepage.js";
 import { searchQuotes } from "./quotes.js";
 import { categoryDiff } from "./tagging.js";
 import {
-  type BookRow, type Corpus, ToolError, bookYear, getBook, printedIsbns, printedYears, shelvesByBook, suspectTagReason, tagFilter, tagFilterValue,
+  type AuthorState, type BookRow, type Corpus, ToolError, authorState, bookYear, getBook, printedIsbns, printedYears, titlePageScan, shelvesByBook, suspectTagReason, tagFilter, tagFilterValue,
 } from "./tools.js";
 
 /**
@@ -35,17 +36,18 @@ function bookStates(c: Corpus, b: BookRow, proposal: ProposalRow | undefined, pi
   const citekey: CitekeyState = b.calibre_citekey ? "calibre" : pinned ? "pinned" : (JSON.parse(b.citekey_blockers) as string[]).length ? "blocked" : "ready";
   const isbn: IsbnState = b.isbn ? (validIsbn(b.isbn) ? "valid" : "invalid") : printedIsbns(b).length ? "printed" : "none";
   const year: YearState = b.year ? "calibre" : b.printed_year ? "printed" : "none";
+  const author: AuthorState = authorState(b);
   const problems: Problem[] = [];
   if (b.status === "failed") problems.push("failed");
   if (b.status === "no_file") problems.push("no_file");
   if (b.status === "indexed" && b.page_count && (b.text_chars ?? 0) < 20 * b.page_count) problems.push("no_text");
   if (b.status === "indexed" && outlineCount === 0) problems.push("no_outline");
-  return { vocab, free: tags.filter((t) => !c.vocabulary.has(t)), category, citekey, isbn, year, problems };
+  return { vocab, free: tags.filter((t) => !c.vocabulary.has(t)), category, citekey, isbn, year, author, problems };
 }
 
 export interface AdminBookQuery {
   q?: string; library?: string; format?: string; status?: string; shelf?: string; tag?: string;
-  category?: CategoryState; citekey?: CitekeyState; isbn?: IsbnState; year?: YearState; problem?: Problem; sort?: "title" | "year" | "id"; limit?: number; offset?: number;
+  category?: CategoryState; citekey?: CitekeyState; isbn?: IsbnState; year?: YearState; author?: AuthorState; problem?: Problem; sort?: "title" | "year" | "id"; limit?: number; offset?: number;
 }
 
 export function adminBooks(c: Corpus, query: AdminBookQuery) {
@@ -76,7 +78,7 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
     return { b, pin, s: bookStates(c, b, b.uuid ? proposals.get(b.uuid) : undefined, Boolean(pin), outlines.get(b.id) ?? 0) };
   });
   // Facet counts cover the search above, before the state filters, so each state shows what selecting it finds.
-  const facets: Record<string, Record<string, number>> = { format: {}, status: {}, category: {}, citekey: {}, isbn: {}, year: {}, problem: {} };
+  const facets: Record<string, Record<string, number>> = { format: {}, status: {}, category: {}, citekey: {}, isbn: {}, year: {}, author: {}, problem: {} };
   for (const { b, s } of all) {
     facets.format[b.format ?? "none"] = (facets.format[b.format ?? "none"] ?? 0) + 1;
     facets.status[b.status] = (facets.status[b.status] ?? 0) + 1;
@@ -84,11 +86,12 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
     facets.citekey[s.citekey] = (facets.citekey[s.citekey] ?? 0) + 1;
     facets.isbn[s.isbn] = (facets.isbn[s.isbn] ?? 0) + 1;
     facets.year[s.year] = (facets.year[s.year] ?? 0) + 1;
+    facets.author[s.author] = (facets.author[s.author] ?? 0) + 1;
     for (const p of s.problems) facets.problem[p] = (facets.problem[p] ?? 0) + 1;
   }
   const filtered = all.filter(({ s }) =>
     (!query.category || s.category === query.category) && (!query.citekey || s.citekey === query.citekey)
-    && (!query.isbn || s.isbn === query.isbn) && (!query.year || s.year === query.year) && (!query.problem || s.problems.includes(query.problem)));
+    && (!query.isbn || s.isbn === query.isbn) && (!query.year || s.year === query.year) && (!query.author || s.author === query.author) && (!query.problem || s.problems.includes(query.problem)));
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
   const offset = Math.max(query.offset ?? 0, 0);
   return {
@@ -100,7 +103,7 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
       pages: b.page_count, shelves: shelves.get(b.id) ?? [],
       categories: s.vocab.map((t) => ({ tag: t, label: c.vocabulary.find(t)?.label ?? t })), other_tags: s.free.length,
       category_state: s.category, citekey_state: s.citekey, citekey: b.calibre_citekey ?? pin?.citekey ?? null, proposed_citekey: b.proposed_citekey,
-      isbn_state: s.isbn, year_state: s.year, problems: s.problems,
+      isbn_state: s.isbn, year_state: s.year, author_state: s.author, problems: s.problems,
     })),
   };
 }
@@ -147,6 +150,7 @@ export function adminBook(c: Corpus, config: Config, id: string) {
     },
     isbn: { calibre: b.isbn, valid: b.isbn ? validIsbn(b.isbn) : null, state: s.isbn, printed: printedIsbns(b) },
     publication_year: { calibre: b.year, printed: b.printed_year, ...bookYear(b), candidates: printedYears(b) },
+    title_page: { author_state: s.author, ...titlePageScan(b), title_is_file_name: mangledTitle(b.title) },
     problems: s.problems,
     outline: outline.map((o) => ({ level: o.level, title: o.title, page: o.start_page === null ? null : o.start_page + 1, page_label: o.label })),
     calibre_web_url: admin?.calibreWebUrl && b.library === config.shelvesLibrary ? `${admin.calibreWebUrl}/book/${b.calibre_id}` : null,

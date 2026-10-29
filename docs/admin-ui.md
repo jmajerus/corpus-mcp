@@ -51,6 +51,8 @@ running corpus-mcp version. It refreshes every 30 seconds.
 | Quotes | Total, and orphaned quotes (shown red) |
 | Zotero | Books found in Zotero, possible matches, citekey mismatches, possible duplicates |
 | ISBNs | Books whose only ISBN is printed inside them |
+| Years | Books whose only publication year is printed on their copyright page |
+| Authors | Books with no author in Calibre whose pages print one, books with none found, books with several people in one author record, and titles that are file names |
 | Last refresh / Last pull | When the index was rebuilt and Calibre last copied; amber when stale |
 | Data / Disk free | Database sizes, backups (amber when the newest is over 36 hours old), free space |
 
@@ -126,7 +128,8 @@ Zotero item only *looks* like this book, press **This book** to link it (which p
 its citekey if the book has none) or **Not this book** to dismiss it.
 
 The other cards show shelves and non-vocabulary tags (⚠ marks tags the cleanup
-job would remove), ISBNs (including ones printed in the book), the file, and the
+job would remove), ISBNs (including ones printed in the book), the publication year and the title
+page (the years, authors, and title the book prints, where each was found), the file, and the
 outline. At the bottom are the book's quotes and its recent changes.
 
 ## Reading and saving quotes (`/admin/books/<id>/read`)

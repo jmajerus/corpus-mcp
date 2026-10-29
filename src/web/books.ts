@@ -25,7 +25,7 @@ td.state { min-width: 170px; }
 <button type="button" class="more" id="more">Load more</button>`,
   script: `
 const form = document.getElementById("filters");
-const FACETS = [["category", "Categories"], ["citekey", "Citekey"], ["isbn", "ISBN"], ["year", "Year"], ["problem", "Problems"], ["format", "Format"], ["status", "Status"]];
+const FACETS = [["category", "Categories"], ["citekey", "Citekey"], ["isbn", "ISBN"], ["year", "Year"], ["author", "Author"], ["problem", "Problems"], ["format", "Format"], ["status", "Status"]];
 const TEXT = ["q", "library", "shelf", "tag", "sort"];
 let picked = {}, offset = 0;
 
@@ -47,7 +47,7 @@ function facetLabel(group, key) {
   return key === "none" ? "None" : String(key).replace("_", " ");
 }
 function row(b) {
-  const states = [badge("category", b.category_state), badge("citekey", b.citekey_state), badge("isbn", b.isbn_state), badge("year", b.year_state)].concat(b.problems.map((p) => badge("problem", p)));
+  const states = [badge("category", b.category_state), badge("citekey", b.citekey_state), badge("isbn", b.isbn_state), badge("year", b.year_state), badge("author", b.author_state)].concat(b.problems.map((p) => badge("problem", p)));
   return "<tr><td class=" + '"title"' + ">" + bookLink(b.book_id, b.title) + "<small>" + esc(b.authors.join(", ")) + " · " + esc(b.book_id) + (b.citekey ? " · " + esc(b.citekey) : "") + "</small></td>" +
     '<td class="num">' + esc(b.year ?? "") + "</td><td>" + esc((b.format || "–").toUpperCase()) + (b.pages ? '<br><span class="note">' + num(b.pages) + "</span>" : "") + "</td>" +
     "<td>" + b.shelves.map((s) => '<span class="chip muted">' + esc(s) + "</span>").join("") + "</td>" +
