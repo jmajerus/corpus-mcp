@@ -139,6 +139,7 @@ const STATES = {
   category: { uncategorized: ["Uncategorized", "○", "warn"], categorized: ["Categorized", "✓", "good"], pending: ["Proposal pending", "?", "warn"], not_applied: ["Approved, not in Calibre", "↻", "warn"] },
   citekey: { calibre: ["Set in Calibre", "✓", "good"], pinned: ["Pinned", "✓", "good"], ready: ["Ready to file", "→", ""], blocked: ["Blocked", "!", "bad"] },
   isbn: { valid: ["ISBN", "✓", "good"], invalid: ["Invalid ISBN", "!", "bad"], printed: ["Printed ISBN only", "?", "warn"], none: ["No ISBN", "○", ""] },
+  year: { calibre: ["Year", "✓", "good"], printed: ["Printed year only", "?", "warn"], none: ["No year", "○", ""] },
   problem: { failed: ["Extraction failed", "!", "bad"], no_file: ["No readable file", "!", "bad"], no_text: ["No text layer", "!", "warn"], no_outline: ["No outline", "○", "warn"] },
 };
 const badge = (group, key) => { const [name, sign, tone] = (STATES[group] || {})[key] || [key, "", ""]; return '<span class="badge ' + tone + '"><span class="sign" aria-hidden="true">' + esc(sign) + "</span>" + esc(name) + "</span>"; };

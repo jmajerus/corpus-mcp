@@ -98,6 +98,7 @@ export async function adminMetrics(c: Corpus, config: Config, version: string) {
       blocked: status.citekeys.blocked, proposed_collisions: status.citekeys.proposed_collisions.length,
     },
     printed_isbns: { books_without_isbn: status.printed_isbns.books_without_isbn, books_printing_isbn: status.printed_isbns.books_printing_isbn },
+    printed_years: { books_without_year: status.printed_years.books_without_year, books_printing_year: status.printed_years.books_printing_year },
     tags: {
       tagged_books: status.tags.tagged_books, distinct: status.tags.distinct, used_once: status.tags.used_once,
       suspect: status.tags.suspect.length + ((status.tags as { suspect_truncated?: number }).suspect_truncated ?? 0),

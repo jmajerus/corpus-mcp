@@ -473,6 +473,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         category: oneOf(p.get("category"), ["uncategorized", "categorized", "pending", "not_applied"] as const),
         citekey: oneOf(p.get("citekey"), ["calibre", "pinned", "ready", "blocked"] as const),
         isbn: oneOf(p.get("isbn"), ["valid", "invalid", "printed", "none"] as const),
+        year: oneOf(p.get("year"), ["calibre", "printed", "none"] as const),
         problem: oneOf(p.get("problem"), ["failed", "no_file", "no_text", "no_outline"] as const),
         sort: oneOf(p.get("sort"), ["title", "year", "id"] as const),
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,

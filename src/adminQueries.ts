@@ -18,6 +18,8 @@ interface ProposalRow { calibre_uuid: string; status: string; tags: string; appr
 export type CategoryState = "uncategorized" | "categorized" | "pending" | "not_applied";
 export type CitekeyState = "calibre" | "pinned" | "ready" | "blocked";
 export type IsbnState = "valid" | "invalid" | "printed" | "none";
+/** Calibre has the year; only the book's copyright page gives one; or neither does. */
+export type YearState = "calibre" | "printed" | "none";
 export type Problem = "failed" | "no_file" | "no_text" | "no_outline";
 
 function bookStates(c: Corpus, b: BookRow, proposal: ProposalRow | undefined, pinned: boolean, outlineCount: number) {
@@ -32,17 +34,18 @@ function bookStates(c: Corpus, b: BookRow, proposal: ProposalRow | undefined, pi
   // A Calibre "citekey" identifier overrides a pin; otherwise a book is pinned, blocked, or ready to file.
   const citekey: CitekeyState = b.calibre_citekey ? "calibre" : pinned ? "pinned" : (JSON.parse(b.citekey_blockers) as string[]).length ? "blocked" : "ready";
   const isbn: IsbnState = b.isbn ? (validIsbn(b.isbn) ? "valid" : "invalid") : printedIsbns(b).length ? "printed" : "none";
+  const year: YearState = b.year ? "calibre" : b.printed_year ? "printed" : "none";
   const problems: Problem[] = [];
   if (b.status === "failed") problems.push("failed");
   if (b.status === "no_file") problems.push("no_file");
   if (b.status === "indexed" && b.page_count && (b.text_chars ?? 0) < 20 * b.page_count) problems.push("no_text");
   if (b.status === "indexed" && outlineCount === 0) problems.push("no_outline");
-  return { vocab, free: tags.filter((t) => !c.vocabulary.has(t)), category, citekey, isbn, problems };
+  return { vocab, free: tags.filter((t) => !c.vocabulary.has(t)), category, citekey, isbn, year, problems };
 }
 
 export interface AdminBookQuery {
   q?: string; library?: string; format?: string; status?: string; shelf?: string; tag?: string;
-  category?: CategoryState; citekey?: CitekeyState; isbn?: IsbnState; problem?: Problem; sort?: "title" | "year" | "id"; limit?: number; offset?: number;
+  category?: CategoryState; citekey?: CitekeyState; isbn?: IsbnState; year?: YearState; problem?: Problem; sort?: "title" | "year" | "id"; limit?: number; offset?: number;
 }
 
 export function adminBooks(c: Corpus, query: AdminBookQuery) {
@@ -73,18 +76,19 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
     return { b, pin, s: bookStates(c, b, b.uuid ? proposals.get(b.uuid) : undefined, Boolean(pin), outlines.get(b.id) ?? 0) };
   });
   // Facet counts cover the search above, before the state filters, so each state shows what selecting it finds.
-  const facets: Record<string, Record<string, number>> = { format: {}, status: {}, category: {}, citekey: {}, isbn: {}, problem: {} };
+  const facets: Record<string, Record<string, number>> = { format: {}, status: {}, category: {}, citekey: {}, isbn: {}, year: {}, problem: {} };
   for (const { b, s } of all) {
     facets.format[b.format ?? "none"] = (facets.format[b.format ?? "none"] ?? 0) + 1;
     facets.status[b.status] = (facets.status[b.status] ?? 0) + 1;
     facets.category[s.category] = (facets.category[s.category] ?? 0) + 1;
     facets.citekey[s.citekey] = (facets.citekey[s.citekey] ?? 0) + 1;
     facets.isbn[s.isbn] = (facets.isbn[s.isbn] ?? 0) + 1;
+    facets.year[s.year] = (facets.year[s.year] ?? 0) + 1;
     for (const p of s.problems) facets.problem[p] = (facets.problem[p] ?? 0) + 1;
   }
   const filtered = all.filter(({ s }) =>
     (!query.category || s.category === query.category) && (!query.citekey || s.citekey === query.citekey)
-    && (!query.isbn || s.isbn === query.isbn) && (!query.problem || s.problems.includes(query.problem)));
+    && (!query.isbn || s.isbn === query.isbn) && (!query.year || s.year === query.year) && (!query.problem || s.problems.includes(query.problem)));
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
   const offset = Math.max(query.offset ?? 0, 0);
   return {
@@ -92,11 +96,11 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
     facets,
     libraries: c.db.prepare("SELECT DISTINCT library FROM books ORDER BY library").pluck().all(),
     rows: filtered.slice(offset, offset + limit).map(({ b, pin, s }) => ({
-      book_id: b.id, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,
+      book_id: b.id, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year, printed_year: b.printed_year, format: b.format, status: b.status,
       pages: b.page_count, shelves: shelves.get(b.id) ?? [],
       categories: s.vocab.map((t) => ({ tag: t, label: c.vocabulary.find(t)?.label ?? t })), other_tags: s.free.length,
       category_state: s.category, citekey_state: s.citekey, citekey: b.calibre_citekey ?? pin?.citekey ?? null, proposed_citekey: b.proposed_citekey,
-      isbn_state: s.isbn, problems: s.problems,
+      isbn_state: s.isbn, year_state: s.year, problems: s.problems,
     })),
   };
 }

@@ -541,6 +541,11 @@ describe("printed years", () => {
     // A rescan rewrites the proposal from Calibre's metadata, then from the printed year again.
     scanLibraries(config, db);
     expect(getBook(c, "years:1").proposed_citekey).toMatch(/2016/);
+    // The admin book list filters and counts by where the year comes from.
+    const list = adminBooks(c, { year: "printed" });
+    expect(list.rows.map((r) => r.book_id)).toContain("years:1");
+    expect(list.rows.every((r) => r.year_state === "printed")).toBe(true);
+    expect(list.facets.year.printed).toBeGreaterThanOrEqual(1);
   });
 });
 
