@@ -222,7 +222,6 @@ if [ -d /etc/logrotate.d ]; then install -m 0644 deploy/corpus-mcp.logrotate /et
 touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp/refresh.log
 # Settings added after first install.
 grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
-grep -q '^CORPUS_ACCESS_AUD=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_AUD=' >> /etc/corpus-mcp/env
 ${intakeSettings()}# The two settings needed below, read before the release is switched so a failure leaves the server as it
 # was. The file is systemd's EnvironmentFile, not a shell script: a value with parentheses must not run as shell.
 env_value() { sed -n "s/^$1=//p" /etc/corpus-mcp/env | tail -n 1 | tr -d '"'; }
