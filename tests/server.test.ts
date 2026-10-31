@@ -16,6 +16,7 @@ let server: Awaited<ReturnType<typeof serveHttp>>;
 let base: string;
 let token: string;
 let otherToken: string;
+let mcpToken: string;
 const calibreCalls: { command: string; stdin?: string }[] = [];
 let refreshes = 0;
 
@@ -40,7 +41,9 @@ beforeAll(async () => {
     .setIssuer(team).setAudience(audience).setSubject("user-1").setIssuedAt().setExpirationTime("5m").sign(privateKey);
   token = await sign("corpus-aud");
   otherToken = await sign("some-other-app");
+  mcpToken = await sign("mcp-aud");
   server = await serveHttp(config, {
+    requestAccess: {teamDomain:team, adminAudience:"corpus-aud", mcpAudience:"mcp-aud", lanHosts:["corpus-mcp", "corpus-mcp.localdomain"]},
     accessKeys: createLocalJWKSet({ keys: [jwk] }),
     jobCommands: {
       async refresh(log) { refreshes++; log("refreshed\n"); },
@@ -266,4 +269,14 @@ it("saves quotes from the admin only with Access, and serves the reader's pages"
   expect((await (await fetch(`${base}/api/quotes?label=test`)).json()).total).toBe(1);
   expect((await (await asAdmin(`/api/quotes/${saved.quote.id}`, { note: "edited" })).json()).note).toBe("edited");
   expect(await (await asAdmin(`/api/quotes/${saved.quote.id}/delete`, {})).json()).toEqual({ deleted: saved.quote.id });
+});
+
+
+it("checks the MCP audience separately from the administration audience at the HTTP boundary", async () => {
+  const request = (path: string, assertion?: string) => fetch(base+path,{headers:{Host:"public.example","cf-ray":"test", ...(assertion ? {"cf-access-jwt-assertion":assertion} : {})}});
+  expect((await request("/api/whoami")).status).toBe(401);
+  expect((await request("/api/whoami", mcpToken)).status).toBe(403);
+  expect((await request("/api/whoami", token)).status).toBe(200);
+  expect((await request("/mcp", token)).status).toBe(403);
+  expect((await request("/mcp", mcpToken)).status).toBe(405);
 });

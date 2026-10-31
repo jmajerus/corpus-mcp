@@ -141,3 +141,28 @@ runs each of these deploys, pushes the Zotero settings, and, with the
 Those Workers aren't part of the LAN deploy: deploy the public Worker after
 changing the public pages. [PLAN.md](../PLAN.md) records the design decisions,
 the facts about the corpus, and the known issues.
+
+## Shared authoring Access applications
+
+The private HTTP listener validates Cloudflare Access JWT assertions before
+serving MCP, administration pages or private API reads/writes. Configure the
+following in the server's `/etc/corpus-mcp/env`:
+
+```dotenv
+ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+ACCESS_MCP_AUD=<authoring-mcp-access audience>
+ACCESS_ADMIN_AUD=<authoring-admin-access audience>
+```
+
+`/mcp` requires the MCP audience; other private routes, including `/api`,
+require the admin audience. Protect the UI's API and asset routes in the admin
+Access application too. Cloudflare Managed OAuth supplies client authorization
+and forwards `Cf-Access-Jwt-Assertion`; the origin verifies the signature,
+issuer, expiry and subject. An admin token cannot use MCP and an MCP token
+cannot read the private admin API. Missing/invalid tokens fail closed.
+
+Direct requests from a private peer naming the service's LAN hostname/IP,
+without Cloudflare proxy headers, retain their existing LAN behavior. Separate
+public snapshot listeners and Workers are unaffected.
+
+Corpus retains its separately authenticated `/api/intake/vocabulary` service-token route. Its audience and client identity remain independent of these user-facing applications. `ACCESS_ADMIN_AUD` and `ACCESS_TEAM_DOMAIN` take precedence over the legacy `CORPUS_ACCESS_AUD` and `CORPUS_ACCESS_TEAM_DOMAIN` settings.
