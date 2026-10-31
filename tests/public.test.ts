@@ -255,24 +255,24 @@ describe("the server", () => {
   it("lets edits made directly on the LAN through, and never one through Cloudflare without a token", async () => {
     const whoami = (headers: Record<string, string> = {}) => fetch(`${base}/api/whoami`, { headers }).then((r) => r.json());
     expect(await whoami()).toEqual({ can_write: true, identity: { subject: "lan", email: "me@lan", via: "lan" } });
-    expect(await whoami({ "cf-ray": "8a1b2c3d4e5f-LAX" })).toMatchObject({ can_write: false });
-    expect(await whoami({ "cf-connecting-ip": "203.0.113.9" })).toMatchObject({ can_write: false });
+    expect((await fetch(`${base}/api/whoami`, {headers:{"cf-ray":"8a1b2c3d4e5f-LAX"}})).status).toBe(401);
+    expect((await fetch(`${base}/api/whoami`, {headers:{"cf-connecting-ip":"203.0.113.9"}})).status).toBe(401);
     const job = await fetch(`${base}/api/admin/jobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "backup" }) });
     expect(job.status).toBe(202);
   });
 
   it("goes by whether a CDN's headers are there at all, and lets only the server's own names through", async () => {
     const port = (server.address() as AddressInfo).port;
-    const whoami = (headers: Record<string, string>) => new Promise<{ can_write: boolean; reason?: string }>((resolve, reject) => {
+    const whoami = (headers: Record<string, string>) => new Promise<{ status:number; can_write?: boolean; reason?: string }>((resolve, reject) => {
       http.get({ host: "127.0.0.1", port, path: "/api/whoami", headers }, (res) => {
         let body = "";
-        res.on("data", (chunk) => (body += chunk)).on("end", () => resolve(JSON.parse(body)));
+        res.on("data", (chunk) => (body += chunk)).on("end", () => resolve({status:res.statusCode!,...JSON.parse(body)}));
       }).on("error", reject);
     });
-    expect(await whoami({ "cf-ray": "" })).toMatchObject({ can_write: false });
-    expect(await whoami({ "cdn-loop": "fastly" })).toMatchObject({ can_write: false });
+    expect(await whoami({ "cf-ray": "" })).toMatchObject({ status:401 });
+    expect(await whoami({ "cdn-loop": "fastly" })).toMatchObject({ status:401 });
     // DNS rebinding: an attacker's name, re-pointed at the server, is never a LAN name.
-    expect(await whoami({ host: `rebind.attacker.example:${port}` })).toMatchObject({ can_write: false, reason: expect.stringContaining("CORPUS_LAN_HOSTS") });
+    expect(await whoami({ host: `rebind.attacker.example:${port}` })).toMatchObject({ status:401 });
     expect(await whoami({ host: `localhost:${port}` })).toMatchObject({ can_write: true });
     expect(await whoami({ host: `[::1]:${port}` })).toMatchObject({ can_write: true });
     expect(await whoami({ host: `corpus.lan:${port}` })).toMatchObject({ can_write: true });

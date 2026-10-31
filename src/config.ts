@@ -117,7 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
       access: {
-        teamDomain: env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.CORPUS_ACCESS_AUD || undefined,
+        teamDomain: env.ACCESS_TEAM_DOMAIN || env.CORPUS_ACCESS_TEAM_DOMAIN || undefined, audience: env.ACCESS_ADMIN_AUD || env.CORPUS_ACCESS_AUD || undefined,
         vocabularyPush: { clientId: env.CORPUS_VOCABULARY_PUSH_CLIENT_ID || undefined, audience: env.CORPUS_VOCABULARY_PUSH_AUD || undefined },
         // Edits made directly on the LAN, recorded under this name: on unless CORPUS_LAN_EDITS is off.
         lanActor: /^(?:off|false|no|0)$/i.test(env.CORPUS_LAN_EDITS ?? "") ? undefined : env.CORPUS_LAN_ACTOR || "LAN",
