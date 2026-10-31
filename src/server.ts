@@ -1,3 +1,4 @@
+import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessConfig } from './http-access.js';
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -360,6 +361,7 @@ async function readJson(req: http.IncomingMessage, limit = 64 * 1024): Promise<u
 }
 
 export interface WebOptions {
+  requestAccess?: RequestAccessConfig;
   /** Access signing keys (tests); production fetches the team's keys. */
   accessKeys?: JWTVerifyGetKey;
   /** Job processes (tests); production runs systemctl and ssh. */
@@ -701,9 +703,22 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
       else res.writeHead(404).end();
     })
     : null;
+  const requestAccess = options.requestAccess ?? {
+    ...requestAccessConfig(process.env, ["corpus-mcp", "corpus-mcp.localdomain", ...(fullConfig.admin!.access.lanHosts ?? [])]),
+    teamDomain: process.env.ACCESS_TEAM_DOMAIN || fullConfig.admin!.access.teamDomain,
+    adminAudience: process.env.ACCESS_ADMIN_AUD || fullConfig.admin!.access.audience,
+  };
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
     if (!url || serveFavicon(req, res, url)) return;
+    // The intake has its own service-token identity/audience check in serveWeb.
+    const intake = req.method === "POST" && url.pathname === "/api/intake/vocabulary";
+    try { if (!intake) await authorizeRequest(req, url.pathname, requestAccess, options.accessKeys); }
+    catch (error) {
+      const status = error instanceof AccessError ? error.status : 500;
+      res.writeHead(status, {"content-type":"application/json", "cache-control":"no-store"}).end(JSON.stringify({error:error instanceof AccessError ? error.message : "Authentication failed."}));
+      return;
+    }
     // This port is for working on the corpus: / is the dashboard. The public catalogue is on its own port
     // (CORPUS_PUBLIC_PORT) and, published, on its own hostname, never here.
     if (url.pathname === "/") {
