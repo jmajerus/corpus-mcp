@@ -4,7 +4,9 @@ import { type JWTVerifyGetKey, createRemoteJWKSet, jwtVerify } from "jose";
 /**
  * Cloudflare Access identity for admin pages and writes, on the pattern of concept-clusters'
  * modules/accessAuth.js. Requests through the Cloudflare tunnel carry a Cf-Access-Jwt-Assertion token,
- * verified here against the team's signing keys, issuer, and the corpus application's audience tag.
+ * verified here against the team's signing keys and issuer. The audience (which Access application issued
+ * the token) is not checked: every application in the team admits only the owner, and a pinned audience
+ * tag broke sign-in whenever an application was recreated.
  *
  * The LAN is trusted, as /mcp already trusts it: a request made directly from a private address, with no
  * Cloudflare headers, may write too, recorded under the configured LAN actor (`lanActor`; off when
@@ -19,13 +21,11 @@ import { type JWTVerifyGetKey, createRemoteJWKSet, jwtVerify } from "jose";
 export interface AccessConfig {
   /** e.g. https://linkbud.cloudflareaccess.com */
   teamDomain?: string;
-  /** The corpus Access application's audience (AUD) tag. */
-  audience?: string;
   /**
-   * The vocabulary intake's service token: its client id and its own Access application's audience. The
-   * token is accepted on the intake alone, never for the other writes.
+   * The vocabulary intake's service token, by client id. The token is accepted on the intake alone, never
+   * for the other writes.
    */
-  vocabularyPush?: { clientId?: string; audience?: string };
+  vocabularyPush?: { clientId?: string };
   /** The name LAN edits are recorded under; unset, direct LAN requests are read-only. */
   lanActor?: string;
   /** The names the server is reached by on the LAN, besides IP addresses ("corpus-mcp.localdomain"). */
@@ -43,14 +43,14 @@ function remoteKeys(teamDomain: string): JWTVerifyGetKey {
   return keySets.get(teamDomain)!;
 }
 
-async function verifiedPayload(token: string, teamDomain: string, audience: string, keys?: JWTVerifyGetKey) {
+async function verifiedPayload(token: string, teamDomain: string, keys?: JWTVerifyGetKey) {
   const team = new URL(teamDomain);
   if (team.protocol !== "https:") throw new Error("The Access team domain must use https");
-  return (await jwtVerify(token, keys ?? remoteKeys(team.origin), { issuer: team.origin, audience })).payload;
+  return (await jwtVerify(token, keys ?? remoteKeys(team.origin), { issuer: team.origin })).payload;
 }
 
-export async function verifyAccessToken(token: string, config: { teamDomain: string; audience: string }, keys?: JWTVerifyGetKey): Promise<AccessIdentity> {
-  const payload = await verifiedPayload(token, config.teamDomain, config.audience, keys);
+export async function verifyAccessToken(token: string, config: { teamDomain: string }, keys?: JWTVerifyGetKey): Promise<AccessIdentity> {
+  const payload = await verifiedPayload(token, config.teamDomain, keys);
   if (typeof payload.sub !== "string" || !payload.sub) throw new Error("Access token has no subject");
   return { subject: payload.sub, ...(typeof payload.email === "string" ? { email: payload.email } : {}) };
 }
@@ -100,11 +100,11 @@ export async function accessIdentity(req: http.IncomingMessage, config: AccessCo
     }
     return { status: 401, error: "Sign in through Cloudflare Access to make changes." };
   }
-  if (!config.teamDomain || !config.audience) {
-    return { status: 503, error: "Cloudflare Access is not configured (CORPUS_ACCESS_TEAM_DOMAIN, CORPUS_ACCESS_AUD), so changes are disabled." };
+  if (!config.teamDomain) {
+    return { status: 503, error: "Cloudflare Access is not configured (ACCESS_TEAM_DOMAIN), so changes are disabled." };
   }
   try {
-    return { identity: { ...(await verifyAccessToken(token, { teamDomain: config.teamDomain, audience: config.audience }, keys)), via: "access" } };
+    return { identity: { ...(await verifyAccessToken(token, { teamDomain: config.teamDomain }, keys)), via: "access" } };
   } catch (error) {
     return { status: 403, error: `Cloudflare Access token rejected: ${(error as Error).message}` };
   }
@@ -118,11 +118,11 @@ export async function vocabularyPushIdentity(req: http.IncomingMessage, config: 
   const token = req.headers["cf-access-jwt-assertion"];
   if (typeof token !== "string" || !token) return { status: 401, error: "Send the vocabulary through Cloudflare Access with the intake's service token." };
   const push = config.vocabularyPush;
-  if (!config.teamDomain || !push?.clientId || !push.audience) {
-    return { status: 503, error: "The vocabulary intake is not configured (CORPUS_VOCABULARY_PUSH_CLIENT_ID, CORPUS_VOCABULARY_PUSH_AUD)." };
+  if (!config.teamDomain || !push?.clientId) {
+    return { status: 503, error: "The vocabulary intake is not configured (CORPUS_VOCABULARY_PUSH_CLIENT_ID)." };
   }
   try {
-    const payload = await verifiedPayload(token, config.teamDomain, push.audience, keys);
+    const payload = await verifiedPayload(token, config.teamDomain, keys);
     if (payload.common_name !== push.clientId) {
       // Claim names only, never values, so a token shaped differently than expected can be diagnosed.
       console.error(`vocabulary intake: token is not the intake's service token (claims: ${Object.keys(payload).sort().join(", ")})`);

@@ -109,7 +109,7 @@ export function aboutSource(config: Config, version: string, repository = proces
     const [o, pub] = await Promise.all([originOf(state.deployed), url ? publishedAt(url) : null]);
     return {
       version, node: process.version, started_at: started, books: state.books, last_scan: state.last_scan, repository, deployed: state.deployed, origin: o,
-      editing: { lan: !!access?.lanActor, lan_actor: access?.lanActor ?? null, access: !!(access?.teamDomain && access.audience) },
+      editing: { lan: !!access?.lanActor, lan_actor: access?.lanActor ?? null, access: !!access?.teamDomain },
       public: { level: p?.level ?? "none", url, preview_port: p?.port ?? null, preview_url: previewUrl, replica: state.replica, published: pub },
     };
   };

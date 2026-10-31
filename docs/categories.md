@@ -55,8 +55,7 @@ The vocabulary file (`corpus-vocabulary/1`) is a flat list of terms:
 
 The owner pushes the file to `POST /api/intake/vocabulary` with a Cloudflare
 Access service token (`CORPUS_VOCABULARY_PUSH_CLIENT_ID`), through an Access
-application that covers only that path (`CORPUS_VOCABULARY_PUSH_AUD`); the
-token unlocks nothing else. Answers:
+application that covers only that path; the token unlocks nothing else. Answers:
 
 - 200 with `version` and `terms`, plus `unchanged: true` when that version is
   already installed;

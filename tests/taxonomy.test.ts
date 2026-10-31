@@ -97,6 +97,7 @@ describe("the intake and the taxonomy over HTTP and MCP", () => {
   let pushToken: string;
   let wrongServiceToken: string;
   let pushTokenForCorpus: string;
+  let forgedPushToken: string;
 
   beforeAll(async () => {
     root = tempDir();
@@ -108,7 +109,7 @@ describe("the intake and the taxonomy over HTTP and MCP", () => {
       dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
       shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
       citekeyPreset: "author-year-word", vocabularyPath,
-      admin: { access: { teamDomain: team, audience: "corpus-aud", vocabularyPush: { clientId: "push-client.access", audience: "intake-aud" } },
+      admin: { access: { teamDomain: team, vocabularyPush: { clientId: "push-client.access" } },
         neighbors: [], source: "x", sshKey: "x", refreshUnit: "x", refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json") } };
     const db = openDatabase(config.dbPath);
     scanLibraries(config, db);
@@ -123,6 +124,9 @@ describe("the intake and the taxonomy over HTTP and MCP", () => {
     pushToken = await jwt({ common_name: "push-client.access" }, "intake-aud", "");
     wrongServiceToken = await jwt({ common_name: "someone-else.access" }, "intake-aud", "");
     pushTokenForCorpus = await jwt({ common_name: "push-client.access" }, "corpus-aud", "");
+    forgedPushToken = await new SignJWT({ common_name: "push-client.access" }).setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setIssuer(team).setAudience("intake-aud").setSubject("").setIssuedAt().setExpirationTime("5m")
+      .sign((await generateKeyPair("RS256")).privateKey);
     server = await serveHttp(config, { accessKeys: createLocalJWKSet({ keys: [jwk] }), jobCommands: { async refresh() {}, async calibre() {} }, zoteroTimer: false });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -143,7 +147,7 @@ describe("the intake and the taxonomy over HTTP and MCP", () => {
     expect((await push(next)).status).toBe(401);
     expect((await push(next, userToken)).status).toBe(403);
     expect((await push(next, wrongServiceToken)).status).toBe(403);
-    expect((await push(next, pushTokenForCorpus)).status).toBe(403);
+    expect((await push(next, forgedPushToken)).status).toBe(403);
     // ...and the service token unlocks no other write.
     expect((await write("/api/taxonomy/terms", { parent: "social-sciences", label: "X" }, pushTokenForCorpus)).status).toBe(403);
   });
