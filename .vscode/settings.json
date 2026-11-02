@@ -68,7 +68,7 @@
     {
       "id": "corpus-replica",
       "command": "node tools/replica-status.mjs",
-      "intervalSeconds": 300,
+      "intervalSeconds": 60,
       "alignment": "left",
       "priority": -101,
       "refreshOnTasks": [

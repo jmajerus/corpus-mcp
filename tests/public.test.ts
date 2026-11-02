@@ -510,4 +510,24 @@ describe("the replica in D1", () => {
     expect((await get({ headers: { "if-none-match": `W/"${hash.slice(0, 20)}"` } })).status).toBe(304);
     expect(read).toEqual(["SELECT value FROM meta WHERE key = 'hash'"]);
   });
+
+  it("renders past a stale ETag when a new snapshot is published", async () => {
+    const r = setup("stale");
+    await r.run();
+    const env = { DB: workerBinding(r.replica) };
+    const get = (init?: RequestInit) => handle(new Request("https://library.example.org/", init), env);
+    const stale = (await get()).headers.get("etag")!;
+    c.data.prepare("UPDATE citekeys SET citekey = 'author2001revised' WHERE calibre_uuid = 'uuid-1'").run();
+    try {
+      buildSnapshot(c, options([quotesSite]), r.file);
+      await r.run();
+    } finally {
+      c.data.prepare("UPDATE citekeys SET citekey = 'author2001networks' WHERE calibre_uuid = 'uuid-1'").run();
+    }
+    const fresh = await get({ headers: { "if-none-match": stale } });
+    expect(fresh.status).toBe(200);
+    expect(fresh.headers.get("etag")).not.toBe(stale);
+    expect(await fresh.text()).toContain("Test Library");
+    expect((await get({ headers: { "if-none-match": fresh.headers.get("etag")! } })).status).toBe(304);
+  });
 });

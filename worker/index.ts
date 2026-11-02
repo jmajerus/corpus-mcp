@@ -7,14 +7,19 @@ import { type D1Database, d1Store } from "./d1.js";
  * read from the public snapshot's replica in D1, which only corpus-mcp's drain writes (through the proxy,
  * worker/proxy.ts). As quote-mcp's worker/index.ts.
  *
- * Each answer carries the snapshot's hash as its ETag, so a revalidation that finds nothing published
- * since is a 304 after reading only the snapshot's meta: a page reads hundreds of D1 rows, and D1's
- * free tier allows five million a day across the account.
+ * Each answer carries the deployed code's build id plus the snapshot's hash as its ETag — either changing
+ * makes clients revalidate — so a revalidation that finds nothing new is a 304 after reading only the
+ * snapshot's meta: a page reads hundreds of D1 rows, and D1's free tier allows five million a day across
+ * the account.
  */
 
 export interface Env {
   DB: D1Database;
 }
+
+/** The deployed code's build id, from worker:deploy's --define; empty under tests and wrangler dev. */
+declare const RENDER_BUILD: string;
+const renderBuild = typeof RENDER_BUILD === "undefined" ? "" : RENDER_BUILD;
 
 function text(status: number, body: string, headers: Record<string, string> = {}): Response {
   return new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8", ...headers } });
@@ -43,7 +48,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") return text(405, "Method not allowed", { allow: "GET, HEAD" });
   const hash = await publishedHash(env.DB);
   if (!hash) return text(503, "This catalogue hasn't been published yet.", { "retry-after": "60" });
-  const etag = `W/"${hash.slice(0, 20)}"`;
+  const etag = `W/"${renderBuild ? `${renderBuild}-` : ""}${hash.slice(0, 20)}"`;
   if (request.headers.get("if-none-match")?.split(/\s*,\s*/).includes(etag)) {
     return new Response(null, { status: 304, headers: { "cache-control": "public, max-age=300", etag, "x-content-type-options": "nosniff" } });
   }

@@ -76,11 +76,12 @@ corpus.db + data.db ──▶ public.db ──▶ queue (replica.db) ──▶ D
    queued for the next try. Nothing else writes D1.
 4. **The public Worker** serves the same pages as the LAN server, read from D1.
    It answers "hasn't been published yet" until the first complete upload. Each
-   answer carries the snapshot's hash as its ETag, so a revalidation that finds
-   nothing published since is a 304 after reading only the snapshot's `meta` —
-   a page reads hundreds of D1 rows, and D1's free tier allows five million a
-   day across the account, which the status bar's check spends carefully (a
-   conditional `HEAD` every five minutes).
+   answer carries the deployed code's build id plus the snapshot's hash as its
+   ETag, so a revalidation that finds neither changed is a 304 after reading
+   only the snapshot's `meta` — a page reads hundreds of D1 rows, and D1's free
+   tier allows five million a day across the account. The status bar's check
+   spends that carefully: it reports its last answer every minute, but sends a
+   conditional `HEAD` at most every five minutes.
 
 The catalogue has a listener of its own, on `CORPUS_PUBLIC_PORT` (by default
 `8001`; `off` turns it off), that serves the same pages from `public.db`, and
