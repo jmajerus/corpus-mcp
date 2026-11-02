@@ -2,7 +2,9 @@
 // Before the first deploy: `npx wrangler d1 create corpus-mcp-public`, put its id below and in
 // worker/wrangler.proxy.jsonc, apply the schema with
 // `npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`. Served at corpus.majerus.us.
-// Locally: `npm run worker:load` then `npm run worker:dev`. Deploy with `npx wrangler deploy -c worker/wrangler.jsonc`.
+// Locally: `npm run worker:load` then `npm run worker:dev`. Deploy with `npm run worker:deploy`, which
+// tests first and passes the RENDER_BUILD define the ETag needs; a bare `wrangler deploy` skips it, and a
+// code-only deploy would then leave clients on stale pages until the catalogue next changed.
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "corpus-mcp-public",

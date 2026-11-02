@@ -73,11 +73,17 @@ if (site) {
       published = seen.published;
       checked = new Date(seen.at);
     } else {
-      const res = await fetch(site, { method: "HEAD", headers: seen.etag ? { "if-none-match": seen.etag } : {}, signal: AbortSignal.timeout(10000), redirect: "manual" });
-      published = res.status === 200 || res.status === 304 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
-      checked = new Date();
-      fs.mkdirSync(path.dirname(SEEN), { recursive: true });
-      fs.writeFileSync(SEEN, JSON.stringify({ etag: res.headers.get("etag") ?? seen.etag ?? "", published, at: checked.getTime() }));
+      try {
+        const res = await fetch(site, { method: "HEAD", headers: seen.etag ? { "if-none-match": seen.etag } : {}, signal: AbortSignal.timeout(10000), redirect: "manual" });
+        published = res.status === 200 || res.status === 304 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
+        checked = new Date();
+        try {
+          fs.mkdirSync(path.dirname(SEEN), { recursive: true });
+          fs.writeFileSync(SEEN, JSON.stringify({ etag: res.headers.get("etag") ?? seen.etag ?? "", published, at: checked.getTime() }));
+        } catch {}
+      } catch (error) {
+        published = `unreachable (${error.message})`;
+      }
     }
   } catch (error) {
     published = `unreachable (${error.message})`;
