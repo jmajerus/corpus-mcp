@@ -496,4 +496,18 @@ describe("the replica in D1", () => {
     expect((await get("/books", { method: "POST" })).status).toBe(405);
     for (const p of ["/admin", "/mcp", "/api/books", "/query"]) expect((await get(p)).status, p).toBe(404);
   });
+
+  it("answers a conditional request after reading only the snapshot's meta", async () => {
+    const r = setup("conditional");
+    await r.run();
+    const base = workerBinding(r.replica);
+    const read: string[] = [];
+    const env = { DB: { prepare: (sql: string) => { read.push(sql); return base.prepare(sql); } } as D1Database };
+    const get = (init?: RequestInit) => handle(new Request("https://library.example.org/", init), env);
+    const hash = r.replica.prepare("SELECT value FROM meta WHERE key = 'hash'").pluck().get() as string;
+    expect((await get()).headers.get("etag")).toBe(`W/"${hash.slice(0, 20)}"`);
+    read.length = 0;
+    expect((await get({ headers: { "if-none-match": `W/"${hash.slice(0, 20)}"` } })).status).toBe(304);
+    expect(read).toEqual(["SELECT value FROM meta WHERE key = 'hash'"]);
+  });
 });
