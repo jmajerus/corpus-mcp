@@ -706,12 +706,11 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const requestAccess = options.requestAccess ?? {
     ...requestAccessConfig(process.env, ["corpus-mcp", "corpus-mcp.localdomain", ...(fullConfig.admin!.access.lanHosts ?? [])]),
     teamDomain: process.env.ACCESS_TEAM_DOMAIN || fullConfig.admin!.access.teamDomain,
-    adminAudience: process.env.ACCESS_ADMIN_AUD || fullConfig.admin!.access.audience,
   };
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
     if (!url || serveFavicon(req, res, url)) return;
-    // The intake has its own service-token identity/audience check in serveWeb.
+    // The intake has its own service-token identity check in serveWeb.
     const intake = req.method === "POST" && url.pathname === "/api/intake/vocabulary";
     try { if (!intake) await authorizeRequest(req, url.pathname, requestAccess, options.accessKeys); }
     catch (error) {

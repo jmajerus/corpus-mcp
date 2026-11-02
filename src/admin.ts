@@ -77,7 +77,7 @@ export async function adminMetrics(c: Corpus, config: Config, version: string) {
   const proposals = listProposals(c, { status: "approved", limit: 200 });
   return {
     generated_at: new Date().toISOString(),
-    service: { version, uptime_seconds: Math.round(process.uptime()), access_configured: Boolean(admin.access.teamDomain && admin.access.audience) },
+    service: { version, uptime_seconds: Math.round(process.uptime()), access_configured: Boolean(admin.access.teamDomain) },
     index: {
       last_scan: status.last_scan,
       counts: status.counts,

@@ -3,7 +3,7 @@ import { aboutSource } from "../src/about.js";
 import type { Config } from "../src/config.js";
 
 const config = {
-  admin: { access: { teamDomain: "https://team.example", audience: "aud", lanActor: "me@lan", lanHosts: ["corpus-mcp", "corpus-mcp.localdomain"] } },
+  admin: { access: { teamDomain: "https://team.example", lanActor: "me@lan", lanHosts: ["corpus-mcp", "corpus-mcp.localdomain"] } },
   public: { level: "catalogue", file: "/x/public.db", port: 8001, title: "Library", url: "https://library.example.org", links: [], intervalMinutes: 10 },
 } as unknown as Config;
 

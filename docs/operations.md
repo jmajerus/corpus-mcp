@@ -51,7 +51,7 @@ The LAN is trusted. A request made directly on the LAN can read and write, as
 `/mcp` always could, and the admin pages record its changes under
 `CORPUS_LAN_ACTOR`. From outside, the server is reached through a Cloudflare
 tunnel, where every write needs a verified Access identity
-(`CORPUS_ACCESS_TEAM_DOMAIN`, `CORPUS_ACCESS_AUD`) and is recorded under its
+(`ACCESS_TEAM_DOMAIN`) and is recorded under its
 email. Tunnelled requests also arrive from a LAN address, so "on the LAN" means
 a private address with none of the headers a CDN or Cloudflare adds. A LAN
 request must also name the server by one of its LAN names (`CORPUS_LAN_HOSTS`)
@@ -150,19 +150,18 @@ following in the server's `/etc/corpus-mcp/env`:
 
 ```dotenv
 ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
-ACCESS_MCP_AUD=<authoring-mcp-access audience>
-ACCESS_ADMIN_AUD=<authoring-admin-access audience>
 ```
 
-`/mcp` requires the MCP audience; other private routes, including `/api`,
-require the admin audience. Protect the UI's API and asset routes in the admin
-Access application too. Cloudflare Managed OAuth supplies client authorization
-and forwards `Cf-Access-Jwt-Assertion`; the origin verifies the signature,
-issuer, expiry and subject. An admin token cannot use MCP and an MCP token
-cannot read the private admin API. Missing/invalid tokens fail closed.
+Cloudflare Managed OAuth supplies client authorization and forwards
+`Cf-Access-Jwt-Assertion`; the origin verifies the signature, issuer, expiry
+and subject. It does not check the audience (which Access application issued
+the token): every application in the team admits only the owner, so
+recreating or merging applications needs no change here. Protect the UI's API
+and asset routes in an Access application too. Missing/invalid tokens fail
+closed.
 
 Direct requests from a private peer naming the service's LAN hostname/IP,
 without Cloudflare proxy headers, retain their existing LAN behavior. Separate
 public snapshot listeners and Workers are unaffected.
 
-Corpus retains its separately authenticated `/api/intake/vocabulary` service-token route. Its audience and client identity remain independent of these user-facing applications. `ACCESS_ADMIN_AUD` and `ACCESS_TEAM_DOMAIN` take precedence over the legacy `CORPUS_ACCESS_AUD` and `CORPUS_ACCESS_TEAM_DOMAIN` settings.
+Corpus retains its separately authenticated `/api/intake/vocabulary` service-token route, which accepts only the service token named by `CORPUS_VOCABULARY_PUSH_CLIENT_ID`. `ACCESS_TEAM_DOMAIN` takes precedence over the legacy `CORPUS_ACCESS_TEAM_DOMAIN` setting.

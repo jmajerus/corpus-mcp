@@ -185,7 +185,7 @@ sleep 2
  * who edits made directly on the LAN are recorded as.
  */
 function intakeSettings() {
-  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_VOCABULARY_PUSH_AUD", "CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN", "CORPUS_LAN_ACTOR", "CORPUS_LAN_EDITS"].filter((name) => process.env[name])
+  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN", "CORPUS_LAN_ACTOR", "CORPUS_LAN_EDITS"].filter((name) => process.env[name])
     .map((name) => `sed -i '/^${name}=/d' /etc/corpus-mcp/env && echo ${shellQuote(`${name}=${process.env[name]}`)} >> /etc/corpus-mcp/env\n`).join("");
 }
 
@@ -222,7 +222,6 @@ if [ -d /etc/logrotate.d ]; then install -m 0644 deploy/corpus-mcp.logrotate /et
 touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp/refresh.log
 # Settings added after first install.
 grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
-grep -q '^CORPUS_ACCESS_AUD=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_AUD=' >> /etc/corpus-mcp/env
 ${intakeSettings()}# The two settings needed below, read before the release is switched so a failure leaves the server as it
 # was. The file is systemd's EnvironmentFile, not a shell script: a value with parentheses must not run as shell.
 env_value() { sed -n "s/^$1=//p" /etc/corpus-mcp/env | tail -n 1 | tr -d '"'; }

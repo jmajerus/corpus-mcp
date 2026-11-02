@@ -59,7 +59,7 @@ function editing(a) {
   const e = a.editing;
   return card("Editing", null, [
     ["On the LAN", e.lan ? "Yes, recorded as " + esc(e.lan_actor) : '<span class="warn">Read-only</span> (CORPUS_LAN_EDITS=off)'],
-    ["Through Cloudflare", e.access ? "Yes, after an Access sign-in" : '<span class="warn">Not configured</span> (CORPUS_ACCESS_TEAM_DOMAIN, CORPUS_ACCESS_AUD)'],
+    ["Through Cloudflare", e.access ? "Yes, after an Access sign-in" : '<span class="warn">Not configured</span> (ACCESS_TEAM_DOMAIN)'],
   ]);
 }
 

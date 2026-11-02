@@ -28,22 +28,23 @@ beforeAll(async () => {
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
     citekeyPreset: "author-year-word", vocabularyPath: path.join(import.meta.dirname, "vocabulary.json"),
-    admin: { access: { teamDomain: team, audience: "corpus-aud" }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
+    admin: { access: { teamDomain: team }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
       refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json") } };
   const db = openDatabase(config.dbPath);
   scanLibraries(config, db);
   db.close();
 
-  // A stand-in Cloudflare Access: its own signing key, and tokens for the corpus audience and another one.
+  // A stand-in Cloudflare Access: its own signing key, tokens from two of its applications, and a token
+  // signed by a key that is not the team's.
   const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
   const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256" };
-  const sign = (audience: string) => new SignJWT({ email: "me@example.com" }).setProtectedHeader({ alg: "RS256", kid: "k1" })
-    .setIssuer(team).setAudience(audience).setSubject("user-1").setIssuedAt().setExpirationTime("5m").sign(privateKey);
+  const sign = (audience: string, key = privateKey) => new SignJWT({ email: "me@example.com" }).setProtectedHeader({ alg: "RS256", kid: "k1" })
+    .setIssuer(team).setAudience(audience).setSubject("user-1").setIssuedAt().setExpirationTime("5m").sign(key);
   token = await sign("corpus-aud");
-  otherToken = await sign("some-other-app");
+  otherToken = await sign("corpus-aud", (await generateKeyPair("RS256")).privateKey);
   mcpToken = await sign("mcp-aud");
   server = await serveHttp(config, {
-    requestAccess: {teamDomain:team, adminAudience:"corpus-aud", mcpAudience:"mcp-aud", lanHosts:["corpus-mcp", "corpus-mcp.localdomain"]},
+    requestAccess: {teamDomain:team, lanHosts:["corpus-mcp", "corpus-mcp.localdomain"]},
     accessKeys: createLocalJWKSet({ keys: [jwk] }),
     jobCommands: {
       async refresh(log) { refreshes++; log("refreshed\n"); },
@@ -272,11 +273,12 @@ it("saves quotes from the admin only with Access, and serves the reader's pages"
 });
 
 
-it("checks the MCP audience separately from the administration audience at the HTTP boundary", async () => {
+it("accepts a team-signed token from any Access application at the HTTP boundary", async () => {
   const request = (path: string, assertion?: string) => fetch(base+path,{headers:{Host:"public.example","cf-ray":"test", ...(assertion ? {"cf-access-jwt-assertion":assertion} : {})}});
   expect((await request("/api/whoami")).status).toBe(401);
-  expect((await request("/api/whoami", mcpToken)).status).toBe(403);
+  expect((await request("/api/whoami", otherToken)).status).toBe(403);
+  expect((await request("/api/whoami", mcpToken)).status).toBe(200);
   expect((await request("/api/whoami", token)).status).toBe(200);
-  expect((await request("/mcp", token)).status).toBe(403);
-  expect((await request("/mcp", mcpToken)).status).toBe(405);
+  expect((await request("/mcp", otherToken)).status).toBe(403);
+  expect((await request("/mcp", token)).status).toBe(405);
 });
