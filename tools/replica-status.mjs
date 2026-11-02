@@ -7,11 +7,18 @@
 // deploy buttons). No drain reported (CORPUS_PUBLIC is none, or an older build), the drain off (no D1 settings on the server) or failing, or the public
 // site not published: a warning or an error, with the reason in the tooltip. Status items show state, not
 // actions: noun glyphs, no verbs.
+//
+// Every uncached page the Worker renders reads hundreds of D1 rows, and D1's free tier allows five million
+// a day across the account, so the site check is a conditional HEAD throttled to one every five minutes
+// (the last answer and its age are kept beside the ETag in node_modules/.cache): the other rows here stay
+// live, and between site checks the last answer is reported as is, with its own Checked time.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const SEEN = path.join(root, "node_modules", ".cache", "replica-status-etag");
+const SITE_INTERVAL_MS = 5 * 60_000;
 const BASE = process.env.CORPUS_STATUS_URL ?? "http://corpus-mcp.localdomain:8000";
 
 /** The public hostname: the custom domain in the public Worker's wrangler config. */
@@ -55,10 +62,29 @@ try {
 }
 
 let published = "unknown";
+let checked = new Date();
 if (site) {
   try {
-    const res = await fetch(site, { signal: AbortSignal.timeout(10000), redirect: "manual" });
-    published = res.status === 200 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
+    let seen = {};
+    try {
+      seen = JSON.parse(fs.readFileSync(SEEN, "utf8"));
+    } catch {}
+    if (seen.published && seen.at && Date.now() - seen.at < SITE_INTERVAL_MS) {
+      published = seen.published;
+      checked = new Date(seen.at);
+    } else {
+      try {
+        const res = await fetch(site, { method: "HEAD", headers: seen.etag ? { "if-none-match": seen.etag } : {}, signal: AbortSignal.timeout(10000), redirect: "manual" });
+        published = res.status === 200 || res.status === 304 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
+        checked = new Date();
+        try {
+          fs.mkdirSync(path.dirname(SEEN), { recursive: true });
+          fs.writeFileSync(SEEN, JSON.stringify({ etag: res.headers.get("etag") ?? seen.etag ?? "", published, at: checked.getTime() }));
+        } catch {}
+      } catch (error) {
+        published = `unreachable (${error.message})`;
+      }
+    }
   } catch (error) {
     published = `unreachable (${error.message})`;
   }
@@ -71,7 +97,7 @@ const rows = [
   ["Waiting to ship", String(replica?.pending ?? 0)],
   ["Last shipped", ago(replica?.shipped_at)],
   ...(replica?.error ? [["Error", replica.error]] : []),
-  ["Checked", new Date().toLocaleTimeString()],
+  ["Checked", checked.toLocaleTimeString()],
 ];
 
 if (!replica) {
