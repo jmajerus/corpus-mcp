@@ -7,7 +7,11 @@ In corpus-mcp: §1, the books feed, is built (`GET /api/holdings/books`, in
 [src/holdings.ts](../../src/holdings.ts)), and so is §2, verify and anchors
 ([src/anchors.ts](../../src/anchors.ts)), to the shapes agreed with
 quote-mcp. §3.1 is done too: the cited-article skill saves and cites with
-quote-mcp's `add_quote` and `cite_quote`. The rest is still proposed.
+quote-mcp's `add_quote` and `cite_quote`. §3.2: quote-mcp has taken over
+quotes 1, 3, 4, and 5 (now 831, 830, 829, 828, anchored here); 3, 4, and 5
+are deleted here, and 1 and the test quote 2 wait for a person to delete
+them. §3.3: the quote tools answer with pointers to quote-mcp's. §3.4, the
+admin pages, is still proposed.
 
 A review of corpus-mcp, quote-mcp, and terminology-mcp found that an agent
 using the Authoring MCP portal still has to know which repository holds a

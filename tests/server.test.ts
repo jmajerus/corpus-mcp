@@ -102,6 +102,9 @@ it("serves the tools over Streamable HTTP", async () => {
   expect(missing.isError).toBe(true);
   const image = await client.callTool({ name: "render_page", arguments: { book_id: "main:1", page: 1 } });
   expect((image.content as { type: string }[])[0].type).toBe("image");
+  const retired = await client.callTool({ name: "save_quote", arguments: { book_id: "main:1", text: "novel information" } });
+  expect(retired.isError).toBe(true);
+  expect((retired.content as { text: string }[])[0].text).toContain("quote-mcp's add_quote");
   await client.close();
 });
 

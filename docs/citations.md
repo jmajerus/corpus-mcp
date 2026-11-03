@@ -2,7 +2,7 @@
 
 ## Citations
 
-`cite_passage` (and `cite_quote`, for a saved quote) returns:
+`cite_passage` returns:
 
 ```json
 {
@@ -115,7 +115,7 @@ last library version, with long timeouts, retries, and Zotero's `Backoff` and
   A key that differs from a pinned or Calibre key is reported, never changed.
 - **Duplicates:** other items with a matched book's title (ignoring a
   subtitle), first author, and year are listed as possible second copies.
-- **Citing:** `cite_passage` and `cite_quote` add `zotero` (the matched item)
+- **Citing:** `cite_passage` adds `zotero` (the matched item)
   and warn before filing a book that is already there.
 - **Setup:** make a key with read-only library access at
   zotero.org/settings/keys, put `CORPUS_ZOTERO_LIBRARY=users/<id>` and
@@ -123,8 +123,11 @@ last library version, with long timeouts, retries, and Zotero's `Backoff` and
 
 ## Quotes
 
-Quotes are passages saved from the books, by agents (`save_quote`) or by
-people (select text in a book's [reader](admin-ui.md#reading-and-saving-quotes-adminbooksidread)).
+Agents now save quotes in quote-mcp (its `add_quote`), which checks them
+against the books here (`POST /api/verify`) and stores each one's anchor here
+(`POST /api/anchors`; see [Operations](operations.md#access)). This server's
+quote tools are retired. What follows describes the quotes still kept here,
+saved by people (select text in a book's [reader](admin-ui.md#reading-and-saving-quotes-adminbooksidread)).
 Either way, the passage is checked against the book's text. Quote marks, dashes,
 spacing, case, and a page break inside the passage may differ; what's stored is
 the book's exact wording. A passage that isn't in the book isn't saved, and the
