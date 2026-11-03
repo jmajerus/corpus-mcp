@@ -56,7 +56,7 @@ async function loadMetrics() {
       [go("/admin/categories", "Suspect tags"), num(m.tags.suspect), m.tags.suspect ? "warn" : ""]]),
     card("Citekeys", go("/admin/citekeys", num(m.citekeys.pinned) + " pinned"), [[go("/admin/books?citekey=ready", "Ready to file"), num(m.citekeys.ready_to_file)],
       [go("/admin/books?citekey=blocked", "Blocked"), num(Object.values(m.citekeys.blocked).reduce((a, b) => a + b, 0)), "warn"], ["Proposed collisions", num(m.citekeys.proposed_collisions)]]),
-    card("Quotes", go("/admin/quotes", num(m.quotes.total)), [[go("/admin/quotes?status=orphaned", "Orphaned"), num(m.quotes.orphaned), m.quotes.orphaned ? "bad" : ""]]),
+    card("Quotes", go(quoteAdmin("/admin/quotes"), "In quote-mcp"), []),
     ...(m.zotero ? [card("Zotero", go("/admin/zotero", num(m.zotero.in_zotero) + " in Zotero"), [["Synced", ago(m.zotero.synced_at), m.zotero.error ? "bad" : ""],
       [go("/admin/zotero", "Possible matches"), num(m.zotero.candidates), m.zotero.candidates ? "warn" : ""], [go("/admin/zotero", "Citekey mismatches"), num(m.zotero.mismatches), m.zotero.mismatches ? "warn" : ""],
       [go("/admin/zotero", "Possible duplicates in Zotero"), num(m.zotero.duplicates), m.zotero.duplicates ? "warn" : ""]],

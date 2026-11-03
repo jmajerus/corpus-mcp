@@ -124,13 +124,10 @@ function render() {
   renderDesired();
 }
 
+// Quotes are kept in quote-mcp: link to this book's there, by its Zotero item if it has one, else its title.
 function quotesSection() {
-  const read = book.status === "indexed" ? '<a href="/admin/books/' + encodeURIComponent(book.book_id) + '/read">Open the reader</a> and select a passage to save a quote.' : "";
-  if (!book.quotes.length) return '<p class="note">No quotes from this book. ' + read + "</p>";
-  return '<div class="scroll"><table><thead><tr><th>Quote</th><th>Where</th><th>Tags</th></tr></thead><tbody>' +
-    book.quotes.map((q) => '<tr><td><a href="/admin/quotes/' + q.id + '">#' + q.id + "</a> " + esc(q.text.length > 220 ? q.text.slice(0, 220) + "…" : q.text) + "</td><td>" + esc(q.locator) +
-      (q.status === "orphaned" ? " " + '<span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</td><td>" +
-      q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</td></tr>").join("") + '</tbody></table></div><p class="note">' + read + "</p>";
+  const work = book.zotero && book.zotero.match ? book.zotero.match.key : book.title;
+  return '<p><a href="' + esc(quoteAdmin("/admin/quotes?work=" + encodeURIComponent(work))) + '">Quotes from this book</a> <span class="note">in quote-mcp</span></p>';
 }
 
 function renderDesired() {

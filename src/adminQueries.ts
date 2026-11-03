@@ -3,7 +3,6 @@ import type { Config } from "./config.js";
 import { allPinned, pinnedByUuid, queryChanges } from "./data.js";
 import { validIsbn } from "./isbn.js";
 import { mangledTitle } from "./titlepage.js";
-import { searchQuotes } from "./quotes.js";
 import { categoryDiff } from "./tagging.js";
 import {
   type AuthorState, type BookRow, type Corpus, ToolError, authorState, bookYear, getBook, printedIsbns, printedYears, titlePageScan, shelvesByBook, suspectTagReason, tagFilter, tagFilterValue,
@@ -155,7 +154,6 @@ export function adminBook(c: Corpus, config: Config, id: string) {
     outline: outline.map((o) => ({ level: o.level, title: o.title, page: o.start_page === null ? null : o.start_page + 1, page_label: o.label })),
     calibre_web_url: admin?.calibreWebUrl && b.library === config.shelvesLibrary ? `${admin.calibreWebUrl}/book/${b.calibre_id}` : null,
     changes: queryChanges(c.data, { book: b.id, limit: 50 }).rows,
-    quotes: searchQuotes(c, { book: b.id, limit: 200 }).quotes,
   };
 }
 

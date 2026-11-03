@@ -48,7 +48,7 @@ running corpus-mcp version. It refreshes every 30 seconds.
 | Books indexed | Counts by format, plus books that failed, have no text layer, or have no outline |
 | Categories | Uncategorized books, proposals pending, approved sets not yet in Calibre, suspect tags |
 | Citekeys | Pinned keys, books ready to file, books blocked from a key |
-| Quotes | Total, and orphaned quotes (shown red) |
+| Quotes | A link to quote-mcp's admin pages, where quotes are kept |
 | Zotero | Books found in Zotero, possible matches, citekey mismatches, possible duplicates |
 | ISBNs | Books whose only ISBN is printed inside them |
 | Years | Books whose only publication year is printed on their copyright page |
@@ -130,7 +130,8 @@ its citekey if the book has none) or **Not this book** to dismiss it.
 The other cards show shelves and non-vocabulary tags (⚠ marks tags the cleanup
 job would remove), ISBNs (including ones printed in the book), the publication year and the title
 page (the years, authors, and title the book prints, where each was found), the file, and the
-outline. At the bottom are the book's quotes and its recent changes.
+outline. At the bottom are a link to the book's quotes in quote-mcp (found by
+its Zotero item, or by its title when it has none) and its recent changes.
 
 ## Reading and saving quotes (`/admin/books/<id>/read`)
 
@@ -153,18 +154,12 @@ dashes, spacing, or case are fine, and the book's exact wording is stored. If
 the passage isn't found, nothing is saved, and the bar tells you which pages were
 closest.
 
-## Quotes (`/admin/quotes`)
+## Quotes
 
-Every saved quote. Search words in the quote, note, or tags, and filter by the
-book's category, a tag, author, or status (verified or orphaned). The tag cloud
-filters by a tag when pressed. Greyed chips are the source book's categories;
-quotes have no categories of their own.
-
-A quote's page (`/admin/quotes/<id>`) shows it in its surrounding text, a
-readable citation, and the citekey. Edit the **note** and **tags** and press
-**Save**, or **Delete quote**. The text itself can't be edited; save a new quote
-instead. **Orphaned** means the book's file changed and the passage wasn't found in
-the new file. The quote is kept for you to check.
+Quotes are kept in quote-mcp. The **Quotes** item in the menu opens its admin
+pages: `quote-mcp.localdomain:8000/admin/quotes` on the LAN, or
+`quote-mcp.majerus.us` when this page came through the tunnel. Search, edit,
+and delete quotes there.
 
 ## Proposals (`/admin/proposals`)
 
