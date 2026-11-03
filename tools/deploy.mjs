@@ -214,11 +214,6 @@ chmod +x deploy/*.sh
 [ -f /etc/corpus-mcp/env ] || install -m 0640 deploy/corpus-mcp.env.example /etc/corpus-mcp/env
 # It holds secrets (the Zotero key, the D1 proxy's token, which can run any SQL on the replica): root and the service only.
 chown root:corpus /etc/corpus-mcp/env && chmod 0640 /etc/corpus-mcp/env
-install -m 0644 deploy/corpus-mcp.service deploy/corpus-refresh.service deploy/corpus-refresh.timer \
-  deploy/corpus-backup.service deploy/corpus-backup.timer /etc/systemd/system/
-# The dashboard's "Refresh now" (polkit) and the refresh log's rotation.
-if [ -d /etc/polkit-1/rules.d ]; then install -m 0644 deploy/50-corpus-refresh.rules /etc/polkit-1/rules.d/; fi
-if [ -d /etc/logrotate.d ]; then install -m 0644 deploy/corpus-mcp.logrotate /etc/logrotate.d/corpus-mcp; fi
 touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp/refresh.log
 # Settings added after first install.
 grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
@@ -229,8 +224,31 @@ CORPUS_DB=$(env_value CORPUS_DB); CORPUS_PORT=$(env_value CORPUS_PORT)
 : "\${CORPUS_DB:=/var/lib/corpus-mcp/corpus.db}" "\${CORPUS_PORT:=8000}"
 previous=$(readlink /opt/corpus-mcp/current || true)
 echo "previous=$previous"
+# A release's units, the dashboard's "Refresh now" (polkit), and the refresh log's rotation: installed from
+# the release that is current, after the switch, so a rollback puts the previous release's back.
+install_units() {
+  install -m 0644 "$1"/deploy/corpus-mcp.service "$1"/deploy/corpus-refresh.service "$1"/deploy/corpus-refresh.timer \
+    "$1"/deploy/corpus-backup.service "$1"/deploy/corpus-backup.timer /etc/systemd/system/
+  if [ -d /etc/polkit-1/rules.d ]; then install -m 0644 "$1"/deploy/50-corpus-refresh.rules /etc/polkit-1/rules.d/; fi
+  if [ -d /etc/logrotate.d ]; then install -m 0644 "$1"/deploy/corpus-mcp.logrotate /etc/logrotate.d/corpus-mcp; fi
+  systemctl daemon-reload
+}
+# From the switch on, any failure (set -e included) puts the previous release back, units and all.
+rollback() {
+  status=$?
+  [ "$status" -eq 0 ] && return
+  journalctl -u corpus-mcp.service -n 20 --no-pager || true
+  if [ -n "$previous" ]; then
+    ln -sfn "$previous" /opt/corpus-mcp/current
+    install_units "$previous" || true
+    systemctl restart corpus-mcp.service || true
+    echo "rolled_back=$previous"
+  fi
+  exit "$status"
+}
+trap rollback EXIT
 ln -sfn "$release" /opt/corpus-mcp/current.new && mv -T /opt/corpus-mcp/current.new /opt/corpus-mcp/current
-systemctl daemon-reload
+install_units "$release"
 systemctl enable --quiet corpus-mcp.service corpus-refresh.timer corpus-backup.timer
 systemctl start corpus-refresh.timer corpus-backup.timer
 
@@ -238,6 +256,7 @@ if [ ! -f "$CORPUS_DB" ]; then
   systemctl start --no-block corpus-refresh.service
   systemctl restart corpus-mcp.service
   echo "installed=${id} (first sync and index started; the server starts once the index exists)"
+  trap - EXIT
   exit 0
 fi
 # Migrate the index schema and refresh metadata with the new code before the server restarts.
@@ -248,15 +267,9 @@ for i in $(seq 1 20); do
   if curl -sf "http://127.0.0.1:$CORPUS_PORT/health"; then echo; echo "installed=${id}"; break; fi
   sleep 1
 done
-if ! curl -sf -o /dev/null "http://127.0.0.1:$CORPUS_PORT/health"; then
-  journalctl -u corpus-mcp.service -n 20 --no-pager || true
-  if [ -n "$previous" ]; then
-    ln -sfn "$previous" /opt/corpus-mcp/current
-    systemctl restart corpus-mcp.service
-    echo "rolled_back=$previous"
-  fi
-  exit 1
-fi
+# A failed health check fails the script, and the trap rolls back.
+curl -sf -o /dev/null "http://127.0.0.1:$CORPUS_PORT/health"
+trap - EXIT
 ls -1dt /opt/corpus-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 `;
   await runAsRoot(CORPUS_HOST, script);
