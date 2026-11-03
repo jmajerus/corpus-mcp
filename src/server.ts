@@ -37,7 +37,7 @@ import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
-import { holdingsBooksResponse } from "./holdings.js";
+import { etagMatches, holdingsBooksResponse } from "./holdings.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
@@ -510,7 +510,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     else if (req.method === "GET" && path === "/api/holdings/books") {
       const { body, etag } = holdingsBooksResponse(c, { excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library });
       const headers = { "content-type": "application/json", "cache-control": "no-cache", etag };
-      if (String(req.headers["if-none-match"] ?? "").split(/\s*,\s*/).includes(etag)) res.writeHead(304, headers).end();
+      if (etagMatches(req.headers["if-none-match"], etag)) res.writeHead(304, headers).end();
       else res.writeHead(200, headers).end(body);
     }
     else if (req.method === "GET" && path === "/api/changes") {

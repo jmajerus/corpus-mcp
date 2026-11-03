@@ -3,6 +3,9 @@
 **Status: proposed 2026-11-02. Nothing here is built. The plan of record is
 holdings-mcp's [PLAN.md](https://github.com/jmajerus/holdings-mcp/blob/main/PLAN.md).**
 
+In corpus-mcp: §1, the books feed, is built (`GET /api/holdings/books`, in
+[src/holdings.ts](../../src/holdings.ts)). The rest is still proposed.
+
 A review of corpus-mcp, quote-mcp, and terminology-mcp found that an agent
 using the Authoring MCP portal still has to know which repository holds a
 book or a quote. Two changes fix that:
