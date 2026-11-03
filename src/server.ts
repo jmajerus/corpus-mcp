@@ -38,6 +38,7 @@ import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
 import { holdingsBooksResponse } from "./holdings.js";
+import { anchorChanges, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
@@ -406,6 +407,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     const termPath = path.match(/^\/api\/taxonomy\/terms(?:\/([^/]+))?$/);
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages)?$/);
     const quotePath = path.match(/^\/api\/quotes\/(\d+)(\/delete)?$/);
+    const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "POST" && path === "/api/intake/vocabulary") {
       // The vocabulary's owner pushes it here with its own service token, which unlocks nothing else.
       const result = await vocabularyPushIdentity(req, admin.access, web.options.accessKeys);
@@ -507,6 +509,22 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       sendJson(res, 200, linkZotero(c, { book_id: body.book_id, key: body.key, action: oneOf(body.action ?? "", ["confirm", "reject", "clear"] as const) ?? "confirm" }, by));
     }
     else if (req.method === "GET" && path === "/api/shelves") sendJson(res, 200, listShelves(c));
+    else if (req.method === "POST" && (path === "/api/verify" || path === "/api/anchors")) {
+      // LAN only (see the HTTP server); JSON, which a cross-site form can't send.
+      if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return sendJson(res, 400, { error: "Send JSON." });
+      const body = await readJson(req);
+      const answer = path === "/api/verify"
+        ? verifyPassage(c, { excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library }, body)
+        : storeAnchor(c, body);
+      sendJson(res, answer.status, answer.body);
+    } else if (req.method === "GET" && path === "/api/anchors/changes") {
+      const answer = anchorChanges(c, url.searchParams.get("since"));
+      sendJson(res, answer.status, answer.body);
+    } else if (req.method === "DELETE" && anchorPath) {
+      const answer = deleteAnchor(c, Number(anchorPath[1]));
+      if (answer.status === 204) res.writeHead(204, { "cache-control": "no-store" }).end();
+      else sendJson(res, answer.status, answer.body);
+    }
     else if (req.method === "GET" && path === "/api/holdings/books") {
       const { body, etag } = holdingsBooksResponse(c, { excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library });
       const headers = { "content-type": "application/json", "cache-control": "no-cache", etag };
@@ -738,7 +756,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
       return;
     }
     // Feeds for the other LAN services: never through the tunnel, whoever signs in.
-    if (url.pathname.startsWith("/api/holdings/") && via !== "lan") {
+    if (/^\/api\/(?:holdings\/|verify$|anchors(?:\/|$))/.test(url.pathname) && via !== "lan") {
       res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ error: "This feed is served on the LAN only." }));
       return;
     }

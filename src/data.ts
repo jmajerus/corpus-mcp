@@ -100,6 +100,39 @@ CREATE TABLE IF NOT EXISTS quotes (
 );
 CREATE INDEX IF NOT EXISTS quotes_book ON quotes(calibre_uuid, start_page);
 
+-- quote-mcp's quotes, anchored in a book's text (src/anchors.ts; docs/dev-briefs/holdings-and-quotes.md
+-- §2): quote-mcp owns the quote, this keeps where it is, and the wording only to find it again.
+CREATE TABLE IF NOT EXISTS anchors (
+  quote_id INTEGER PRIMARY KEY,      -- quote-mcp's id
+  calibre_uuid TEXT NOT NULL,
+  book_id TEXT NOT NULL,             -- when last anchored; the Calibre UUID is the stable link
+  sha256 TEXT,                       -- the book file the anchor refers to
+  start_page INTEGER NOT NULL,       -- as in quotes
+  start_offset INTEGER NOT NULL,
+  end_page INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  page_label TEXT,
+  end_page_label TEXT,
+  section_path TEXT,
+  prefix TEXT NOT NULL,
+  suffix TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('verified', 'orphaned')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS anchors_book ON anchors(calibre_uuid, start_page);
+
+-- What quote-mcp follows: every change to an anchor, numbered. meta's anchor_log names this numbering.
+CREATE TABLE IF NOT EXISTS anchor_changes (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  quote_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('stored', 'replaced', 'reanchored', 'orphaned', 'found', 'deleted')),
+  status TEXT,                       -- null once deleted
+  anchor TEXT,                       -- JSON, as GET /api/anchors/changes sends it; null once deleted
+  at TEXT NOT NULL
+);
+
 -- A read-only mirror of the Zotero library's top-level items (src/zotero.ts): the fields that tie a
 -- Calibre book to its Zotero item, refreshed by version so nothing waits on zotero.org.
 CREATE TABLE IF NOT EXISTS zotero_items (

@@ -31,31 +31,38 @@ export interface HoldingsBook {
 
 export interface HoldingsFeed { version: number; books: HoldingsBook[] }
 
-export function holdingsBooks(c: Corpus, o: { excludeTags: string[]; zoteroLibrary?: string }): HoldingsFeed {
-  const excluded = new Set(o.excludeTags.map((t) => t.toLowerCase()));
-  const books = (c.db.prepare("SELECT * FROM books ORDER BY id").all() as BookRow[])
+/** Books not left out by an excluded tag, by id. */
+export function holdingsBookRows(c: Corpus, excludeTags: string[], where = "1", ...args: unknown[]): BookRow[] {
+  const excluded = new Set(excludeTags.map((t) => t.toLowerCase()));
+  return (c.db.prepare(`SELECT * FROM books WHERE ${where} ORDER BY id`).all(...args) as BookRow[])
     .filter((b) => !(JSON.parse(b.tags) as string[]).some((t) => excluded.has(t.toLowerCase())));
+}
+
+/** One book as the feed sends it, and as /api/verify names the book it checked. */
+export function holdingsBook(c: Corpus, b: BookRow, zoteroLibrary?: string): HoldingsBook {
+  let { citekey, citekey_source }: { citekey: string | null; citekey_source: HoldingsBook["citekey_source"] } =
+    effectiveCitekey(b, b.uuid ? pinnedByUuid(c.data, b.uuid) : undefined);
+  let zotero: HoldingsBook["zotero"] = null;
+  if (zoteroLibrary) {
+    const { match } = zoteroMatch(c, b);
+    if (match) {
+      zotero = { library: zoteroLibrary, key: match.key, matched_by: match.matched_by };
+      if (!citekey && match.citekey) ({ citekey, citekey_source } = { citekey: match.citekey, citekey_source: "zotero" });
+    }
+  }
   return {
-    version: HOLDINGS_VERSION,
-    books: books.map((b) => {
-      let { citekey, citekey_source }: { citekey: string | null; citekey_source: HoldingsBook["citekey_source"] } =
-        effectiveCitekey(b, b.uuid ? pinnedByUuid(c.data, b.uuid) : undefined);
-      let zotero: HoldingsBook["zotero"] = null;
-      if (o.zoteroLibrary) {
-        const { match } = zoteroMatch(c, b);
-        if (match) {
-          zotero = { library: o.zoteroLibrary, key: match.key, matched_by: match.matched_by };
-          if (!citekey && match.citekey) ({ citekey, citekey_source } = { citekey: match.citekey, citekey_source: "zotero" });
-        }
-      }
-      return {
-        calibre_uuid: b.uuid, book_id: b.id, library: b.library, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year,
-        formats: b.format ? [b.format] : [],
-        has_text: b.status === "indexed" && !!b.page_count && (b.text_chars ?? 0) >= 20 * b.page_count,
-        citekey, citekey_source, zotero,
-      };
-    }),
+    calibre_uuid: b.uuid, book_id: b.id, library: b.library, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year,
+    formats: b.format ? [b.format] : [],
+    has_text: hasText(b),
+    citekey, citekey_source, zotero,
   };
+}
+
+/** Indexed with a text layer: at least 20 characters a page, the admin pages' rule. */
+export const hasText = (b: BookRow) => b.status === "indexed" && !!b.page_count && (b.text_chars ?? 0) >= 20 * b.page_count;
+
+export function holdingsBooks(c: Corpus, o: { excludeTags: string[]; zoteroLibrary?: string }): HoldingsFeed {
+  return { version: HOLDINGS_VERSION, books: holdingsBookRows(c, o.excludeTags).map((b) => holdingsBook(c, b, o.zoteroLibrary)) };
 }
 
 /** The feed's body and its strong ETag, a hash of the body. */
