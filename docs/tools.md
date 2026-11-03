@@ -32,6 +32,13 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `propose_tags` | Propose tags for a book | ✓ | Proposes 1–3 vocabulary tags for a book, for a person to review. |
 | `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs, years, authors, and titles books print that Calibre lacks. |
 
+| `save_quote` | Save a quote (retired) | | Points to quote-mcp's `add_quote`, which checks the passage against the book. |
+| `search_quotes` | Search quotes (retired) | | Points to quote-mcp's `search_quotes`. |
+| `get_quote` | Get a quote (retired) | | Points to quote-mcp's `get_quote`. |
+| `update_quote` | Update a quote (retired) | | quote-mcp has no change tool yet; ask the person to change it there. |
+| `delete_quote` | Delete a quote (retired) | | quote-mcp has no delete tool yet; ask the person to delete it there. |
+| `cite_quote` | Cite a quote (retired) | | Points to quote-mcp's `cite_quote`; use `cite_passage` here for filing data. |
+
 The quote tools (`save_quote`, `search_quotes`, `get_quote`, `update_quote`,
 `delete_quote`, `cite_quote`) are retired: quotes are kept in quote-mcp now.
 For one release they stay listed, marked "(retired)", and answer with the
