@@ -373,8 +373,9 @@ export function reanchorQuotes(db: DB, data: DataStore): { reanchored: number; o
       recordChanges(data, [{ kind: "quote_reanchored", source: "calibre", book_id: book.id, calibre_uuid: q.calibre_uuid, title: q.title, detail: `#${q.id}` }]);
       reanchored++;
     } else {
-      // Remember which file it failed against, so the next scan does not search the same file again.
-      data.prepare("UPDATE quotes SET status = 'orphaned', sha256 = ?, updated_at = ? WHERE id = ?").run(book?.sha256 ?? q.sha256, now, q.id);
+      // Remember which file it failed against, so the next scan does not search the same file again; with no
+      // book, none, so the book coming back (even with the same file) is searched.
+      data.prepare("UPDATE quotes SET status = 'orphaned', sha256 = ?, updated_at = ? WHERE id = ?").run(book?.sha256 ?? null, now, q.id);
       if (q.status !== "orphaned") {
         recordChanges(data, [{ kind: "quote_orphaned", source: "calibre", book_id: q.book_id, calibre_uuid: q.calibre_uuid, title: q.title, detail: `#${q.id}` }]);
         orphaned++;

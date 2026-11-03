@@ -23,6 +23,7 @@ beforeAll(() => {
     { id: 2, title: "Scans", authors: ["Bob Writer"], files: { pdf: makePdf({ pages: [[""], [""]] }) } },
     { id: 3, title: "Twins", authors: ["Cy Twin"], citekey: "twin2000book", files: { pdf: makePdf({ pages: [["The first copy of the twin text."]] }) } },
     { id: 4, title: "Twins", authors: ["Cy Twin"], citekey: "twin2000book", files: { pdf: makePdf({ pages: [["The second copy of the twin text."]] }) } },
+    { id: 6, title: "Handbook", authors: ["Eve Isbn"], isbn: "9780306406157", files: { pdf: makePdf({ pages: [["Every handbook has an index at the back."]] }) } },
     { id: 5, title: "Diary", authors: ["Dee Self"], tags: ["private"], files: { pdf: makePdf({ pages: [["Not for anyone at all."]] }) } },
   ]);
   const vocabularyPath = path.join(import.meta.dirname, "vocabulary.json");
@@ -38,6 +39,8 @@ beforeAll(() => {
   data.prepare("INSERT INTO citekeys (calibre_uuid, citekey, book_id, title, pinned_at) VALUES ('uuid-1', 'author2001networks', 'main:1', 'Networks', '2026-10-28')").run();
   data.prepare("INSERT INTO zotero_items (key, version, item_type, title, calibre_uuid, citekey, synced_at) VALUES ('ITEM1', 1, 'book', 'Networks', 'uuid-1', 'author2001networks', '2026-10-28')").run();
   data.prepare("INSERT INTO zotero_items (key, version, item_type, title, calibre_uuid, citekey, synced_at) VALUES ('ITEM2', 1, 'book', 'Scans', 'uuid-2', 'writer2000scans', '2026-10-28')").run();
+  data.prepare("INSERT INTO zotero_items (key, version, item_type, title, synced_at) VALUES ('ITEM6', 1, 'book', 'Handbook', '2026-10-28')").run();
+  data.prepare("INSERT INTO zotero_isbns (isbn, key) VALUES ('9780306406157', 'ITEM6')").run();
   c = { db, data, booksRoot: root, vocabulary: Vocabulary.load(vocabularyPath) };
 });
 
@@ -59,6 +62,17 @@ describe("verify", () => {
       expect(body, book).toMatchObject({ match: true, exact: true, text: PASSAGE, book: { book_id: "main:1", citekey: "author2001networks", zotero: { key: "ITEM1" } } });
       expect(body.anchor).toMatchObject({ calibre_uuid: "uuid-1", start_page: 0, start_offset: 0, text: PASSAGE, prefix: "" });
       expect(body.locator).toBe(body.page_label ? `p. ${body.page_label}` : null);
+    }
+  });
+
+  it("finds the book a Zotero item is matched to by ISBN, or through items merged into it", () => {
+    expect(matched({ book: "zotero:users/1/ITEM6", text: "Every handbook has an index" }).book).toMatchObject({ book_id: "main:6", zotero: { matched_by: "isbn" } });
+    c.data.prepare("INSERT INTO zotero_items (key, version, item_type, title, replaces, synced_at) VALUES ('ITEM9', 1, 'book', 'Networks', '[\"ITEM1\"]', '2026-10-28')").run();
+    try {
+      expect(matched({ book: "zotero:users/1/ITEM9", text: PASSAGE }).book).toMatchObject({ book_id: "main:1", zotero: { key: "ITEM9" } });
+      expect(verify({ book: "zotero:users/1/ITEM1", text: PASSAGE }).status).toBe(404);
+    } finally {
+      c.data.prepare("DELETE FROM zotero_items WHERE key = 'ITEM9'").run();
     }
   });
 
@@ -99,12 +113,12 @@ describe("verify", () => {
 describe("anchors", () => {
   it("stores a verified anchor once per quote, replaces it, and numbers each change", () => {
     const first = matched({ book: "main:1", text: PASSAGE }).anchor;
-    expect(storeAnchor(c, { quote_id: 7, anchor: first })).toEqual({ status: 201, body: { quote_id: 7, status: "verified", anchor: first } });
+    expect(storeAnchor(c, o, { quote_id: 7, anchor: first })).toEqual({ status: 201, body: { quote_id: 7, status: "verified", anchor: first } });
     // A retry after a timeout changes nothing.
-    expect(storeAnchor(c, { quote_id: 7, anchor: first })).toEqual({ status: 200, body: { quote_id: 7, status: "verified", anchor: first } });
+    expect(storeAnchor(c, o, { quote_id: 7, anchor: first })).toEqual({ status: 200, body: { quote_id: 7, status: "verified", anchor: first } });
     // The same words further on: not the first occurrence on those pages, and still the right place.
     const second = matched({ book: "main:1", text: PASSAGE, page: 2 }).anchor;
-    expect(storeAnchor(c, { quote_id: 7, anchor: second })).toMatchObject({ status: 200, body: { replaced: true, anchor: { start_page: 1 } } });
+    expect(storeAnchor(c, o, { quote_id: 7, anchor: second })).toMatchObject({ status: 200, body: { replaced: true, anchor: { start_page: 1 } } });
 
     const feed = anchorChanges(c, "0").body as { log: string; changes: { seq: number; quote_id: number; kind: string; anchor: Anchor | null }[]; last: number };
     expect(feed.log).toMatch(/^[0-9a-f-]{36}$/);
@@ -115,17 +129,27 @@ describe("anchors", () => {
 
   it("refuses an anchor the book doesn't bear out", () => {
     const anchor = matched({ book: "main:1", text: PASSAGE }).anchor;
-    expect(storeAnchor(c, { quote_id: 8, anchor: { ...anchor, start_offset: 1 } })).toEqual({ status: 409, body: { error: "stale-anchor" } });
-    expect(storeAnchor(c, { quote_id: 8, anchor: { ...anchor, sha256: "an-older-file" } })).toEqual({ status: 409, body: { error: "stale-anchor" } });
-    expect(storeAnchor(c, { quote_id: 8, anchor: { ...anchor, end_offset: 10_000 } })).toEqual({ status: 409, body: { error: "stale-anchor" } });
-    expect(storeAnchor(c, { quote_id: 8, anchor: { ...anchor, calibre_uuid: "uuid-99" } })).toEqual({ status: 404, body: { error: "no-book" } });
+    expect(storeAnchor(c, o, { quote_id: 8, anchor: { ...anchor, start_offset: 1 } })).toEqual({ status: 409, body: { error: "stale-anchor" } });
+    expect(storeAnchor(c, o, { quote_id: 8, anchor: { ...anchor, sha256: "an-older-file" } })).toEqual({ status: 409, body: { error: "stale-anchor" } });
+    expect(storeAnchor(c, o, { quote_id: 8, anchor: { ...anchor, end_offset: 10_000 } })).toEqual({ status: 409, body: { error: "stale-anchor" } });
+    expect(storeAnchor(c, o, { quote_id: 8, anchor: { ...anchor, calibre_uuid: "uuid-99" } })).toEqual({ status: 404, body: { error: "no-book" } });
     for (const body of [{ quote_id: 8 }, { quote_id: 0, anchor }, { quote_id: "8", anchor }, { quote_id: 8, anchor: { ...anchor, start_page: -1 } }]) {
-      expect(storeAnchor(c, body).status, JSON.stringify(body)).toBe(400);
+      expect(storeAnchor(c, o, body).status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it("never anchors a quote in a book with an excluded tag", () => {
+    const anchor = matched({ book: "main:3", text: "The first copy" }).anchor;
+    c.db.prepare(`UPDATE books SET tags = '["private"]' WHERE id = 'main:3'`).run();
+    try {
+      expect(storeAnchor(c, o, { quote_id: 10, anchor })).toEqual({ status: 404, body: { error: "no-book" } });
+    } finally {
+      c.db.prepare("UPDATE books SET tags = '[]' WHERE id = 'main:3'").run();
     }
   });
 
   it("deletes an anchor once", () => {
-    storeAnchor(c, { quote_id: 9, anchor: matched({ book: "main:1", text: PASSAGE }).anchor });
+    storeAnchor(c, o, { quote_id: 9, anchor: matched({ book: "main:1", text: PASSAGE }).anchor });
     expect(deleteAnchor(c, 9)).toEqual({ status: 204 });
     expect(deleteAnchor(c, 9)).toEqual({ status: 404, body: { error: "no-anchor" } });
     const changes = (anchorChanges(c, "0").body as { changes: { quote_id: number; kind: string; status: string | null }[] }).changes;
@@ -154,8 +178,13 @@ describe("anchors", () => {
     let i = 0;
     expect(rescan("file-4", () => original.get(i++)!)).toEqual({ reanchored: 0, orphaned: 0, found: 1 });
     expect(kinds(before).map((ch) => [ch.kind, ch.status])).toEqual([["reanchored", "verified"], ["orphaned", "orphaned"], ["found", "verified"]]);
+    // A book that leaves the index and comes back with the same file is searched again.
+    c.db.prepare("UPDATE books SET status = 'failed' WHERE id = 'main:1'").run();
+    expect(reanchorAnchors(c.db, c.data)).toEqual({ reanchored: 0, orphaned: 1, found: 0 });
+    c.db.prepare("UPDATE books SET status = 'indexed' WHERE id = 'main:1'").run();
+    expect(reanchorAnchors(c.db, c.data)).toEqual({ reanchored: 0, orphaned: 0, found: 1 });
     // Quote-mcp can store the anchor it's sent now.
     const now = kinds(before).at(-1)!.anchor;
-    expect(storeAnchor(c, { quote_id: 7, anchor: now }).status).toBe(200);
+    expect(storeAnchor(c, o, { quote_id: 7, anchor: now }).status).toBe(200);
   });
 });

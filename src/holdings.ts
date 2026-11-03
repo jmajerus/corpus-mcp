@@ -22,7 +22,7 @@ export interface HoldingsBook {
   year: number | null;
   /** The format the index read; Calibre may hold others. */
   formats: string[];
-  /** False for a book that failed, has no file, or has no text layer (fewer than 20 characters a page). */
+  /** False for a book with no text layer (fewer than 20 characters a page). */
   has_text: boolean;
   citekey: string | null;
   citekey_source: "calibre" | "pinned" | "zotero" | null;
@@ -61,8 +61,18 @@ export function holdingsBook(c: Corpus, b: BookRow, zoteroLibrary?: string): Hol
 /** Indexed with a text layer: at least 20 characters a page, the admin pages' rule. */
 export const hasText = (b: BookRow) => b.status === "indexed" && !!b.page_count && (b.text_chars ?? 0) >= 20 * b.page_count;
 
+/** Indexed books only: a failed extraction or a missing file is no holding to point an agent at. */
 export function holdingsBooks(c: Corpus, o: { excludeTags: string[]; zoteroLibrary?: string }): HoldingsFeed {
-  return { version: HOLDINGS_VERSION, books: holdingsBookRows(c, o.excludeTags).map((b) => holdingsBook(c, b, o.zoteroLibrary)) };
+  return { version: HOLDINGS_VERSION, books: holdingsBookRows(c, o.excludeTags, "status = 'indexed'").map((b) => holdingsBook(c, b, o.zoteroLibrary)) };
+}
+
+/**
+ * True when an If-None-Match header names this ETag: by weak comparison, as GET's conditional requests use,
+ * so `W/"…"` matches too, and `*` matches any.
+ */
+export function etagMatches(header: string | string[] | undefined, etag: string): boolean {
+  const opaque = (tag: string) => tag.trim().replace(/^W\//, "");
+  return String(header ?? "").split(",").some((tag) => tag.trim() === "*" || opaque(tag) === opaque(etag));
 }
 
 /** The feed's body and its strong ETag, a hash of the body. */

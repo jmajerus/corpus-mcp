@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type DataStore, pinnedByKey } from "./data.js";
 import type { DB } from "./db.js";
 import { type HoldingsBook, hasText, holdingsBook, holdingsBookRows } from "./holdings.js";
+import { isbn13, validIsbn } from "./isbn.js";
 import { CONTEXT, MAX_QUOTE, type QuoteAnchor, find, locate, pagesOf, suggestions } from "./quotes.js";
 import type { BookRow, Corpus } from "./tools.js";
 
@@ -46,10 +47,7 @@ function booksFor(c: Corpus, o: AnchorOptions, key: string): BookRow[] {
   const rows = (where: string, ...args: unknown[]) => holdingsBookRows(c, o.excludeTags, where, ...args);
   if (BOOK_ID.test(key)) return rows("id = ?", key);
   const zotero = key.match(ZOTERO_KEY);
-  if (zotero) {
-    if (!o.zoteroLibrary || zotero[1] !== o.zoteroLibrary) return [];
-    return rows("1").filter((b) => holdingsBook(c, b, o.zoteroLibrary).zotero?.key === zotero[2]);
-  }
+  if (zotero) return zotero[1] === o.zoteroLibrary ? matchedTo(c, o, zotero[2]) : [];
   const byUuid = rows("uuid = ? COLLATE NOCASE", key);
   if (byUuid.length) return byUuid;
   const citekey = key.toLowerCase();
@@ -58,6 +56,28 @@ function booksFor(c: Corpus, o: AnchorOptions, key: string): BookRow[] {
   const pinned = pinnedByKey(c.data, citekey);
   if (pinned) return rows("uuid = ?", pinned.calibre_uuid);
   return rows("proposed_citekey = ?", citekey);
+}
+
+/**
+ * The books matched to a Zotero item. Only a book tied to the item or to one merged into it (a link, the
+ * UUID filed in Extra, or an ISBN) can be, so only those go through the full match, which decides.
+ */
+function matchedTo(c: Corpus, o: AnchorOptions, key: string): BookRow[] {
+  const keys = new Set([key]);
+  const replaces = c.data.prepare<[string], string>("SELECT replaces FROM zotero_items WHERE key = ?").pluck();
+  for (const k of keys) for (const r of JSON.parse(replaces.get(k) ?? "[]") as string[]) keys.add(r);
+  const list = JSON.stringify([...keys]);
+  const uuids = c.data.prepare(`
+    SELECT calibre_uuid FROM zotero_links WHERE zotero_key IN (SELECT value FROM json_each(?))
+    UNION SELECT calibre_uuid FROM zotero_items WHERE key IN (SELECT value FROM json_each(?)) AND calibre_uuid IS NOT NULL`).pluck().all(list, list) as string[];
+  const isbns = new Set(c.data.prepare("SELECT isbn FROM zotero_isbns WHERE key IN (SELECT value FROM json_each(?))").pluck().all(list) as string[]);
+  const byUuid = holdingsBookRows(c, o.excludeTags, "uuid IN (SELECT value FROM json_each(?))", JSON.stringify(uuids));
+  const byIsbn = isbns.size ? holdingsBookRows(c, o.excludeTags, "isbn IS NOT NULL").filter((b) => {
+    const isbn = validIsbn(b.isbn!);
+    return !!isbn && isbns.has(isbn13(isbn));
+  }) : [];
+  const candidates = [...new Map([...byUuid, ...byIsbn].map((b) => [b.id, b])).values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+  return candidates.filter((b) => holdingsBook(c, b, o.zoteroLibrary).zotero?.key === key);
 }
 
 function labels(db: DB, bookId: string) {
@@ -166,7 +186,7 @@ const sameAnchor = (a: Anchor, b: Anchor) => (Object.keys(a) as (keyof Anchor)[]
  * POST /api/anchors: stores the anchor a verify returned, for a quote-mcp quote. It is checked against the
  * book first: the same file, and the same wording at those offsets. Storing the same anchor again is a no-op.
  */
-export function storeAnchor(c: Corpus, body: unknown): ApiAnswer {
+export function storeAnchor(c: Corpus, o: AnchorOptions, body: unknown): ApiAnswer {
   if (!isObject(body) || !isObject(body.anchor)) return bad("Send { quote_id, anchor }.");
   const quoteId = body.quote_id;
   if (!Number.isSafeInteger(quoteId) || (quoteId as number) < 1) return bad("quote_id is quote-mcp's id, a positive integer.");
@@ -176,7 +196,8 @@ export function storeAnchor(c: Corpus, body: unknown): ApiAnswer {
     || (a.end_page as number) < (a.start_page as number)) {
     return bad("The anchor is malformed: post it back as /api/verify returned it.");
   }
-  const book = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE uuid = ? AND status = 'indexed' ORDER BY id").get(a.calibre_uuid);
+  // As verify sees books: never one with an excluded tag, even before the next scan drops it.
+  const [book] = holdingsBookRows(c, o.excludeTags, "uuid = ? AND status = 'indexed'", a.calibre_uuid);
   if (!book) return { status: 404, body: { error: "no-book" } };
   const stale: ApiAnswer = { status: 409, body: { error: "stale-anchor" } };
   if (a.sha256 !== book.sha256) return stale;
@@ -256,8 +277,9 @@ export function reanchorAnchors(db: DB, data: DataStore): { reanchored: number; 
         recordChange(data, r.quote_id, kind, "verified", anchor, at);
         counts[kind]++;
       } else {
-        // Remember which file it failed against, so the next scan doesn't search the same file again.
-        data.prepare("UPDATE anchors SET status = 'orphaned', sha256 = ?, updated_at = ? WHERE quote_id = ?").run(book?.sha256 ?? r.sha256, at, r.quote_id);
+        // Remember which file it failed against, so the next scan doesn't search the same file again; with no
+        // book, none, so the book coming back (even with the same file) is searched.
+        data.prepare("UPDATE anchors SET status = 'orphaned', sha256 = ?, updated_at = ? WHERE quote_id = ?").run(book?.sha256 ?? null, at, r.quote_id);
         if (r.status !== "orphaned") {
           recordChange(data, r.quote_id, "orphaned", "orphaned", fromRow(r), at);
           counts.orphaned++;

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
 import { openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
-import { holdingsBooks, holdingsBooksResponse } from "../src/holdings.js";
+import { etagMatches, holdingsBooks, holdingsBooksResponse } from "../src/holdings.js";
 import { scanLibraries } from "../src/indexer.js";
 import type { Corpus } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
@@ -74,4 +74,16 @@ it("keeps its ETag until a book's keys change", () => {
   } finally {
     c.data.prepare("UPDATE citekeys SET citekey = 'author2001networks' WHERE calibre_uuid = 'uuid-1'").run();
   }
+});
+
+it("leaves out books the index couldn't read, and matches an ETag weakly", () => {
+  c.db.prepare("UPDATE books SET status = 'failed' WHERE id = 'main:4'").run();
+  try {
+    expect(holdingsBooks(c, o).books.map((b) => b.book_id)).toEqual(["main:1", "main:2"]);
+  } finally {
+    c.db.prepare("UPDATE books SET status = 'indexed' WHERE id = 'main:4'").run();
+  }
+  const { etag } = holdingsBooksResponse(c, o);
+  for (const header of [etag, `W/${etag}`, `"other", ${etag}`, "*"]) expect(etagMatches(header, etag), header).toBe(true);
+  for (const header of [undefined, "", `"other"`, `W/"other"`]) expect(etagMatches(header, etag), String(header)).toBe(false);
 });
