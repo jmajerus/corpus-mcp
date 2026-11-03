@@ -12,7 +12,7 @@ given the keys to its thirteen doors and told she may open twelve. She
 opens them one a day, and behind each sits an Apostle in a great light.
 Then:
 
-<!-- corpus:quote 3 -->
+<!-- quote 830 -->
 
 > Then the forbidden door alone remained, and she felt a great desire to
 > know what could be hidden behind it, and said to the angels, “I will
@@ -31,7 +31,7 @@ that this one look will be the last.
 Thich Nhat Hanh, writing about love and loneliness, starts from the same
 urge but finds something gentler at its root:
 
-<!-- corpus:quote 4 -->
+<!-- quote 829 -->
 
 > EACH OF US HAS A DEEP DESIRE TO know and understand the world and to
 > be known and understood in return. That is a deep natural thirst. But
@@ -52,7 +52,7 @@ also be a discipline? Diana Montalion, writing about how people learn to
 think in systems, takes Einstein’s line as a description of her
 colleagues:
 
-<!-- corpus:quote 5 -->
+<!-- quote 828 -->
 
 > “I am only passionately curious.” This describes many of the people
 > I’ve worked with in tech. We are curious about different things, but

@@ -11,9 +11,9 @@
 
 **Edit it:** [on-curiosity.md](on-curiosity.md), the source the formatted copy is made
 from. Its bracketed codes, such as `[@hanh2007fidelity, chap. 4]`, link each quote to its
-book, and a hidden `<!-- corpus:quote <id> -->` marker before each block quote links it to
-the saved passage. (The piece was written while quotes were saved in corpus-mcp, hence the
-`corpus:` marker; the skill now saves them in quote-mcp and writes `<!-- quote <id> -->`.) The skill turns the codes into citations each time it formats the piece.
+book, and a hidden `<!-- quote <id> -->` marker before each block quote links it to
+the passage saved in quote-mcp. (The piece was written while quotes were saved in
+corpus-mcp; its markers were changed to the quotes' new ids when they moved.) The skill turns the codes into citations each time it formats the piece.
 
 - The quotes cite two EPUBs by chapter (`chap. 3`, `chap. 4`) and a PDF by its printed
   page (`p. 211`, physical page 237). None of the three books was in Zotero: the skill
