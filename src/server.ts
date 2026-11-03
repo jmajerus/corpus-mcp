@@ -41,7 +41,7 @@ import { etagMatches, holdingsBooksResponse } from "./holdings.js";
 import { anchorChanges, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
-import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
+import { deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
   type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
   getBook, searchCorpus, tagCleanupPlan, unpinCitekey,
@@ -51,7 +51,8 @@ const VERSION = "0.2.0";
 
 const INSTRUCTIONS = `Search, read, and cite books in the Calibre libraries (books that are not Zotero attachments; use the Zotero server for those).
 Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). Pages are 1-based. For PDFs a page is a physical page and page_label is the printed number to cite. For EPUB and MOBI a page is a stable reading location, not a citable page number; cite those by chapter (the section path).
-Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey.`;
+Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey.
+Quotes are kept in quote-mcp: save one with its add_quote (work = a book id or citekey from here), which checks the words against the book here, and cite it with its cite_quote. This server's quote tools are retired.`;
 
 const bookId = z.string().describe('Book id from search_corpus or list_books (e.g. "main:42"), or the book\'s citekey');
 const page = z.number().int().min(1);
@@ -186,68 +187,22 @@ export function createServer(c: Corpus): McpServer {
     const email = extra.requestInfo?.headers["cf-access-authenticated-user-email"];
     return typeof email === "string" ? email : undefined;
   };
-  const writes = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
-  server.registerTool("save_quote", {
-    title: "Save a quote",
-    description: "Save a passage from a book as a quote. The text is checked against the book: quote marks, dashes, spacing, and case may differ, and the book's exact wording is what gets saved. If the passage is not in the book, nothing is saved and the closest passages are returned. Give the page where the passage starts (as search_corpus or read_book report it) to find it fastest.",
-    inputSchema: {
-      book_id: bookId,
-      text: z.string().min(1).max(2000).describe("The passage, as close to the book's wording as possible"),
-      page: page.optional().describe("Page or location where the passage starts"),
-      note: z.string().max(2000).optional().describe("Why the passage matters"),
-      labels: z.array(z.string()).max(20).optional().describe('Tags: themes ("compassion", "overwork"), forms ("parable", "epigraph"), or links to your own records ("project:item-id"). Quotes have no categories of their own; the book gives the subject, so tag what is finer. Reuse existing tags (search_quotes lists them).'),
-    },
-    annotations: { title: "Save a quote", ...writes },
-  }, (args, extra) => run(() => json(saveQuote(c, args, accessEmail(extra), "agent"))));
-
-  server.registerTool("search_quotes", {
-    title: "Search quotes",
-    description: "Find saved quotes by words in their text, note, or tags, and by book, author, their book's category (including subcategories), tag, or status. The result lists every tag in use with its count.",
-    inputSchema: {
-      query: z.string().optional(), book_id: bookId.optional(), author: z.string().optional(),
-      category: z.string().optional().describe("The book's vocabulary category, slug or title; includes those below it"),
-      label: z.string().optional().describe("A tag"), status: z.enum(["verified", "orphaned"]).optional(),
-      limit: z.number().int().min(1).max(200).optional(),
-    },
-    annotations: { title: "Search quotes", ...readOnly },
-  }, (args) => run(() => json(searchQuotes(c, {
-    q: args.query, book: args.book_id, author: args.author, category: args.category, label: args.label, status: args.status, limit: args.limit,
-  }))));
-
-  server.registerTool("get_quote", {
-    title: "Get a quote",
-    description: "One saved quote with the text around it, its locator, and its citation.",
-    inputSchema: { id: z.number().int() },
-    annotations: { title: "Get a quote", ...readOnly },
-  }, ({ id }) => run(() => json(getQuote(c, id))));
-
-  server.registerTool("update_quote", {
-    title: "Update a quote",
-    description: "Change a quote's note or tags. The quoted text cannot change; save a new quote instead.",
-    inputSchema: {
-      id: z.number().int(), note: z.string().max(2000).nullable().optional(),
-      labels: z.array(z.string()).max(20).optional().describe("Replaces the quote's tags"),
-    },
-    annotations: { title: "Update a quote", ...writes, idempotentHint: true },
-  }, (args, extra) => run(() => json(updateQuote(c, args, accessEmail(extra), "agent"))));
-
-  server.registerTool("delete_quote", {
-    title: "Delete a quote",
-    description: "Delete a saved quote.",
-    inputSchema: { id: z.number().int() },
-    annotations: { title: "Delete a quote", ...writes, destructiveHint: true, idempotentHint: true },
-  }, ({ id }, extra) => run(() => json(deleteQuote(c, id, accessEmail(extra), "agent"))));
-
-  server.registerTool("cite_quote", {
-    title: "Cite a quote",
-    description: "The quote's verified text, reflowed as prose (line breaks inside sentences become spaces), and a readable locator (quote_locator), with its citation as cite_passage returns it for the quote's pages: a CSL JSON item, a CSL locator, and filing data.",
-    inputSchema: { id: z.number().int() },
-    annotations: { title: "Cite a quote", ...readOnly },
-  }, ({ id }) => run(() => {
-    const cite = citeQuote(c, id);
-    return json(withZotero(c, cite.citekey ?? getQuote(c, id).current_book_id!, cite));
-  }));
+  // Quotes moved to quote-mcp (docs/dev-briefs/holdings-and-quotes.md §3). For one release the old tools stay,
+  // answering with the quote-mcp tool to use instead, so an agent that still calls them learns where to go.
+  const retired = (name: string, title: string, pointer: string) =>
+    server.registerTool(name, {
+      title: `${title} (retired)`,
+      description: `Retired: quotes are now kept in quote-mcp. ${pointer}`,
+      inputSchema: {},
+      annotations: { title: `${title} (retired)`, ...readOnly },
+    }, () => ({ isError: true, content: [{ type: "text", text: `${name} is retired: quotes are now kept in quote-mcp. ${pointer}` }] }));
+  retired("save_quote", "Save a quote", "Use quote-mcp's add_quote, with this book's id (main:42) or citekey as work; it checks the words against the book here first.");
+  retired("search_quotes", "Search quotes", "Use quote-mcp's search_quotes.");
+  retired("get_quote", "Get a quote", "Use quote-mcp's get_quote.");
+  retired("cite_quote", "Cite a quote", "Use quote-mcp's cite_quote; for a book's filing data, use cite_passage here.");
+  retired("update_quote", "Update a quote", "quote-mcp has no tool to change a quote yet; ask the person to change it there.");
+  retired("delete_quote", "Delete a quote", "quote-mcp has no tool to delete a quote yet; ask the person to delete it there.");
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",

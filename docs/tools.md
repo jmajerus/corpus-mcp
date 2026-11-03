@@ -30,13 +30,12 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `add_provisional_term` | Add a provisional term | ✓ | Coins a term during research, usable for tagging at once and marked provisional until a person reviews it. |
 | `tagging_worklist` | Get books to tag | | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Propose tags for a book | ✓ | Proposes 1–3 vocabulary tags for a book, for a person to review. |
-| `save_quote` | Save a quote | ✓ | Saves a passage as a quote after checking it against the book; the book's exact wording is stored. |
-| `search_quotes` | Search quotes | | Finds saved quotes by words in their text, note, or tags, and by book, author, book category, tag, or status. |
-| `get_quote` | Get a quote | | One saved quote with the text around it, its locator, and its citation. |
-| `update_quote` | Update a quote | ✓ | Changes a quote's note or tags; the quoted text never changes. |
-| `delete_quote` | Delete a quote | ✓ | Deletes a saved quote. |
-| `cite_quote` | Cite a quote | | A quote's verified text, reflowed as prose, and locator with its citation object. |
 | `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs, years, authors, and titles books print that Calibre lacks. |
+
+The quote tools (`save_quote`, `search_quotes`, `get_quote`, `update_quote`,
+`delete_quote`, `cite_quote`) are retired: quotes are kept in quote-mcp now.
+For one release they stay listed, marked "(retired)", and answer with the
+quote-mcp tool to use instead.
 
 The tools marked *Writes* declare `readOnlyHint: false`; every other tool is
 annotated read-only. Clients that group or gate tools by permission, as Claude web
@@ -50,7 +49,8 @@ Calibre only through a job a person previews and applies (see
 - **Cite a passage:** `search_corpus` → `read_book` around a hit →
   `cite_passage`. Once the book is filed in a reference manager, record its key
   with `pin_citekey`.
-- **Keep a passage:** `save_quote`, then `cite_quote` whenever it's needed.
+- **Keep a passage:** quote-mcp's `add_quote`, with the book id or citekey as
+  `work` (it checks the words against the book here), then its `cite_quote`.
 - **Tag books:** `get_tag_vocabulary` → `tagging_worklist` → `propose_tags`; a
   person reviews the proposals (see [Categories](categories.md)).
 

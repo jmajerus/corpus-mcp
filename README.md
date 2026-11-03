@@ -21,7 +21,8 @@ books that live in Calibre.
 - **Cite.** A CSL JSON citation with a real locator, plus BibTeX and ISBN data
   for filing the book in a reference manager, and pinned citekeys once it is
   filed.
-- **Quote.** Save passages, checked against the book's text, with notes and tags.
+- **Quote.** Check passages against the book's text and keep their anchors for
+  [quote-mcp](https://github.com/jmajerus/quote-mcp), which stores the quotes.
 - **Categorize.** Agents propose categories from a controlled vocabulary; a
   person reviews them, and approved sets are applied to Calibre.
 - **Administer.** Web pages where a person can see and change everything an
