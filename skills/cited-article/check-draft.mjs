@@ -2,6 +2,8 @@
 // Checks a cited-article draft: marked quotes against their saved text, citekeys against the
 // bibliography, and a Pandoc build. Prints JSON; exits 1 when something is wrong.
 // Usage: node check-draft.mjs <draft.md> [--quotes <file.json>]   (file: { "<id>": "<prose>" })
+// Markers are <!-- quote <id> --> (a quote-mcp id). A draft from before the quotes moved there has
+// <!-- corpus:quote <id> --> (a corpus-mcp id), whose saved text is keyed "corpus:<id>".
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -50,8 +52,8 @@ for (let i = 0; i < lines.length; i++) {
   if (!/^\s{0,3}>/.test(lines[i]) || (i > 0 && /^\s{0,3}>/.test(lines[i - 1]))) continue;
   let end = i;
   while (end + 1 < lines.length && /^\s{0,3}>/.test(lines[end + 1])) end++;
-  const marker = i > 0 ? /<!--\s*corpus:quote\s+(\d+)\s*-->/.exec(lines[i - 1]) : null;
-  blocks.push({ line: i + 1, id: marker ? Number(marker[1]) : null, text: lines.slice(i, end + 1).map((l) => l.replace(/^\s{0,3}>\s?/, "")).join("\n") });
+  const marker = i > 0 ? /<!--\s*(corpus:)?quote\s+(\d+)\s*-->/.exec(lines[i - 1]) : null;
+  blocks.push({ line: i + 1, id: marker ? `${marker[1] ?? ""}${marker[2]}` : null, text: lines.slice(i, end + 1).map((l) => l.replace(/^\s{0,3}>\s?/, "")).join("\n") });
   i = end;
 }
 

@@ -1,11 +1,14 @@
 ---
 name: cited-article
-description: Write an article, essay, or book chapter or section that quotes books from the Calibre libraries through the Corpus MCP tools, for any writer, not only editors. Each passage is saved as a verified quote and cited with a footnote; books not yet in Zotero are filed to a staging collection. Hands over an editable Markdown source and a formatted copy anyone can read. Use when asked to write, outline, check, or format a piece that quotes or cites books in the corpus, such as "write a short piece quoting my books on X".
+description: Write an article, essay, or book chapter or section that quotes books from the Calibre libraries through the Corpus and Quote MCP tools, for any writer, not only editors. Each passage is saved as a verified quote and cited with a footnote; books not yet in Zotero are filed to a staging collection. Hands over an editable Markdown source and a formatted copy anyone can read. Use when asked to write, outline, check, or format a piece that quotes or cites books in the corpus, such as "write a short piece quoting my books on X".
 ---
 
 # Cited article
 
-The agent finds, checks, files, drafts, and formats. The human picks the
+The agent finds, checks, files, drafts, and formats. Books are searched and
+read with the Corpus MCP tools (corpus-mcp); quotes are saved and cited with
+the Quote MCP tools (quote-mcp), which check each one against the book's text
+through corpus-mcp. Filing data and citekey pins stay in corpus-mcp. The human picks the
 passages, edits the prose, and publishes. Two files come out:
 
 - `<slug>.md`, the **source**: Markdown with citekeys (`[@key, chap. 2]`)
@@ -62,27 +65,41 @@ page, the passage, a line of context either side, and why it fits.
 
 For each chosen passage:
 
-1. `save_quote` with the book id, the start page `read_book` reported, the
-   text, `labels: ["project:<project>", <themes>]`, and a note on its role in
-   the piece. If it isn't found, use the closest passages returned; never
-   save altered text.
-2. `cite_quote` with the quote id. Keep `quote` (the prose text to put in the
-   draft), `csl`, `position`, `citekey`, `proposed_citekey`, `bibtex`, `isbn`,
-   `zotero`, and `warnings`.
-3. Settle the citekey (below).
+1. quote-mcp's `add_quote` with `work` = the book id (`main:42`), the text,
+   `page` = the page `read_book` reported (where the check starts looking;
+   the saved page comes from the book), `tags: ["project:<project>", <themes>]`,
+   `comment` = its role in the piece, and `request_id` = `<slug>-<n>`, so a
+   retry doesn't save it twice. When nothing is saved, the error lists the
+   closest passages: quote again from those; never save altered text. A
+   status other than `verified` means the words weren't checked against the
+   book; say so before using the quote.
+2. quote-mcp's `cite_quote` with the quote id. Keep `quote` (the prose text
+   to put in the draft), `csl`, `locator`, `position`, `citekey`, `book`
+   (corpus-mcp's record of the book: `book_id`, `citekey`, `citekey_source`,
+   `zotero`), `editions`, and `warnings`.
+3. Once per book, corpus-mcp's `cite_passage` with `book.book_id` and the
+   same page, for the filing data: `bibtex`, `isbn`, `proposed_citekey`, and
+   its `warnings`.
+4. Settle the citekey (below).
 
 #### Citekeys and Zotero filing
 
-- **Pinned** (`citekey` is set): use it.
-- **In Zotero, not pinned** (`zotero` is set, `citekey` is null): read the
-  item's key (`zotero_get_item_metadata` format `json`: `citationKey`, or a
-  `Citation Key:` line in `extra`) and `pin_citekey`.
-- **Not in Zotero** — by `file`:
+- **Known** (`book.citekey` is set, from Calibre or a pin): use it. If
+  `cite_quote` has a different `citekey`, use `book.citekey` and mention the
+  difference in the handover.
+- **In Zotero, not pinned** (`book.zotero` is set, `book.citekey` is null):
+  use `cite_quote`'s `citekey` if it has one; otherwise read the item's key
+  (`zotero_get_item_metadata` format `json`: `citationKey`, or a
+  `Citation Key:` line in `extra`). Then `pin_citekey` (corpus-mcp) with
+  `book.book_id` and the key.
+- **Several editions** (`editions` is set): cite the edition the page belongs
+  to, by its `citekey`, and say which one in the footnote.
+- **Not in Zotero** (`book.zotero` is null) — by `file`:
   - `auto`:
     1. Look first: `zotero_search_items` for the title and first author. The
-       Corpus mirror syncs every 30 minutes, so `zotero: null` may be stale.
+       Corpus mirror syncs every 30 minutes, so `book.zotero: null` may be stale.
        If there's a match, treat it as "in Zotero".
-    2. File: `zotero_add_item` with `source` = the `bibtex` (add
+    2. File: `zotero_add_item` with `source` = `cite_passage`'s `bibtex` (add
        `isbn = {…}` when `isbn` is set; never use `isbn_candidates`),
        `source_type: "bibtex"`, `collections: [<staging>]`,
        `create_missing_collections: true`, `tags: ["corpus-mcp"]`, plus
@@ -108,23 +125,23 @@ Never move items out of staging, delete Zotero items, or replace a pinned key
 
 Start from [template.md](template.md). Rules:
 
-- **Quotes.** Put `<!-- corpus:quote <id> -->` on the line before each block
-  quote. Use `cite_quote`'s `quote` text unchanged, wrapped across `>` lines;
+- **Quotes.** Put `<!-- quote <id> -->` (the quote-mcp id) on the line
+  before each block quote. Use `cite_quote`'s `quote` text unchanged, wrapped across `>` lines;
   a `\n\n` in it is a paragraph break (`>` on an empty line). End the block
   with the citation. Run-in quotes (inside a sentence) must also be saved
   quotes, with the marker just before the paragraph.
-- **Citations.** `[@key, <locator>]`. PDFs: `p. <page_label>` (or the CSL
-  `locator`). EPUB and MOBI: `chap. <n>` from `position.section`, never a
+- **Citations.** `[@key, <locator>]`. PDFs: `p. <page_label>` (or `cite_quote`'s
+  `locator_text`). EPUB and MOBI: `chap. <n>` from `position.section`, never a
   location number. When the book is a collection ("Complete Works"), name the
   work in the prose or the footnote, since the citation names only the book.
 - **Footnotes.** One for each quote, for the reader: the work, chapter or
   page, edition, and anything an editor should know (such as "EPUB: cited by
-  chapter"). Keep Corpus ids out of footnotes; the marker carries them.
+  chapter"). Keep quote and book ids out of footnotes; the marker carries them.
 - **Front matter.** `title`, `bibliography: references.bib`,
   `link-citations: true`, and `corpus-project: <project>`. Add
   `corpus-unpinned: [keys]` only when some keys aren't pinned.
 - **Bibliography.** With `bib=generate`, write `references.bib` from each
-  book's `cite_quote` `bibtex` (call it again after pinning so the entry
+  book's `cite_passage` `bibtex` (call it again after pinning so the entry
   carries the pinned key), one entry per book. With a path, leave the file alone.
 - **Outline** (`draft=outline`): the same front matter, headings, markers,
   quotes, and citations, with bullet notes in place of prose.
@@ -148,9 +165,14 @@ a new quote and swap the marker.
 
 Run it after drafting, when asked, or with `verify=<path>`:
 
-1. For each marked quote, `get_quote` and collect `{ "<id>": prose }` into a
-   JSON file in a scratch directory. An `orphaned` status is a problem to
-   report.
+1. For each `<!-- quote <id> -->` marker, quote-mcp's `cite_quote` and
+   collect `{ "<id>": quote }` into a JSON file in a scratch directory.
+   Report any of its `warnings` that say the quote no longer matches the
+   book. A `<!-- corpus:quote <id> -->` marker is from a draft written while
+   quotes were saved in corpus-mcp, and its id is corpus-mcp's: find the
+   same quote in quote-mcp (`search_quotes` with `tag: project:<project>`
+   and a few of its words), tell the human, and change the marker to
+   `<!-- quote <new id> -->`.
 2. Run `node <skill dir>/check-draft.mjs <draft.md> --quotes <file.json>`. It
    compares each marked block quote with the saved prose (ignoring line
    wrapping), finds block quotes without markers, checks every citekey
@@ -230,5 +252,7 @@ are.
 
 ## Cleaning up
 
-A piece's quotes are `search_quotes` with `label: project:<project>`. Delete
-them (`delete_quote`) only when the human asks.
+A piece's quotes are quote-mcp's `search_quotes` with
+`tag: project:<project>`. quote-mcp's tools can't delete quotes: when the human
+wants a piece's quotes gone, list them (id, book, and first words) for the
+human to remove.
