@@ -294,3 +294,21 @@ it("serves the holdings feed on the LAN, with a 304 for an unchanged ETag, and n
   const tunnelled = await fetch(`${base}/api/holdings/books`, { headers: { Host: "public.example", "cf-ray": "test", "cf-access-jwt-assertion": token } });
   expect(tunnelled.status).toBe(403);
 });
+
+it("verifies and anchors quote-mcp's quotes on the LAN only", async () => {
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  const verified = await post("/api/verify", { book: "main:1", text: "Weak ties carry novel information" });
+  expect(verified.status).toBe(200);
+  const { anchor } = await verified.json();
+  expect((await post("/api/anchors", { quote_id: 41, anchor })).status).toBe(201);
+  const feed = await (await fetch(`${base}/api/anchors/changes?since=0`)).json();
+  expect(feed.changes.map((c: { quote_id: number; kind: string }) => [c.quote_id, c.kind])).toEqual([[41, "stored"]]);
+  expect((await fetch(`${base}/api/anchors/41`, { method: "DELETE" })).status).toBe(204);
+  expect((await fetch(`${base}/api/anchors/41`, { method: "DELETE" })).status).toBe(404);
+  expect((await fetch(`${base}/api/verify`, { method: "POST", body: "book=main:1" })).status).toBe(400);
+  const tunnel = { Host: "public.example", "cf-ray": "test", "cf-access-jwt-assertion": token };
+  expect((await post("/api/verify", { book: "main:1", text: "Weak ties" }, tunnel)).status).toBe(403);
+  expect((await post("/api/anchors", { quote_id: 42, anchor }, tunnel)).status).toBe(403);
+  expect((await fetch(`${base}/api/anchors/changes`, { headers: tunnel })).status).toBe(403);
+});

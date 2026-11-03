@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { backupDataStore, notYetLogged, openDataStore, recordChanges } from "./data.js";
 import { openDatabase } from "./db.js";
 import { scanLibraries } from "./indexer.js";
+import { reanchorAnchors } from "./anchors.js";
 import { reanchorQuotes } from "./quotes.js";
 
 const USAGE = `Usage:
@@ -37,6 +38,11 @@ async function main(argv: string[]): Promise<void> {
       // Quotes whose book file changed are found again by their text, or marked orphaned.
       const quotes = reanchorQuotes(db, data);
       if (quotes.reanchored || quotes.orphaned) console.error(`quotes: ${quotes.reanchored} re-anchored, ${quotes.orphaned} orphaned`);
+      // quote-mcp's quotes too, as changes it follows (src/anchors.ts).
+      const anchors = reanchorAnchors(db, data);
+      if (anchors.reanchored || anchors.orphaned || anchors.found) {
+        console.error(`anchors: ${anchors.reanchored} re-anchored, ${anchors.found} found again, ${anchors.orphaned} orphaned`);
+      }
       db.close();
       data.close();
       console.error(`scan finished in ${((Date.now() - started) / 1000).toFixed(1)}s`, summary);
