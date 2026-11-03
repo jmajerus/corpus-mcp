@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -19,17 +20,33 @@ let otherToken: string;
 let mcpToken: string;
 const calibreCalls: { command: string; stdin?: string }[] = [];
 let refreshes = 0;
+// A stand-in quote-mcp: its /api/corpus/quotes, holding what the reader saved.
+let quoteMcp: http.Server;
+const saves: Record<string, unknown>[] = [];
+let quoteMcpQuotes: unknown[] = [];
 
 beforeAll(async () => {
   root = tempDir();
   makeLibrary(root, "main", [{ id: 1, title: "Networks", authors: ["Ann Author"], files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } }]);
   const team = "https://team.example.com";
+  quoteMcp = http.createServer(async (req, res) => {
+    const send = (status: number, body: unknown) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    if (req.method === "GET" && req.url?.startsWith("/api/corpus/quotes?book=")) return send(200, { book: {}, quotes: quoteMcpQuotes });
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw) as Record<string, unknown>;
+    saves.push(body);
+    if (body.text === "not in the book") return send(422, { error: "no-match", message: "The passage isn't in the book.", closest: [{ page: 1 }], book: {} });
+    send(201, { saved: true, status: "verified", anchored: true, warnings: [], book: {}, quote: { id: 900 } });
+  });
+  await new Promise<void>((done) => quoteMcp.listen(0, "127.0.0.1", done));
   const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
     citekeyPreset: "author-year-word", vocabularyPath: path.join(import.meta.dirname, "vocabulary.json"),
     admin: { access: { teamDomain: team }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
-      refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json") } };
+      refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json"),
+      quoteMcpUrl: `http://127.0.0.1:${(quoteMcp.address() as AddressInfo).port}` } };
   const db = openDatabase(config.dbPath);
   scanLibraries(config, db);
   db.close();
@@ -65,6 +82,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   server.close();
+  quoteMcp.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -215,7 +233,7 @@ it("reports Zotero as unconfigured, and refuses its job", async () => {
 
 it("serves page scripts that parse, with no escapes lost to the TypeScript template literal", async () => {
   for (const page of ["admin", "admin/books", "admin/books/main:1", "admin/categories", "admin/citekeys", "admin/proposals", "admin/shelves",
-    "admin/jobs", "admin/jobs/1", "admin/changes", "admin/quotes", "admin/quotes/1", "admin/books/main:1/read", "admin/zotero"]) {
+    "admin/jobs", "admin/jobs/1", "admin/changes", "admin/books/main:1/read", "admin/zotero"]) {
     const html = await (await fetch(`${base}/${page}`)).text();
     expect(html).toContain('aria-label="Admin pages"');
     // The layout's helpers and the page's own script are separate classic scripts sharing one scope.
@@ -264,17 +282,37 @@ it("summarizes categories, citekeys, and shelves", async () => {
   expect((await (await fetch(`${base}/api/shelves`)).json()).shelves).toEqual([]);
 });
 
-it("saves quotes from the admin only with Access, and serves the reader's pages", async () => {
-  expect((await asAdmin("/api/quotes", { book_id: "main:1", text: "Weak ties" }, {})).status).toBe(401);
-  const saved = await (await asAdmin("/api/quotes", { book_id: "main:1", text: "novel information", page: 1, labels: ["test"] })).json();
-  expect(saved).toMatchObject({ saved: true, quote: { text: "novel information", created_by: "me@example.com", source: "admin" } });
+it("shows a book's quotes from quote-mcp in the reader, and saves selections there with Access", async () => {
+  const { file } = await (await fetch(`${base}/api/books/main%3A1`)).json();
+  const anchor = { sha256: file.sha256, start_page: 0, start_offset: 10, end_page: 0, end_offset: 33 };
+  quoteMcpQuotes = [
+    { id: 7, comment: "why", tags: ["ties"], flags: [], admin_path: "/admin/quotes/7", anchor },
+    { id: 8, comment: null, tags: ["lost"], flags: ["anchor_lost"], admin_path: "/admin/quotes/8", anchor: { ...anchor, sha256: "an-earlier-file" } },
+  ];
   const reader = await (await fetch(`${base}/api/books/main%3A1/pages?start=1&count=2`)).json();
-  expect(reader).toMatchObject({ book_id: "main:1", page_count: 1, start: 1, end: 1, quotes: [{ id: saved.quote.id, start_page: 1 }] });
-  expect((await (await fetch(`${base}/api/quotes?label=test`)).json()).total).toBe(1);
-  expect((await (await asAdmin(`/api/quotes/${saved.quote.id}`, { note: "edited" })).json()).note).toBe("edited");
-  expect(await (await asAdmin(`/api/quotes/${saved.quote.id}/delete`, {})).json()).toEqual({ deleted: saved.quote.id });
-});
+  expect(reader).toMatchObject({ book_id: "main:1", start: 1, end: 1 });
+  expect(reader.quotes).toEqual([{ id: 7, start_page: 1, start_offset: 10, end_page: 1, end_offset: 33, comment: "why", tags: ["ties"], flags: [], admin_path: "/admin/quotes/7" }]);
+  // Suggestions come from all the book's quotes, highlighted or not.
+  expect(reader.quote_tags).toEqual(["lost", "ties"]);
 
+  expect((await asAdmin("/api/books/main%3A1/quotes", { text: "novel information" }, {})).status).toBe(401);
+  const saved = await (await asAdmin("/api/books/main%3A1/quotes", { text: "novel information", page: 1, comment: "c", tags: ["t"], request_id: "r1" })).json();
+  expect(saved).toEqual({ saved: true, quote: { id: 900 }, warnings: [] });
+  expect(saves.at(-1)).toMatchObject({ work: expect.any(String), text: "novel information", page: 1, comment: "c", tags: ["t"], request_id: "r1", by: "me@example.com" });
+  const missed = await (await asAdmin("/api/books/main%3A1/quotes", { text: "not in the book" })).json();
+  expect(missed).toEqual({ saved: false, reason: "The passage isn't in the book.", closest: [{ page: 1 }] });
+
+  // /admin/quotes opens quote-mcp's admin: on this host with quote-mcp's name, else at CORPUS_QUOTE_MCP_URL.
+  const redirect = await fetch(`${base}/admin/quotes?work=x`, { redirect: "manual" });
+  expect([redirect.status, redirect.headers.get("location")]).toEqual([302, `http://127.0.0.1:${(quoteMcp.address() as AddressInfo).port}/admin/quotes?work=x`]);
+  const named = await new Promise<http.IncomingMessage>((done) => http.get(`${base}/admin/quotes/7`, { headers: { host: "corpus-mcp.localdomain:8000" } }, done));
+  expect([named.statusCode, named.headers.location]).toEqual([302, "http://quote-mcp.localdomain:8000/admin/quotes/7"]);
+  named.resume();
+  const tunnelled = await new Promise<http.IncomingMessage>((done) => http.get(`${base}/admin/quotes`,
+    { headers: { host: "corpus-mcp.majerus.us", "cf-ray": "test", "x-forwarded-proto": "https", "cf-access-jwt-assertion": token } }, done));
+  expect([tunnelled.statusCode, tunnelled.headers.location]).toEqual([302, "https://quote-mcp.majerus.us/admin/quotes"]);
+  tunnelled.resume();
+});
 
 it("accepts a team-signed token from any Access application at the HTTP boundary", async () => {
   const request = (path: string, assertion?: string) => fetch(base+path,{headers:{Host:"public.example","cf-ray":"test", ...(assertion ? {"cf-access-jwt-assertion":assertion} : {})}});

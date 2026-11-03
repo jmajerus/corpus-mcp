@@ -127,7 +127,7 @@ function render() {
 // Quotes are kept in quote-mcp: link to this book's there, by its Zotero item if it has one, else its title.
 function quotesSection() {
   const work = book.zotero && book.zotero.match ? book.zotero.match.key : book.title;
-  return '<p><a href="' + esc(quoteAdmin("/admin/quotes?work=" + encodeURIComponent(work))) + '">Quotes from this book</a> <span class="note">in quote-mcp</span></p>';
+  return '<p><a href="/admin/quotes?work=' + esc(encodeURIComponent(work)) + '">Quotes from this book</a> <span class="note">in quote-mcp</span></p>';
 }
 
 function renderDesired() {

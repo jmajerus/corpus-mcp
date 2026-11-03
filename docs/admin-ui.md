@@ -140,19 +140,23 @@ page number, or pick a chapter. Each page's heading gives its printed page label
 and section. For EPUB and MOBI books the numbers are *locations*, reading
 positions rather than page numbers.
 
-Saved quotes are highlighted. Click a highlight to open that quote.
+The book's quotes, kept in quote-mcp, are highlighted; hover over one for its
+comment and tags. Click a highlight to open that quote in quote-mcp's admin
+pages, where it can be edited or deleted. A quote anchored on an earlier file of
+the book isn't highlighted until its place is found in the new one.
 
 To save a quote:
 
 1. Select a passage (up to 2,000 characters; it may cross pages).
 2. In the bar that appears, add an optional note and tags. Typing a tag
-   suggests the ones already in use, so a theme keeps one spelling.
+   suggests the ones on this book's quotes, so a theme keeps one spelling.
 3. Press **Save as quote**.
 
-The server checks the passage against the book. Small differences in quote marks,
-dashes, spacing, or case are fine, and the book's exact wording is stored. If
-the passage isn't found, nothing is saved, and the bar tells you which pages were
-closest.
+The quote is saved in quote-mcp, recorded under your name, after it's checked
+against the book here. Small differences in quote marks, dashes, spacing, or
+case are fine, and the book's exact wording is stored. If the passage isn't
+found, nothing is saved, and the bar tells you which pages were closest.
+Pressing **Save** again for the same selection doesn't save it twice.
 
 ## Quotes
 

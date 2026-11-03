@@ -119,6 +119,7 @@ MOBI, AZW3, and KFX books so they get chapter locators.
 | `CORPUS_LAN_ACTOR` | `LAN` | The name changes made directly on the LAN are recorded under, such as your email |
 | `CORPUS_LAN_HOSTS` | the host name, and it with `.localdomain` | Comma-separated names the server is reached by on the LAN; IP addresses always work |
 | `CORPUS_PUBLIC` | `none` | `catalogue` turns on the public catalogue; its other settings are in [The public catalogue](public-site.md#setting-it-up) |
+| `CORPUS_QUOTE_MCP_URL` | `http://quote-mcp.localdomain:8000` | quote-mcp on the LAN, which keeps the reader's quotes and where `/admin/quotes` leads; `off` turns that off |
 | `CORPUS_D1_PROXY_URL` / `CORPUS_D1_PROXY_TOKEN` | unset | The D1 proxy the public catalogue uploads through; deploy copies them from `.env` |
 
 On the server, these live in `/etc/corpus-mcp/env`. That file is systemd's

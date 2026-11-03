@@ -8,9 +8,6 @@ import { FAVICON_LINK } from "./favicon.js";
 
 export type NavKey = "dashboard" | "books" | "quotes" | "categories" | "taxonomy" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes" | "zotero" | "about";
 
-// Quotes are kept in quote-mcp, so the Quotes item opens its admin pages (see quoteAdmin in HELPERS).
-const QUOTE_MCP_LAN = "http://quote-mcp.localdomain:8000";
-
 const NAV: [NavKey, string, string][] = [
   ["dashboard", "Dashboard", "/admin"],
   ["books", "Books", "/admin/books"],
@@ -131,11 +128,6 @@ function toast(message) {
   t.textContent = message; t.style.display = "block";
   clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.style.display = "none"; }, 4000);
 }
-// quote-mcp's admin pages, on this page's host with quote-mcp's name (corpus-mcp.localdomain:8000 →
-// quote-mcp.localdomain:8000, corpus-mcp.majerus.us → quote-mcp.majerus.us), else on the LAN.
-const QUOTE_ADMIN = /^corpus-mcp[.:]/.test(location.host) ? location.protocol + "//" + location.host.replace(/^corpus-mcp/, "quote-mcp") : "${QUOTE_MCP_LAN}";
-const quoteAdmin = (path) => QUOTE_ADMIN + path;
-document.querySelectorAll("a[data-quote-admin]").forEach((a) => { a.href = quoteAdmin(a.dataset.quoteAdmin); });
 const bookLink = (id, title) => '<a href="/admin/books/' + encodeURIComponent(id) + '">' + esc(title || id) + "</a>";
 // Vocabulary tags are slugs; pages show their titles, with the slug on hover.
 const VOCAB = fetch("/api/vocabulary").then((r) => r.json()).then((v) => new Map(v.tags.map((t) => [t.tag, t.label]))).catch(() => new Map());
@@ -164,9 +156,7 @@ ME.then((me) => {
 `;
 
 export function page(opts: { title: string; nav: NavKey; body: string; script: string; css?: string }): string {
-  const nav = NAV.map(([key, label, href]) => key === "quotes"
-    ? `<a href="${QUOTE_MCP_LAN}${href}" data-quote-admin="${href}">${label}</a>`
-    : `<a href="${href}"${key === opts.nav ? ' aria-current="page"' : ""}>${label}</a>`).join("");
+  const nav = NAV.map(([key, label, href]) => `<a href="${href}"${key === opts.nav ? ' aria-current="page"' : ""}>${label}</a>`).join("");
   return `<!doctype html>
 <html lang="en">
 <head>

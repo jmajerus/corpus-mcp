@@ -1,8 +1,8 @@
 import { page } from "./layout.js";
 
 /**
- * A chip editor for a quote's free-form tags, shared by the quote page and the reader. Typing offers the tags
- * already in use (from /api/quotes), so one theme keeps one spelling; Enter, a comma, or Add adds a tag.
+ * A chip editor for a new quote's free-form tags, in the reader. Typing offers the tags on the book's quotes
+ * (suggestTags), so one theme keeps one spelling; Enter, a comma, or Add adds a tag.
  */
 const TAG_EDITOR = `
 function tagEditor(root, initial, enabled) {
@@ -25,166 +25,21 @@ function tagEditor(root, initial, enabled) {
   draw();
   return { get: () => { add(); return tags.slice(); }, set: (v) => { tags = v.slice(); draw(); } };
 }
-fetch("/api/quotes?limit=1").then((r) => r.json()).then((d) => {
-  const list = document.createElement("datalist"); list.id = "usedtags";
-  list.innerHTML = (d.tags || []).map((t) => '<option value="' + esc(t.tag) + '">' + esc(t.tag + " (" + t.n + ")") + "</option>").join("");
-  document.body.appendChild(list);
-}).catch(() => {});
+function suggestTags(tags) {
+  let list = document.getElementById("usedtags");
+  if (!list) { list = document.createElement("datalist"); list.id = "usedtags"; document.body.appendChild(list); }
+  const known = new Set(Array.from(list.options, (o) => o.value));
+  for (const t of tags) if (!known.has(t)) { known.add(t); list.insertAdjacentHTML("beforeend", '<option value="' + esc(t) + '">'); }
+}
 `;
 
 const QUOTE_CSS = `
-.tagadd { display: inline-flex; gap: 6px; margin-left: 4px; } .tagadd input { width: 230px; }
-.cloud { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
-.cloud button { padding: 2px 9px; border-radius: 999px; font-size: 0.84rem; }
-.cloud button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.cloud .n { color: var(--muted); margin-left: 4px; }
-.chip.inherited { background: var(--code); color: var(--muted); }
-blockquote { margin: 0; padding: 4px 0 4px 14px; border-left: 3px solid var(--bar); font-size: 0.98rem; white-space: pre-wrap; }
-.qmeta { font-size: 0.86rem; color: var(--muted); margin-top: 8px; }
-.qcard { margin-bottom: 12px; }
-.qcard a.open { float: right; font-size: 0.86rem; }`;
+.tagadd { display: inline-flex; gap: 6px; margin-left: 4px; } .tagadd input { width: 230px; }`;
 
-/** /admin/quotes: every saved quote, searchable and filterable. */
-export const QUOTES_HTML = page({
-  title: "Quotes",
-  nav: "quotes",
-  css: QUOTE_CSS + `.filters input[name=q] { width: 220px; }`,
-  body: `
-<h1>Quotes</h1>
-<p class="sub" id="summary">Passages saved from the books, checked against the text. Save new ones from a book's reader view.</p>
-<form class="filters" id="filters" role="search">
-  <input type="search" name="q" placeholder="Words in the quote, note, or tags" aria-label="Search quotes">
-  <input type="search" name="category" placeholder="Book's category" list="vocab" aria-label="Book's category">
-  <input type="search" name="label" placeholder="Tag" list="usedtags" aria-label="Tag">
-  <input type="search" name="author" placeholder="Author" aria-label="Author">
-  <select name="status" aria-label="Status"><option value="">Any status</option><option value="verified">Verified</option><option value="orphaned">Orphaned</option></select>
-  <button type="button" id="clear">Clear</button>
-</form>
-<datalist id="vocab"></datalist><datalist id="usedtags"></datalist>
-<div class="cloud" id="cloud" aria-label="Tags"></div>
-<div id="list" style="margin-top:14px"></div>
-<button type="button" class="more" id="more">Load more</button>`,
-  script: `
-const form = document.getElementById("filters");
-const FIELDS = ["q", "category", "label", "author", "status"];
-// The book's categories, greyed: the subject comes from the source; the tags say what is finer.
-const bookCats = (q) => q.book_categories.map((t) => '<span class="chip inherited" title="Book’s category: ' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("");
-let offset = 0;
-function query() {
-  const p = new URLSearchParams();
-  for (const f of FIELDS) { const v = form.elements[f].value.trim(); if (v) p.set(f, v); }
-  return p;
-}
-function card(q) {
-  return '<article class="card qcard"><a class="open" href="/admin/quotes/' + q.id + '">#' + q.id + " →</a><blockquote>" + esc(q.prose.length > 500 ? q.prose.slice(0, 500) + "…" : q.prose) + "</blockquote>" +
-    '<div class="qmeta">' + bookLink(q.book_id, q.title) + " · " + esc(q.locator) + (q.status === "orphaned" ? ' · <span class="badge bad"><span class="sign">!</span>Orphaned</span>' : "") + "</div>" +
-    (q.note ? '<p class="note">' + esc(q.note) + "</p>" : "") +
-    "<div>" + q.labels.map((l) => '<span class="chip muted">' + esc(l) + "</span>").join("") + "</div>" +
-    (q.book_categories.length ? '<div class="qmeta">' + bookCats(q) + "</div>" : "") +
-    '<div class="qmeta">Saved ' + esc(ago(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " · " + esc(q.source) + "</div></article>";
-}
-async function load(reset) {
-  if (reset) { offset = 0; document.getElementById("list").innerHTML = ""; history.replaceState(null, "", location.pathname + (query().toString() ? "?" + query() : "")); }
-  const p = query(); p.set("offset", offset); p.set("limit", 50);
-  let d;
-  try { d = await api("/api/quotes?" + p); } catch (e) { toast(e.message); return; }
-  // The tag cloud: every tag in use, most used first; click to filter by it.
-  const picked = form.elements.label.value.trim().toLowerCase();
-  document.getElementById("cloud").innerHTML = d.tags.map((t) => '<button type="button" data-tag="' + esc(t.tag) + '" aria-pressed="' + (t.tag.toLowerCase() === picked) + '">' + esc(t.tag) + '<span class="n">' + num(t.n) + "</span></button>").join("");
-  document.getElementById("usedtags").innerHTML = d.tags.map((t) => '<option value="' + esc(t.tag) + '"></option>').join("");
-  const list = document.getElementById("list");
-  if (!d.quotes.length && !offset) list.innerHTML = '<p class="empty">No quotes' + (query().toString() ? " match these filters" : " yet. Open a book and choose Read to save one") + ".</p>";
-  list.insertAdjacentHTML("beforeend", d.quotes.map(card).join(""));
-  offset += d.quotes.length;
-  document.getElementById("summary").innerHTML = esc(num(d.total) + " quote" + (d.total === 1 ? "" : "s")) +
-    ((d.counts.orphaned || 0) ? " · " + num(d.counts.orphaned) + " orphaned" : "") + (offset < d.total ? " · showing " + num(offset) : "");
-  document.getElementById("more").style.display = offset < d.total ? "block" : "none";
-}
-let timer;
-form.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => load(true), 300); });
-form.addEventListener("submit", (e) => { e.preventDefault(); load(true); });
-document.getElementById("clear").addEventListener("click", () => { form.reset(); load(true); });
-document.getElementById("more").addEventListener("click", () => load(false));
-document.getElementById("cloud").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-tag]"); if (!b) return;
-  form.elements.label.value = b.getAttribute("aria-pressed") === "true" ? "" : b.dataset.tag;
-  load(true);
-});
-const params = new URLSearchParams(location.search);
-for (const f of FIELDS) if (params.has(f)) form.elements[f].value = params.get(f);
-VOCAB.then((labels) => {
-  document.getElementById("vocab").innerHTML = [...labels].map(([tag, label]) => '<option value="' + esc(label) + '">' + esc(tag) + "</option>").join("");
-  load(true);
-});`,
-});
-
-/** /admin/quotes/<id>: one quote in context, its citation, and editors for its note and tags. */
-export const QUOTE_HTML = page({
-  title: "Quote",
-  nav: "quotes",
-  css: QUOTE_CSS + `
-.ctx { color: var(--muted); white-space: pre-wrap; font-size: 0.92rem; }
-.quoted { background: var(--chip); color: var(--text); border-radius: 3px; padding: 1px 0; white-space: pre-wrap; }
-.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-top: 14px; }
-.card h2 { margin: 0 0 8px; font-size: 1rem; }
-textarea { width: 100%; min-height: 90px; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
-.row input { flex: 1; min-width: 180px; }`,
-  body: `
-<p><a href="/admin/quotes">← Quotes</a></p>
-<div id="quote"><p class="note">Loading…</p></div>`,
-  script: TAG_EDITOR + `
-const id = Number(location.pathname.split("/").pop());
-let q, canWrite = false, tagsEd;
-// A readable citation from the CSL item and locator.
-function citationText(csl, loc) {
-  if (!csl) return "";
-  const names = (csl.author || []).map((n) => n.literal || [n.given, n.family].filter(Boolean).join(" "));
-  const authors = names.length <= 2 ? names.join(" and ") : names.slice(0, -1).join(", ") + ", and " + names.at(-1);
-  const year = csl.issued && csl.issued["date-parts"] ? String(csl.issued["date-parts"][0][0]) : "";
-  return [esc(authors), "<em>" + esc(csl.title) + "</em>", esc(csl.publisher || ""), esc(year), loc ? esc((loc.locator.includes("-") ? "pp. " : "p. ") + loc.locator) : ""]
-    .filter(Boolean).join(", ") + ".";
-}
-function render() {
-  document.title = "Quote #" + q.id + " · Corpus Admin";
-  const dis = canWrite ? "" : " disabled";
-  document.getElementById("quote").innerHTML = "<h1>Quote #" + q.id + "</h1>" +
-    '<p class="sub">' + bookLink(q.current_book_id || q.book_id, q.title) + " · " + esc(q.locator) + " · " + (q.status === "orphaned" ? '<span class="badge bad"><span class="sign">!</span>Orphaned: not found in the current file</span>' : '<span class="badge good"><span class="sign">✓</span>Verified</span>') + "</p>" +
-    '<div class="card"><span class="ctx">…' + esc(q.context.before) + '</span><span class="quoted">' + esc(q.prose) + '</span><span class="ctx">' + esc(q.context.after) + "…</span>" +
-    (q.current_book_id ? '<p class="note"><a href="/admin/books/' + encodeURIComponent(q.current_book_id) + "/read?page=" + q.page + "#quote-" + q.id + '">Open in the reader</a></p>' : "") + "</div>" +
-    '<div class="cols"><div class="card"><h2>Citation</h2><p>' + citationText(q.csl, q.csl_locator) + "</p>" + (q.citekey ? '<p class="note">Citekey ' + esc(q.citekey) + "</p>" : "") +
-    '<p class="note">Saved ' + esc(when(q.created_at)) + (q.created_by ? " by " + esc(q.created_by) : "") + " (" + esc(q.source) + ")" + (q.updated_at ? " · edited " + esc(ago(q.updated_at)) + (q.updated_by ? " by " + esc(q.updated_by) : "") : "") + "</p></div>" +
-    '<div class="card"><h2>Note and tags</h2><textarea id="note" aria-label="Note"' + dis + ">" + esc(q.note || "") + "</textarea>" +
-    '<div style="margin-top:10px"><span class="note">Tags</span><div id="tags"></div></div>' +
-    '<div class="row"><button type="button" class="primary" id="save"' + dis + '>Save</button><button type="button" class="danger" id="delete"' + dis + ">Delete quote</button></div>" +
-    (q.book_categories.length ? '<p class="note">From a book filed under ' + q.book_categories.map((t) => '<span class="chip inherited" title="' + esc(t.tag) + '">' + esc(t.label) + "</span>").join("") + "</p>" : "") +
-    (canWrite ? "" : '<p class="note">Sign in through Cloudflare Access to edit.</p>') + "</div></div>";
-  tagsEd = tagEditor(document.getElementById("tags"), q.labels, canWrite);
-}
-async function load() {
-  try { q = await api("/api/quotes/" + id); } catch (e) { document.getElementById("quote").innerHTML = '<p class="empty">' + esc(e.message) + "</p>"; return; }
-  render();
-}
-document.getElementById("quote").addEventListener("click", async (e) => {
-  const t = e.target;
-  try {
-    if (t.id === "save") {
-      await post("/api/quotes/" + id, { note: document.getElementById("note").value, labels: tagsEd.get() });
-      toast("Saved."); load();
-    } else if (t.id === "delete") {
-      if (!confirm("Delete quote #" + id + "?")) return;
-      await post("/api/quotes/" + id + "/delete", {});
-      location.href = "/admin/quotes";
-    }
-  } catch (err) { toast(err.message); }
-});
-ME.then((me) => {
-  canWrite = me.can_write;
-  load();
-});`,
-});
-
-/** /admin/books/<id>/read: a book's text page by page, with saved quotes highlighted and select-to-quote. */
+/**
+ * /admin/books/<id>/read: a book's text page by page, with its quotes from quote-mcp highlighted, and
+ * select-to-quote, saved to quote-mcp. A highlight opens the quote in quote-mcp's admin, to edit or delete.
+ */
 export const READER_HTML = page({
   title: "Reader",
   nav: "books",
@@ -223,15 +78,16 @@ mark { background: color-mix(in srgb, var(--bar) 22%, transparent); color: inher
 const id = decodeURIComponent(location.pathname.split("/").slice(-2)[0]);
 const COUNT = 4;
 let data, start = Number(new URLSearchParams(location.search).get("page")) || 1, canWrite = false, selection = null, qtags;
+const hint = () => (canWrite ? "Select text to save it as a quote." : "Read-only: sign in through Cloudflare Access to save quotes.");
 
 function highlighted(p) {
   // Saved quotes on this page, cut from the stored text by their offsets.
-  const ranges = data.quotes.map((q) => ({ id: q.id, s: q.start_page === p.page ? q.start_offset : q.start_page < p.page ? 0 : null, e: q.end_page === p.page ? q.end_offset : q.end_page > p.page ? p.text.length : null }))
+  const ranges = data.quotes.map((q) => ({ id: q.id, title: ["Quote #" + q.id, q.comment, q.tags.join(", ")].filter(Boolean).join(" · "), s: q.start_page === p.page ? q.start_offset : q.start_page < p.page ? 0 : null, e: q.end_page === p.page ? q.end_offset : q.end_page > p.page ? p.text.length : null }))
     .filter((r) => r.s !== null && r.e !== null && r.e > r.s).sort((a, b) => a.s - b.s);
   let out = "", at = 0;
   for (const r of ranges) {
     if (r.s < at) continue;
-    out += esc(p.text.slice(at, r.s)) + '<mark id="quote-' + r.id + '" data-quote="' + r.id + '" title="Quote #' + r.id + '">' + esc(p.text.slice(r.s, r.e)) + "</mark>";
+    out += esc(p.text.slice(at, r.s)) + '<mark id="quote-' + r.id + '" data-quote="' + r.id + '" title="' + esc(r.title) + '">' + esc(p.text.slice(r.s, r.e)) + "</mark>";
     at = r.e;
   }
   return out + esc(p.text.slice(at));
@@ -251,6 +107,8 @@ async function load() {
   document.getElementById("next").disabled = data.end >= data.page_count;
   const chapter = document.getElementById("chapter");
   if (chapter.options.length <= 1) chapter.insertAdjacentHTML("beforeend", data.outline.map((o) => '<option value="' + o.page + '">' + (o.level ? "  " : "") + esc(o.title) + "</option>").join(""));
+  suggestTags(data.quote_tags);
+  document.getElementById("hint").textContent = data.quotes_error ? "Quotes not shown: " + data.quotes_error : hint();
   document.getElementById("pages").innerHTML = data.pages.map((p) => '<section class="pg" data-page="' + p.page + '"><h2>' + kind + " " + p.page + (p.label ? " · printed " + esc(p.label) : "") + (p.section ? " · " + esc(p.section) : "") +
     '</h2><div class="text">' + highlighted(p) + "</div></section>").join("");
   const target = location.hash && document.querySelector(location.hash);
@@ -271,26 +129,31 @@ document.addEventListener("selectionchange", () => {
   const focus = sel && sel.focusNode && (sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement);
   const a = node && node.closest(".pg"), b = focus && focus.closest(".pg");
   if (!text || !a || !b) return;
-  selection = { text, page: Math.min(Number(a.dataset.page), Number(b.dataset.page)) };
+  // One request id per selection, so saving it twice (a retry, a double press) saves one quote; the same words
+  // selected somewhere else, or again once the bar has closed, are a new selection with a new id.
+  const page = Math.min(Number(a.dataset.page), Number(b.dataset.page));
+  const where = page + ":" + Math.min(sel.anchorOffset, sel.focusOffset) + ":" + text;
+  if (!selection || selection.where !== where) selection = { text, page, where, request_id: "reader-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) };
   document.getElementById("selected").textContent = text.length > 600 ? text.slice(0, 600) + "…" : text;
   document.getElementById("qmsg").textContent = text.length > 2000 ? "Too long: quotes are limited to 2,000 characters." : "";
   document.getElementById("qsave").disabled = !canWrite || text.length > 2000;
   if (!canWrite) document.getElementById("qmsg").textContent = "Sign in through Cloudflare Access to save quotes.";
   document.getElementById("savebar").style.display = "block";
 });
-document.getElementById("qcancel").addEventListener("click", () => { document.getElementById("savebar").style.display = "none"; window.getSelection().removeAllRanges(); });
+document.getElementById("qcancel").addEventListener("click", () => { document.getElementById("savebar").style.display = "none"; selection = null; window.getSelection().removeAllRanges(); });
 document.getElementById("qsave").addEventListener("click", async () => {
   if (!selection) return;
   try {
-    const out = await post("/api/quotes", { book_id: data.book_id, text: selection.text, page: selection.page, note: document.getElementById("qnote").value, labels: qtags.get() });
-    if (!out.saved) {
+    const out = await post("/api/books/" + encodeURIComponent(data.book_id) + "/quotes", { text: selection.text, page: selection.page, comment: document.getElementById("qnote").value, tags: qtags.get(), request_id: selection.request_id });
+    if (!out.saved && !out.already) {
       document.getElementById("qmsg").textContent = out.reason + (out.closest && out.closest.length ? " Closest: page " + out.closest.map((c) => c.page).join(", ") + "." : "");
       return;
     }
-    toast("Saved quote #" + out.quote.id + (out.exact ? "." : " (the book's exact wording was used)."));
+    toast(out.already ? "Already saved, as quote #" + out.quote.id + "." : "Saved quote #" + out.quote.id + " in quote-mcp" + (out.warnings.length ? ": " + out.warnings.join(" ") : "."));
     document.getElementById("savebar").style.display = "none";
     document.getElementById("qnote").value = "";
     qtags.set([]);
+    selection = null;
     window.getSelection().removeAllRanges();
     load();
   } catch (e) { document.getElementById("qmsg").textContent = e.message; }
@@ -298,7 +161,7 @@ document.getElementById("qsave").addEventListener("click", async () => {
 
 ME.then((me) => {
   canWrite = me.can_write;
-  document.getElementById("hint").textContent = canWrite ? "Select text to save it as a quote." : "Read-only: sign in through Cloudflare Access to save quotes.";
+  document.getElementById("hint").textContent = hint();
   qtags = tagEditor(document.getElementById("qtags"), [], canWrite);
   load();
 });`,
