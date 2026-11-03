@@ -79,7 +79,8 @@ For each chosen passage:
    `zotero`), `editions`, and `warnings`.
 3. Once per book, corpus-mcp's `cite_passage` with `book.book_id` and the
    same page, for the filing data: `bibtex`, `isbn`, `proposed_citekey`, and
-   its `warnings`.
+   its `warnings`. If citing a Zotero edition, also obtain that edition's
+   BibTeX record for the bibliography.
 4. Settle the citekey (below).
 
 #### Citekeys and Zotero filing
@@ -93,7 +94,9 @@ For each chosen passage:
   `Citation Key:` line in `extra`). Then `pin_citekey` (corpus-mcp) with
   `book.book_id` and the key.
 - **Several editions** (`editions` is set): this rule overrides the bullets above; cite the edition the page belongs
-  to, by that edition's `citekey`, and say which one in the footnote.
+  to, by that edition's `citekey`, only when its BibTeX record will be in the
+  bibliography, and say which one in the footnote. Otherwise use the key from
+  `cite_passage`'s BibTeX entry.
 - **Not in Zotero** (`book.zotero` is null) — by `file`:
   - `auto`:
     1. Look first: `zotero_search_items` for the title and first author. The
@@ -142,7 +145,9 @@ Start from [template.md](template.md). Rules:
   `corpus-unpinned: [keys]` only when some keys aren't pinned.
 - **Bibliography.** With `bib=generate`, write `references.bib` from each
   book's `cite_passage` `bibtex` (call it again after pinning so the entry
-  carries the pinned key), one entry per book. With a path, leave the file alone.
+  carries the pinned key), or from the selected Zotero edition's BibTeX when
+  citing that edition, one entry per book. With a path, follow the `bib` switch
+  rules above for adding or reporting missing entries.
 - **Outline** (`draft=outline`): the same front matter, headings, markers,
   quotes, and citations, with bullet notes in place of prose.
 
