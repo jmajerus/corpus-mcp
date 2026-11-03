@@ -66,6 +66,12 @@ read-only again.
 | `http://corpus-mcp.localdomain:8001` | The public catalogue's own port (`CORPUS_PUBLIC_PORT`): a preview, with D1 |
 | `https://corpus.majerus.us` | The published public catalogue: a copy in D1, read-only |
 
+`GET /api/holdings/books` is holdings-mcp's books feed
+([dev brief](dev-briefs/holdings-and-quotes.md) §1): every indexed book except
+excluded ones, with its real citekey and the Zotero item it's matched to, and
+a strong ETag, so a poll that finds nothing new is a 304. It is served on the
+LAN only; through the tunnel it is a 403, whoever signs in.
+
 ## Calibre jobs
 
 Calibre changes always run as preview, then apply (see
