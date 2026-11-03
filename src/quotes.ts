@@ -10,7 +10,7 @@ import { type BookRow, type Corpus, ToolError, citePassage, getBook, toFtsQuery 
  */
 
 export const MAX_QUOTE = 2000;
-const CONTEXT = 40;
+export const CONTEXT = 40;
 
 const QUOTE_MARKS: [RegExp, string][] = [
   [/[‘’‚‛′ʼ]/g, "'"],
@@ -56,7 +56,7 @@ function lowerSameLength(text: string): string {
   return out;
 }
 
-interface PageText { page_index: number; label: string | null; section_path: string | null; text: string }
+export interface PageText { page_index: number; label: string | null; section_path: string | null; text: string }
 
 /**
  * Stored text as running prose. The extractor keeps each text block as a paragraph, and some EPUBs set
@@ -108,7 +108,7 @@ export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
   };
 }
 
-function pagesOf(db: DB, bookId: string, from: number, to: number): PageText[] {
+export function pagesOf(db: DB, bookId: string, from: number, to: number): PageText[] {
   return db.prepare("SELECT page_index, label, section_path, text FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index")
     .all(bookId, Math.max(0, from), to) as PageText[];
 }
@@ -118,7 +118,7 @@ function pagesOf(db: DB, bookId: string, from: number, to: number): PageText[] {
  * side (a quote crossing a page break), then two pages either side, then pages the full-text index
  * suggests anywhere in the book.
  */
-function find(db: DB, book: BookRow, page: number | undefined, text: string): QuoteAnchor | null {
+export function find(db: DB, book: BookRow, page: number | undefined, text: string): QuoteAnchor | null {
   const tried = new Set<string>();
   const attempt = (from: number, to: number) => {
     const key = `${from}-${to}`;
@@ -147,7 +147,7 @@ function find(db: DB, book: BookRow, page: number | undefined, text: string): Qu
 }
 
 /** Passages near the given words, for a quote that could not be found as written. */
-function suggestions(c: Corpus, book: BookRow, text: string) {
+export function suggestions(c: Corpus, book: BookRow, text: string) {
   const words = normalizeQuote(text).split(/[^\p{L}\p{N}']+/u).filter((w) => w.length > 3).slice(0, 8);
   if (!words.length) return [];
   return c.db.prepare(`
@@ -373,8 +373,9 @@ export function reanchorQuotes(db: DB, data: DataStore): { reanchored: number; o
       recordChanges(data, [{ kind: "quote_reanchored", source: "calibre", book_id: book.id, calibre_uuid: q.calibre_uuid, title: q.title, detail: `#${q.id}` }]);
       reanchored++;
     } else {
-      // Remember which file it failed against, so the next scan does not search the same file again.
-      data.prepare("UPDATE quotes SET status = 'orphaned', sha256 = ?, updated_at = ? WHERE id = ?").run(book?.sha256 ?? q.sha256, now, q.id);
+      // Remember which file it failed against, so the next scan does not search the same file again; with no
+      // book, none, so the book coming back (even with the same file) is searched.
+      data.prepare("UPDATE quotes SET status = 'orphaned', sha256 = ?, updated_at = ? WHERE id = ?").run(book?.sha256 ?? null, now, q.id);
       if (q.status !== "orphaned") {
         recordChanges(data, [{ kind: "quote_orphaned", source: "calibre", book_id: q.book_id, calibre_uuid: q.calibre_uuid, title: q.title, detail: `#${q.id}` }]);
         orphaned++;

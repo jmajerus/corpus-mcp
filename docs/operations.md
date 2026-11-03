@@ -72,6 +72,15 @@ excluded ones, with its real citekey and the Zotero item it's matched to, and
 a strong ETag, so a poll that finds nothing new is a 304. It is served on the
 LAN only; through the tunnel it is a 403, whoever signs in.
 
+quote-mcp's quotes are checked and anchored here, on the LAN only in the same
+way (§2 of the brief; [src/anchors.ts](../src/anchors.ts)):
+`POST /api/verify` checks a passage against a book's text without saving
+anything, `POST /api/anchors` stores where a quote-mcp quote is (checked
+against the book first), `DELETE /api/anchors/<quote id>` removes one, and
+`GET /api/anchors/changes?since=N` numbers every change, including those
+each scan makes when it finds anchors again or orphans them. The feed's `log`
+id changes only when the numbering starts over.
+
 ## Calibre jobs
 
 Calibre changes always run as preview, then apply (see
