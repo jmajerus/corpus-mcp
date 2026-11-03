@@ -1,6 +1,6 @@
 # holdings-mcp, and quotes moving to quote-mcp
 
-**Status: proposed 2026-11-02. Nothing here is built. The plan of record is
+**Status: §1, §2, and §3.1–§3.3 built; §3.4 proposed. The plan of record is
 holdings-mcp's [PLAN.md](https://github.com/jmajerus/holdings-mcp/blob/main/PLAN.md).**
 
 In corpus-mcp: §1, the books feed, is built (`GET /api/holdings/books`, in
