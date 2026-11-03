@@ -78,6 +78,7 @@ mark { background: color-mix(in srgb, var(--bar) 22%, transparent); color: inher
 const id = decodeURIComponent(location.pathname.split("/").slice(-2)[0]);
 const COUNT = 4;
 let data, start = Number(new URLSearchParams(location.search).get("page")) || 1, canWrite = false, selection = null, qtags;
+const hint = () => (canWrite ? "Select text to save it as a quote." : "Read-only: sign in through Cloudflare Access to save quotes.");
 
 function highlighted(p) {
   // Saved quotes on this page, cut from the stored text by their offsets.
@@ -106,8 +107,8 @@ async function load() {
   document.getElementById("next").disabled = data.end >= data.page_count;
   const chapter = document.getElementById("chapter");
   if (chapter.options.length <= 1) chapter.insertAdjacentHTML("beforeend", data.outline.map((o) => '<option value="' + o.page + '">' + (o.level ? "  " : "") + esc(o.title) + "</option>").join(""));
-  suggestTags(data.quotes.flatMap((q) => q.tags));
-  if (data.quotes_error) document.getElementById("hint").textContent = "Quotes not shown: " + data.quotes_error;
+  suggestTags(data.quote_tags);
+  document.getElementById("hint").textContent = data.quotes_error ? "Quotes not shown: " + data.quotes_error : hint();
   document.getElementById("pages").innerHTML = data.pages.map((p) => '<section class="pg" data-page="' + p.page + '"><h2>' + kind + " " + p.page + (p.label ? " · printed " + esc(p.label) : "") + (p.section ? " · " + esc(p.section) : "") +
     '</h2><div class="text">' + highlighted(p) + "</div></section>").join("");
   const target = location.hash && document.querySelector(location.hash);
@@ -118,7 +119,7 @@ document.getElementById("prev").addEventListener("click", () => go(start - COUNT
 document.getElementById("next").addEventListener("click", () => go(start + COUNT));
 document.getElementById("goto").addEventListener("change", (e) => go(Number(e.target.value) || 1));
 document.getElementById("chapter").addEventListener("change", (e) => { if (e.target.value) go(Number(e.target.value)); });
-document.getElementById("pages").addEventListener("click", (e) => { const m = e.target.closest("mark[data-quote]"); if (m && !String(window.getSelection())) location.href = quoteAdmin("/admin/quotes/" + m.dataset.quote); });
+document.getElementById("pages").addEventListener("click", (e) => { const m = e.target.closest("mark[data-quote]"); if (m && !String(window.getSelection())) location.href = "/admin/quotes/" + m.dataset.quote; });
 
 // Select text in the pages, then save it: the server checks it against the book, as it does for agents.
 document.addEventListener("selectionchange", () => {
@@ -128,15 +129,18 @@ document.addEventListener("selectionchange", () => {
   const focus = sel && sel.focusNode && (sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement);
   const a = node && node.closest(".pg"), b = focus && focus.closest(".pg");
   if (!text || !a || !b) return;
-  // One request id per selection, so saving it twice (a retry, a double press) saves one quote.
-  if (!selection || selection.text !== text) selection = { text, page: Math.min(Number(a.dataset.page), Number(b.dataset.page)), request_id: "reader-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) };
+  // One request id per selection, so saving it twice (a retry, a double press) saves one quote; the same words
+  // selected somewhere else, or again once the bar has closed, are a new selection with a new id.
+  const page = Math.min(Number(a.dataset.page), Number(b.dataset.page));
+  const where = page + ":" + Math.min(sel.anchorOffset, sel.focusOffset) + ":" + text;
+  if (!selection || selection.where !== where) selection = { text, page, where, request_id: "reader-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) };
   document.getElementById("selected").textContent = text.length > 600 ? text.slice(0, 600) + "…" : text;
   document.getElementById("qmsg").textContent = text.length > 2000 ? "Too long: quotes are limited to 2,000 characters." : "";
   document.getElementById("qsave").disabled = !canWrite || text.length > 2000;
   if (!canWrite) document.getElementById("qmsg").textContent = "Sign in through Cloudflare Access to save quotes.";
   document.getElementById("savebar").style.display = "block";
 });
-document.getElementById("qcancel").addEventListener("click", () => { document.getElementById("savebar").style.display = "none"; window.getSelection().removeAllRanges(); });
+document.getElementById("qcancel").addEventListener("click", () => { document.getElementById("savebar").style.display = "none"; selection = null; window.getSelection().removeAllRanges(); });
 document.getElementById("qsave").addEventListener("click", async () => {
   if (!selection) return;
   try {
@@ -149,6 +153,7 @@ document.getElementById("qsave").addEventListener("click", async () => {
     document.getElementById("savebar").style.display = "none";
     document.getElementById("qnote").value = "";
     qtags.set([]);
+    selection = null;
     window.getSelection().removeAllRanges();
     load();
   } catch (e) { document.getElementById("qmsg").textContent = e.message; }
@@ -156,7 +161,7 @@ document.getElementById("qsave").addEventListener("click", async () => {
 
 ME.then((me) => {
   canWrite = me.can_write;
-  document.getElementById("hint").textContent = canWrite ? "Select text to save it as a quote." : "Read-only: sign in through Cloudflare Access to save quotes.";
+  document.getElementById("hint").textContent = hint();
   qtags = tagEditor(document.getElementById("qtags"), [], canWrite);
   load();
 });`,

@@ -287,11 +287,13 @@ it("shows a book's quotes from quote-mcp in the reader, and saves selections the
   const anchor = { sha256: file.sha256, start_page: 0, start_offset: 10, end_page: 0, end_offset: 33 };
   quoteMcpQuotes = [
     { id: 7, comment: "why", tags: ["ties"], flags: [], admin_path: "/admin/quotes/7", anchor },
-    { id: 8, comment: null, tags: [], flags: ["anchor_lost"], admin_path: "/admin/quotes/8", anchor: { ...anchor, sha256: "an-earlier-file" } },
+    { id: 8, comment: null, tags: ["lost"], flags: ["anchor_lost"], admin_path: "/admin/quotes/8", anchor: { ...anchor, sha256: "an-earlier-file" } },
   ];
   const reader = await (await fetch(`${base}/api/books/main%3A1/pages?start=1&count=2`)).json();
   expect(reader).toMatchObject({ book_id: "main:1", start: 1, end: 1 });
   expect(reader.quotes).toEqual([{ id: 7, start_page: 1, start_offset: 10, end_page: 1, end_offset: 33, comment: "why", tags: ["ties"], flags: [], admin_path: "/admin/quotes/7" }]);
+  // Suggestions come from all the book's quotes, highlighted or not.
+  expect(reader.quote_tags).toEqual(["lost", "ties"]);
 
   expect((await asAdmin("/api/books/main%3A1/quotes", { text: "novel information" }, {})).status).toBe(401);
   const saved = await (await asAdmin("/api/books/main%3A1/quotes", { text: "novel information", page: 1, comment: "c", tags: ["t"], request_id: "r1" })).json();

@@ -353,9 +353,9 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
   };
   // The reader's highlights: the book's quotes from quote-mcp, or none, with why, when it can't be asked.
   const quotesForReader = async (book: BookRow, from: number, to: number) => {
-    if (!admin.quoteMcpUrl) return { quotes: [], quotes_error: "quote-mcp isn't set up here (CORPUS_QUOTE_MCP_URL)." };
-    try { return { quotes: await readerQuotes(admin.quoteMcpUrl, book, from, to) }; }
-    catch (error) { if (error instanceof QuoteMcpError) return { quotes: [], quotes_error: error.message }; throw error; }
+    if (!admin.quoteMcpUrl) return { quotes: [], quote_tags: [], quotes_error: "quote-mcp isn't set up here (CORPUS_QUOTE_MCP_URL)." };
+    try { const { quotes, tags } = await readerQuotes(admin.quoteMcpUrl, book, from, to); return { quotes, quote_tags: tags }; }
+    catch (error) { if (error instanceof QuoteMcpError) return { quotes: [], quote_tags: [], quotes_error: error.message }; throw error; }
   };
   const html = (body: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(body);
   try {
@@ -385,7 +385,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const host = String(req.headers.host ?? "");
       // Through the tunnel the request reaches here as http, so the scheme comes from Cloudflare's header.
       const scheme = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() || url.protocol.replace(/:$/, "");
-      const base = /^corpus-mcp[.:]/.test(host) ? `${scheme}://${host.replace(/^corpus-mcp/, "quote-mcp")}` : admin.quoteMcpUrl;
+      const base = !admin.quoteMcpUrl ? undefined : /^corpus-mcp[.:]/.test(host) ? `${scheme}://${host.replace(/^corpus-mcp/, "quote-mcp")}` : admin.quoteMcpUrl;
       if (!base) sendJson(res, 404, { error: "Quotes are kept in quote-mcp, which isn't set up here (CORPUS_QUOTE_MCP_URL)." });
       else res.writeHead(302, { location: base + path + url.search }).end();
     }
