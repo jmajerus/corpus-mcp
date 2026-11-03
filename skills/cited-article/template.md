@@ -7,7 +7,7 @@ corpus-project: slug
 
 Opening paragraph: the claim, and why the passage matters to it.
 
-<!-- corpus:quote 1 -->
+<!-- quote 1 -->
 > The passage, exactly as cite_quote returns it, wrapped across lines.[^q1]
 > [@citekey, chap. 2]
 
