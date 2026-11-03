@@ -92,8 +92,8 @@ For each chosen passage:
   (`zotero_get_item_metadata` format `json`: `citationKey`, or a
   `Citation Key:` line in `extra`). Then `pin_citekey` (corpus-mcp) with
   `book.book_id` and the key.
-- **Several editions** (`editions` is set): cite the edition the page belongs
-  to, by its `citekey`, and say which one in the footnote.
+- **Several editions** (`editions` is set): this rule overrides the bullets above; cite the edition the page belongs
+  to, by that edition's `citekey`, and say which one in the footnote.
 - **Not in Zotero** (`book.zotero` is null) — by `file`:
   - `auto`:
     1. Look first: `zotero_search_items` for the title and first author. The
