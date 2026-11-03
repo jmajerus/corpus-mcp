@@ -282,3 +282,15 @@ it("accepts a team-signed token from any Access application at the HTTP boundary
   expect((await request("/mcp", otherToken)).status).toBe(403);
   expect((await request("/mcp", token)).status).toBe(405);
 });
+
+it("serves the holdings feed on the LAN, with a 304 for an unchanged ETag, and never through the tunnel", async () => {
+  const res = await fetch(`${base}/api/holdings/books`);
+  expect(res.status).toBe(200);
+  const etag = res.headers.get("etag")!;
+  expect(etag).toMatch(/^"[0-9a-f]{32}"$/);
+  expect(await res.json()).toMatchObject({ version: 1, books: [{ book_id: "main:1", title: "Networks", has_text: true }] });
+  const again = await fetch(`${base}/api/holdings/books`, { headers: { "if-none-match": etag } });
+  expect([again.status, again.headers.get("etag")]).toEqual([304, etag]);
+  const tunnelled = await fetch(`${base}/api/holdings/books`, { headers: { Host: "public.example", "cf-ray": "test", "cf-access-jwt-assertion": token } });
+  expect(tunnelled.status).toBe(403);
+});

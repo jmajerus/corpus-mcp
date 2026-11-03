@@ -37,6 +37,7 @@ import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
+import { holdingsBooksResponse } from "./holdings.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
@@ -506,6 +507,12 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       sendJson(res, 200, linkZotero(c, { book_id: body.book_id, key: body.key, action: oneOf(body.action ?? "", ["confirm", "reject", "clear"] as const) ?? "confirm" }, by));
     }
     else if (req.method === "GET" && path === "/api/shelves") sendJson(res, 200, listShelves(c));
+    else if (req.method === "GET" && path === "/api/holdings/books") {
+      const { body, etag } = holdingsBooksResponse(c, { excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library });
+      const headers = { "content-type": "application/json", "cache-control": "no-cache", etag };
+      if (String(req.headers["if-none-match"] ?? "").split(/\s*,\s*/).includes(etag)) res.writeHead(304, headers).end();
+      else res.writeHead(200, headers).end(body);
+    }
     else if (req.method === "GET" && path === "/api/changes") {
       const p = url.searchParams;
       const text = (name: string) => p.get(name)?.trim() || undefined;
@@ -712,7 +719,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     if (!url || serveFavicon(req, res, url)) return;
     // The intake has its own service-token identity check in serveWeb.
     const intake = req.method === "POST" && url.pathname === "/api/intake/vocabulary";
-    try { if (!intake) await authorizeRequest(req, url.pathname, requestAccess, options.accessKeys); }
+    let via: "lan" | "access" | undefined;
+    try { if (!intake) via = (await authorizeRequest(req, url.pathname, requestAccess, options.accessKeys)).via; }
     catch (error) {
       const status = error instanceof AccessError ? error.status : 500;
       res.writeHead(status, {"content-type":"application/json", "cache-control":"no-store"}).end(JSON.stringify({error:error instanceof AccessError ? error.message : "Authentication failed."}));
@@ -727,6 +735,11 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     if (url.pathname === "/health") {
       const books = db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get();
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, books, deployed: readDeployed(fullConfig), ...(replica ? { replica: replica() } : {}) }));
+      return;
+    }
+    // Feeds for the other LAN services: never through the tunnel, whoever signs in.
+    if (url.pathname.startsWith("/api/holdings/") && via !== "lan") {
+      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ error: "This feed is served on the LAN only." }));
       return;
     }
     if (url.pathname === "/review" || url.pathname === "/admin" || url.pathname.startsWith("/admin/") || url.pathname.startsWith("/api/")) {
