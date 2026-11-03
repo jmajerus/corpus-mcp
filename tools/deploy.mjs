@@ -225,12 +225,13 @@ CORPUS_DB=$(env_value CORPUS_DB); CORPUS_PORT=$(env_value CORPUS_PORT)
 previous=$(readlink /opt/corpus-mcp/current || true)
 echo "previous=$previous"
 # A release's units, the dashboard's "Refresh now" (polkit), and the refresh log's rotation: installed from
-# the release that is current, after the switch, so a rollback puts the previous release's back.
+# the release that is current, after the switch, so a rollback puts the previous release's back. Chained,
+# so it fails at the first step that does even where set -e doesn't apply (the rollback tests it in an if).
 install_units() {
   install -m 0644 "$1"/deploy/corpus-mcp.service "$1"/deploy/corpus-refresh.service "$1"/deploy/corpus-refresh.timer \
-    "$1"/deploy/corpus-backup.service "$1"/deploy/corpus-backup.timer /etc/systemd/system/
-  if [ -d /etc/polkit-1/rules.d ]; then install -m 0644 "$1"/deploy/50-corpus-refresh.rules /etc/polkit-1/rules.d/; fi
-  if [ -d /etc/logrotate.d ]; then install -m 0644 "$1"/deploy/corpus-mcp.logrotate /etc/logrotate.d/corpus-mcp; fi
+    "$1"/deploy/corpus-backup.service "$1"/deploy/corpus-backup.timer /etc/systemd/system/ &&
+  { [ ! -d /etc/polkit-1/rules.d ] || install -m 0644 "$1"/deploy/50-corpus-refresh.rules /etc/polkit-1/rules.d/; } &&
+  { [ ! -d /etc/logrotate.d ] || install -m 0644 "$1"/deploy/corpus-mcp.logrotate /etc/logrotate.d/corpus-mcp; } &&
   systemctl daemon-reload
 }
 # From the switch on, any failure (set -e included) puts the previous release back, units and all.
@@ -240,9 +241,12 @@ rollback() {
   journalctl -u corpus-mcp.service -n 20 --no-pager || true
   if [ -n "$previous" ]; then
     ln -sfn "$previous" /opt/corpus-mcp/current
-    install_units "$previous" || true
-    systemctl restart corpus-mcp.service || true
-    echo "rolled_back=$previous"
+    if install_units "$previous"; then
+      systemctl restart corpus-mcp.service || echo "the previous release didn't restart"
+      echo "rolled_back=$previous"
+    else
+      echo "rollback_incomplete=$previous: current points at it, but its units weren't all reinstalled"
+    fi
   fi
   exit "$status"
 }
