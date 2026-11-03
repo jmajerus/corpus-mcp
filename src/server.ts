@@ -23,7 +23,8 @@ import { CHANGES_HTML } from "./web/changes.js";
 import { DASHBOARD_HTML } from "./web/dashboard.js";
 import { JOB_HTML, JOBS_HTML } from "./web/jobs.js";
 import { PROPOSALS_HTML } from "./web/proposals.js";
-import { QUOTE_HTML, QUOTES_HTML, READER_HTML } from "./web/quotes.js";
+import { READER_HTML } from "./web/quotes.js";
+import { QuoteMcpError, readerQuotes, saveReaderQuote } from "./quoteMcp.js";
 import { ABOUT_HTML } from "./web/about.js";
 import { TAXONOMY_HTML } from "./web/taxonomy.js";
 import { ZOTERO_HTML } from "./web/zotero.js";
@@ -41,9 +42,9 @@ import { etagMatches, holdingsBooksResponse } from "./holdings.js";
 import { anchorChanges, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
-import { citeQuote, deleteQuote, getQuote, quotesOnPages, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
+import { citeQuote, deleteQuote, getQuote, saveQuote, searchQuotes, updateQuote } from "./quotes.js";
 import {
-  type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
+  type BookRow, type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
   getBook, searchCorpus, tagCleanupPlan, unpinCitekey,
 } from "./tools.js";
 
@@ -396,17 +397,22 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     }
     return result.identity.email ?? result.identity.subject;
   };
+  // The reader's highlights: the book's quotes from quote-mcp, or none, with why, when it can't be asked.
+  const quotesForReader = async (book: BookRow, from: number, to: number) => {
+    if (!admin.quoteMcpUrl) return { quotes: [], quotes_error: "quote-mcp isn't set up here (CORPUS_QUOTE_MCP_URL)." };
+    try { return { quotes: await readerQuotes(admin.quoteMcpUrl, book, from, to) }; }
+    catch (error) { if (error instanceof QuoteMcpError) return { quotes: [], quotes_error: error.message }; throw error; }
+  };
   const html = (body: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(body);
   try {
     const path = url.pathname;
     const pages: Record<string, string> = {
       "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
-      "/admin/quotes": QUOTES_HTML, "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
+      "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
     const termPath = path.match(/^\/api\/taxonomy\/terms(?:\/([^/]+))?$/);
-    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages)?$/);
-    const quotePath = path.match(/^\/api\/quotes\/(\d+)(\/delete)?$/);
+    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "POST" && path === "/api/intake/vocabulary") {
       // The vocabulary's owner pushes it here with its own service token, which unlocks nothing else.
@@ -420,7 +426,15 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     else if (req.method === "GET" && pages[path]) html(pages[path]);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+$/.test(path)) html(BOOK_HTML);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+\/read$/.test(path)) html(READER_HTML);
-    else if (req.method === "GET" && /^\/admin\/quotes\/\d+$/.test(path)) html(QUOTE_HTML);
+    else if (req.method === "GET" && /^\/admin\/quotes(?:\/\d+)?$/.test(path)) {
+      // Quotes are kept in quote-mcp: its admin pages, on this request's host with quote-mcp's name.
+      const host = String(req.headers.host ?? "");
+      // Through the tunnel the request reaches here as http, so the scheme comes from Cloudflare's header.
+      const scheme = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() || url.protocol.replace(/:$/, "");
+      const base = /^corpus-mcp[.:]/.test(host) ? `${scheme}://${host.replace(/^corpus-mcp/, "quote-mcp")}` : admin.quoteMcpUrl;
+      if (!base) sendJson(res, 404, { error: "Quotes are kept in quote-mcp, which isn't set up here (CORPUS_QUOTE_MCP_URL)." });
+      else res.writeHead(302, { location: base + path + url.search }).end();
+    }
     else if (req.method === "GET" && bookPath?.[2] === "/pages") {
       const book = getBook(c, decodeURIComponent(bookPath[1]));
       if (book.status !== "indexed" || !book.page_count) throw new ToolError(`${book.id} has no indexed text.`);
@@ -437,37 +451,19 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
           .map((o) => ({ ...(o as { level: number; title: string; start_page: number }), page: (o as { start_page: number }).start_page + 1 })),
         start, end,
         pages: pages.map((p) => ({ page: p.page_index + 1, label: p.label, section: p.section_path, text: p.text })),
-        quotes: quotesOnPages(c, book, start - 1, end - 1),
+        ...(await quotesForReader(book, start - 1, end - 1)),
       });
     }
-    else if (req.method === "GET" && path === "/api/quotes") {
-      const p = url.searchParams;
-      const text = (name: string) => p.get(name)?.trim() || undefined;
-      sendJson(res, 200, searchQuotes(c, {
-        q: text("q"), book: text("book"), author: text("author"), category: text("category"), label: text("label"),
-        status: oneOf(p.get("status"), ["verified", "orphaned"] as const), by: text("by"), since: text("since"),
-        limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
-      }));
-    } else if (req.method === "GET" && quotePath && !quotePath[2]) sendJson(res, 200, getQuote(c, Number(quotePath[1])));
-    else if (req.method === "POST" && path === "/api/quotes") {
+    else if (req.method === "POST" && bookPath?.[2] === "/quotes") {
       const by = await writer();
       if (by === null) return;
-      const body = (await readJson(req)) as { book_id?: string; text?: string; page?: number; note?: string; labels?: unknown };
-      if (!body.book_id || !body.text) throw new ToolError("Send book_id and text.");
-      const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
-      sendJson(res, 200, saveQuote(c, {
-        book_id: body.book_id, text: body.text, page: body.page, note: body.note, labels: list(body.labels),
-      }, by, "admin"));
-    } else if (req.method === "POST" && quotePath) {
-      const by = await writer();
-      if (by === null) return;
-      const id = Number(quotePath[1]);
-      if (quotePath[2]) sendJson(res, 200, deleteQuote(c, id, by, "admin"));
-      else {
-        const body = (await readJson(req)) as { note?: string | null; labels?: unknown };
-        const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
-        sendJson(res, 200, updateQuote(c, { id, note: body.note, labels: list(body.labels) }, by, "admin"));
-      }
+      if (!admin.quoteMcpUrl) throw new ToolError("Saving quotes needs quote-mcp (CORPUS_QUOTE_MCP_URL).");
+      const book = getBook(c, decodeURIComponent(bookPath[1]));
+      const body = (await readJson(req)) as { text?: string; page?: number; comment?: string; tags?: unknown; request_id?: string };
+      if (!body.text) throw new ToolError("Send text.");
+      sendJson(res, 200, await saveReaderQuote(admin.quoteMcpUrl, book, {
+        text: body.text, page: body.page, comment: body.comment || undefined, tags: Array.isArray(body.tags) ? body.tags.map(String) : undefined, request_id: body.request_id,
+      }, by));
     }
     else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);
     else if (req.method === "GET" && path === "/api/books") {
@@ -591,6 +587,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     } else sendJson(res, 404, { error: "Not found." });
   } catch (error) {
     if (error instanceof ToolError) sendJson(res, 400, { error: error.message });
+    else if (error instanceof QuoteMcpError) sendJson(res, 502, { error: error.message });
     else {
       console.error("web request failed", error);
       sendJson(res, 500, { error: "Internal error." });

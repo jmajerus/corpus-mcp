@@ -19,6 +19,8 @@ export interface AdminConfig {
   syncStatus: string;
   /** Calibre-Web's address, for links to a book's page there (books of `shelvesLibrary` only). */
   calibreWebUrl?: string;
+  /** quote-mcp on the LAN, where the reader's quotes are kept (src/quoteMcp.ts); undefined is off. */
+  quoteMcpUrl?: string;
 }
 
 const DEFAULT_NEIGHBORS = "zotero-mcp=http://zotero-mcp.localdomain:8000/mcp;calibre-web=http://calibre-web.localdomain:8083/;authoring=http://authoring.localdomain:8787/";
@@ -135,6 +137,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       refreshLog: env.CORPUS_REFRESH_LOG ?? "/var/lib/corpus-mcp/refresh.log",
       syncStatus: env.CORPUS_SYNC_STATUS ?? "/var/lib/corpus-mcp/sync-status.json",
       calibreWebUrl: env.CORPUS_CALIBRE_WEB_URL ?? "http://calibre-web.localdomain:8083",
+      quoteMcpUrl: /^off$/i.test(env.CORPUS_QUOTE_MCP_URL ?? "") ? undefined : (env.CORPUS_QUOTE_MCP_URL || "http://quote-mcp.localdomain:8000").replace(/\/+$/, ""),
     },
     public: publicConfig(env),
     host: env.CORPUS_HOST ?? "0.0.0.0",
