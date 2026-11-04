@@ -51,7 +51,7 @@ indexed book:
   "books": [{
     "calibre_uuid": "f2b79da7-…", "book_id": "main:223", "library": "main",
     "title": "Learning Systems Thinking", "authors": ["Diana Montalion"], "year": 2024,
-    "formats": ["pdf"], "has_text": true,
+    "formats": ["pdf"], "has_text": true, "isbns": ["9781718503984"],
     "citekey": "montalion2024learning", "citekey_source": "pinned",
     "zotero": { "library": "users/123", "key": "ABCD1234" }
   }]
@@ -59,6 +59,9 @@ indexed book:
 ```
 
 - `has_text` is false for a book with no text layer.
+- `isbns` is Calibre's ISBN when its check digit holds, as digits (and a
+  final X) with no hyphens, ISBN-10 or ISBN-13 as Calibre holds it. ISBNs
+  only seen printed in the book aren't sent.
 - `citekey` is a real key only (pinned, Calibre's, or the matched item's),
   never a proposed one, as in the public key list.
 - `zotero` is the matched item, or null. Candidates a person hasn't

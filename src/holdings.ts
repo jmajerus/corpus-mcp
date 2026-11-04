@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { pinnedByUuid } from "./data.js";
+import { validIsbn } from "./isbn.js";
 import { type BookRow, type Corpus, effectiveCitekey } from "./tools.js";
 import { zoteroMatch } from "./zotero.js";
 
@@ -8,7 +9,9 @@ import { zoteroMatch } from "./zotero.js";
  * keys, as a snapshot with a strong ETag, so a poll that finds nothing new is a 304. Keys are real keys only,
  * as in the public key list: a Calibre or pinned citekey, else the matched Zotero item's; never a proposed
  * one. `zotero` is the item the book is matched to (confirmed, filed with the book's UUID, or the one item
- * with its ISBN), never a candidate a person hasn't confirmed. Books with an excluded tag aren't sent.
+ * with its ISBN), never a candidate a person hasn't confirmed. `isbns` is Calibre's ISBN when its check
+ * digit holds, as digits with no hyphens; never one only seen printed in the book, which a person hasn't
+ * confirmed either. Books with an excluded tag aren't sent.
  */
 
 export const HOLDINGS_VERSION = 1;
@@ -24,6 +27,7 @@ export interface HoldingsBook {
   formats: string[];
   /** False for a book with no text layer (fewer than 20 characters a page). */
   has_text: boolean;
+  isbns: string[];
   citekey: string | null;
   citekey_source: "calibre" | "pinned" | "zotero" | null;
   zotero: { library: string; key: string; matched_by: string } | null;
@@ -50,10 +54,12 @@ export function holdingsBook(c: Corpus, b: BookRow, zoteroLibrary?: string): Hol
       if (!citekey && match.citekey) ({ citekey, citekey_source } = { citekey: match.citekey, citekey_source: "zotero" });
     }
   }
+  const isbn = b.isbn ? validIsbn(b.isbn) : null;
   return {
     calibre_uuid: b.uuid, book_id: b.id, library: b.library, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year,
     formats: b.format ? [b.format] : [],
     has_text: hasText(b),
+    isbns: isbn ? [isbn] : [],
     citekey, citekey_source, zotero,
   };
 }

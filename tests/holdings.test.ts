@@ -17,8 +17,8 @@ const o = { excludeTags: ["private"], zoteroLibrary: "users/1" };
 beforeAll(() => {
   root = tempDir();
   makeLibrary(root, "main", [
-    { id: 1, title: "Networks", authors: ["Ann Author"], pubdate: "2001-01-01", files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } },
-    { id: 2, title: "Crowds", authors: ["Bob Writer"], pubdate: "1999-01-01", files: { pdf: makePdf({ pages: [["Crowds and their moods"]] }) } },
+    { id: 1, title: "Networks", authors: ["Ann Author"], pubdate: "2001-01-01", isbn: "978-0-306-40615-7", files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } },
+    { id: 2, title: "Crowds", authors: ["Bob Writer"], pubdate: "1999-01-01", isbn: "978-0-306-40615-8", files: { pdf: makePdf({ pages: [["Crowds and their moods"]] }) } },
     { id: 3, title: "Diary", authors: ["Cy Self"], tags: ["private"], files: { pdf: makePdf({ pages: [["Not for anyone"]] }) } },
     { id: 4, title: "Patterns", authors: ["Dee Maker"], pubdate: "2010-01-01", files: { pdf: makePdf({ pages: [[""]] }) } },
   ]);
@@ -53,8 +53,10 @@ it("sends every book but the private ones, with real keys and confirmed matches 
   const [networks, crowds, patterns] = feed.books;
   expect(networks).toEqual({
     calibre_uuid: "uuid-1", book_id: "main:1", library: "main", title: "Networks", authors: ["Ann Author"], year: 2001,
-    formats: ["pdf"], has_text: true, citekey: "author2001networks", citekey_source: "pinned", zotero: null,
+    formats: ["pdf"], has_text: true, isbns: ["9780306406157"], citekey: "author2001networks", citekey_source: "pinned", zotero: null,
   });
+  // A failed check digit isn't sent, and a book with no ISBN has an empty list.
+  expect([crowds.isbns, patterns.isbns]).toEqual([[], []]);
   expect(crowds).toMatchObject({ citekey: "writer1999crowds", citekey_source: "zotero", zotero: { library: "users/1", key: "ITEM2", matched_by: "calibre_uuid" } });
   // A candidate isn't a match, and a proposed citekey isn't a key.
   expect(patterns).toMatchObject({ has_text: false, citekey: null, citekey_source: null, zotero: null });
