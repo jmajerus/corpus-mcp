@@ -31,16 +31,22 @@ export function installVocabulary(c: Corpus, body: unknown): { status: number; b
  */
 export async function addTerm(c: Corpus, args: ProposeArgs, actor: string) {
   if (!c.terminology) throw new ToolError("New terms are proposed in terminology-mcp, which this server doesn't follow (CORPUS_TERMINOLOGY_URL).");
-  const parent = c.vocabulary.toSlugPath(args.parent.trim()).toLowerCase();
-  if (!c.vocabulary.labelFor(parent)) throw new ToolError(`Parent "${args.parent}" is not a term. Use get_tag_vocabulary for the terms.`);
   // A parent the follower hasn't seen yet may be new there: catch up once before giving up.
-  let parentId = c.terminology.termIdForTag(parent);
-  if (!parentId) await c.terminology.sync().catch(() => {});
-  parentId ??= c.terminology.termIdForTag(parent);
-  if (!parentId) throw new ToolError(`"${parent}" isn't in terminology-mcp's cc-subjects (${c.terminology.status().error ?? "not synced yet"}).`);
+  const resolve = () => {
+    const tag = c.vocabulary.toSlugPath(args.parent.trim()).toLowerCase();
+    return { tag, id: c.vocabulary.labelFor(tag) ? c.terminology!.termIdForTag(tag) : undefined };
+  };
+  let parent = resolve();
+  if (!parent.id) {
+    await c.terminology.sync().catch(() => {});
+    parent = resolve();
+  }
+  if (!c.vocabulary.labelFor(parent.tag)) throw new ToolError(`Parent "${args.parent}" is not a term. Use get_tag_vocabulary for the terms.`);
+  if (!parent.id) throw new ToolError(`"${parent.tag}" isn't in terminology-mcp's cc-subjects (${c.terminology.status().error ?? "not synced yet"}).`);
+  const parentId = parent.id;
   const answer = await proposeTerm(c.terminology.config.url, parentId, args, `corpus-mcp:${actor}`);
   await c.terminology.sync().catch(() => {});
-  const tag = `${parent}.${String(answer.slug)}`;
+  const tag = `${parent.tag}.${String(answer.slug)}`;
   const term = c.vocabulary.find(tag);
   return {
     tag, status: answer.status, term_id: answer.id, ...(answer.replayed ? { replayed: true } : {}),

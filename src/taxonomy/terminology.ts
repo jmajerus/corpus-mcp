@@ -29,7 +29,7 @@ export interface TerminologyTerm {
 }
 
 interface Change {
-  n: number; kind: string; after?: TerminologyTerm | null; afterTerms?: TerminologyTerm[];
+  n: number; kind: string; after?: unknown; afterTerms?: unknown[];
 }
 
 const SCHEMA = `
@@ -65,23 +65,34 @@ export function tagsOf(terms: Iterable<TerminologyTerm>): Map<string, string> {
   return tags;
 }
 
+/** A change's snapshot that is a term: a scheme's concept sets come through /api/changes too. */
+function isTerm(t: unknown): t is TerminologyTerm {
+  const x = t as TerminologyTerm | null | undefined;
+  return typeof x?.id === "string" && typeof x.slug === "string" && typeof x.label === "string" && Array.isArray(x.broader);
+}
+
 /**
- * The tags each term had under its former slugs (and its ancestors'), for a first bootstrap: those are
- * the old tags terminology-mcp itself records, so they retire in favour of the term.
+ * The tags terminology-mcp itself records as old, for a first bootstrap, with what replaces each: a
+ * live term's tags under its own and its ancestors' former slugs retire in favour of it; a retired
+ * term's tags, current slug included, in favour of its replacedBy.
  */
-function formerTags(terms: TerminologyTerm[], tags: Map<string, string>): Map<string, string> {
+function formerTags(terms: TerminologyTerm[], tags: Map<string, string>): Map<string, string[]> {
   const byId = new Map(terms.map((t) => [t.id, t]));
-  const out = new Map<string, string>();
+  const out = new Map<string, string[]>();
   for (const t of terms) {
-    if (!tags.has(t.id)) continue;
+    const live = tags.has(t.id);
+    if (!live && t.status !== "retired") continue;
     let variants = [""];
     const chain: TerminologyTerm[] = [];
-    for (let x: TerminologyTerm | undefined = t; x; x = x.broader[0] ? byId.get(x.broader[0]) : undefined) chain.unshift(x);
+    for (let x: TerminologyTerm | undefined = t; x && !chain.includes(x); x = x.broader[0] ? byId.get(x.broader[0]) : undefined) chain.unshift(x);
     for (const x of chain) variants = variants.flatMap((v) => [x.slug, ...(x.formerSlugs ?? [])].map((s) => (v ? `${v}.${s}` : s)));
-    for (const v of variants) if (v !== tags.get(t.id)) out.set(v, t.id);
+    for (const v of variants) if (v !== tags.get(t.id)) out.set(v, live ? [t.id] : (t.replacedBy ?? []));
   }
   return out;
 }
+
+/** A label as the vocabulary file takes it: "." and "›" separate path segments there. */
+const fileLabel = (label: string) => label.replace(/\s*›\s*/g, " - ").replace(/\./g, "").trim();
 
 /** A short, stable fingerprint, so the vocabulary's version changes exactly when its content does. */
 function fnv(text: string): string {
@@ -102,7 +113,7 @@ export function buildVocabulary(terms: TerminologyTerm[], retired: Map<string, s
     if (!tag) continue;
     const parent = t.broader[0] ? tags.get(t.broader[0])! : null;
     out.push({
-      id: tag, label: t.label.trim(), parent, ...(parent ? {} : { assignable: false }),
+      id: tag, label: fileLabel(t.label), parent, ...(parent ? {} : { assignable: false }),
       ...(t.scopeNote?.trim() ? { scopeNote: t.scopeNote.trim() } : {}), ...(t.status === "provisional" ? { status: "provisional" as const } : {}),
     });
   }
@@ -221,7 +232,7 @@ export class TerminologyFollower {
 
   private async bootstrap(): Promise<void> {
     const state = await call(this.config.url, "GET", `/api/state?scheme=${SCHEME}`);
-    const terms = (state.terms as TerminologyTerm[]).filter((t) => t.scheme === SCHEME);
+    const terms = (state.terms as unknown[]).filter(isTerm).filter((t) => t.scheme === SCHEME);
     const before = tagsOf(this.terms());
     const now = new Date().toISOString();
     this.data.transaction(() => {
@@ -231,7 +242,7 @@ export class TerminologyFollower {
       const tags = tagsOf(terms);
       // Old tags terminology-mcp records (former slugs, retired terms), and on a rebuild, tags of terms that kept their id.
       const retire = this.data.prepare("INSERT OR IGNORE INTO terminology_retired (tag, replaced_by, at) VALUES (?, ?, ?)");
-      for (const [tag, id] of formerTags(terms, tags)) retire.run(tag, JSON.stringify([id]), now);
+      for (const [tag, ids] of formerTags(terms, tags)) retire.run(tag, JSON.stringify(ids), now);
       for (const t of terms) {
         if (t.status !== "retired") continue;
         const tag = before.get(t.id);
@@ -250,8 +261,8 @@ export class TerminologyFollower {
       const before = tagsOf(this.terms());
       const put = this.data.prepare("INSERT OR REPLACE INTO terminology_terms (id, record) VALUES (?, ?)");
       for (const change of changes) {
-        const snapshots = change.afterTerms ?? (change.after && "id" in change.after ? [change.after] : []);
-        for (const t of snapshots) if (t.scheme === SCHEME) put.run(t.id, JSON.stringify(t));
+        const snapshots = change.afterTerms ?? (change.after ? [change.after] : []);
+        for (const t of snapshots) if (isTerm(t) && t.scheme === SCHEME) put.run(t.id, JSON.stringify(t));
       }
       const terms = this.terms();
       const after = tagsOf(terms);

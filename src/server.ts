@@ -752,6 +752,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   });
   httpServer.on("close", () => {
     stopPublishing();
+    zotero?.stop();
+    corpus.terminology?.stop();
     publicServer?.close();
   });
   if (publicServer) {

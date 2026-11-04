@@ -89,8 +89,14 @@ function publicConfig(env: NodeJS.ProcessEnv): PublicConfig {
     title: env.CORPUS_PUBLIC_TITLE || "Library",
     url: (env.CORPUS_PUBLIC_URL ?? "").replace(/\/+$/, ""),
     links: (env.CORPUS_SITE_LINKS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-    intervalMinutes: Number(env.CORPUS_PUBLISH_INTERVAL_MINUTES ?? 10) || 10,
+    intervalMinutes: interval(env.CORPUS_PUBLISH_INTERVAL_MINUTES, 10),
   };
+}
+
+/** A timer's period: the default unless the setting is a number of at least `min` (a typo mustn't make a busy loop). */
+function interval(value: string | undefined, fallback: number, min = 1): number {
+  const n = Number(value);
+  return value && Number.isFinite(n) && n >= min ? n : fallback;
 }
 
 function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
@@ -103,7 +109,7 @@ function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
   const every = zoteroOrg ? 30 : 5;
   return {
     library, apiKey: zoteroOrg ? env.CORPUS_ZOTERO_API_KEY : undefined, apiBase,
-    intervalMinutes: Number(env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? every) || every,
+    intervalMinutes: interval(env.CORPUS_ZOTERO_INTERVAL_MINUTES, every),
   };
 }
 
@@ -125,7 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     zotero: zoteroConfig(env),
     terminology: /^off$/i.test(env.CORPUS_TERMINOLOGY_URL ?? "") ? undefined : {
       url: (env.CORPUS_TERMINOLOGY_URL || "http://terminology-mcp.localdomain:8000").replace(/\/+$/, ""),
-      intervalSeconds: Number(env.CORPUS_TERMINOLOGY_INTERVAL_SECONDS ?? 30) || 30,
+      intervalSeconds: interval(env.CORPUS_TERMINOLOGY_INTERVAL_SECONDS, 30, 5),
     },
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {

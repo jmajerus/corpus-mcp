@@ -54,6 +54,11 @@ describe("building the vocabulary from cc-subjects", () => {
     // A tag that is live again isn't retired.
     expect(built.retired).toEqual([{ id: "social-sciences.sociology.gone", replacedBy: ["social-sciences.sociology.social-change"] }]);
   });
+
+  it("keeps labels free of the file's path separators", () => {
+    const terms = subjects().map((t) => (t.id === "t_soc" ? { ...t, label: "U.S. Society › Groups" } : t));
+    expect(buildVocabulary(terms, new Map()).terms.find((t) => t.id === "social-sciences.sociology")?.label).toBe("US Society - Groups");
+  });
 });
 
 /** A stand-in terminology-mcp: its state, changelog, progress reports, and proposals. */
@@ -174,7 +179,10 @@ describe("following terminology-mcp", () => {
     const sp = stub.store.terms.find((t) => t.id === "t_sp")!;
     const other = { ...sp, id: "t_hw", scheme: "human-work", slug: "flexibility", label: "Flexibility", broader: [] };
     stub.change("labelled", [{ ...psy, label: "Psychology & Mind", path: "x" }, { ...sp, path: "y" }, other]);
+    // A concept set comes through the changes too, with no term fields.
+    stub.store.changes.push({ n: ++stub.store.version, kind: "set-added", after: { id: "s_1", scheme: "cc-subjects", name: "Reading list" } });
     await follower.sync();
+    expect(follower.status()).toMatchObject({ error: null, through: stub.store.version, terms: 8 });
     expect(retired()).toEqual(before);
     expect(source.current().labelFor("social-sciences.psychology")).toBe("Social Sciences › Psychology & Mind");
     expect(tags()).not.toContain("flexibility");
@@ -206,6 +214,28 @@ describe("following terminology-mcp", () => {
     expect(stub.store.reports.at(-1)).toMatchObject({ log: "log-2", through: stub.store.version, reset: true });
     expect(tags()).toContain("social-sciences.society.social-change");
   });
+});
+
+it("retires the old tags terminology-mcp records on a first bootstrap: former slugs, and retired terms'", async () => {
+  const root = tempDir();
+  const stub = stubTerminology();
+  stub.store.terms = stub.store.terms.map((t) => (t.id === "t_soc" ? { ...t, formerSlugs: ["society"] } : t));
+  stub.store.terms.push({ ...subjects()[4], id: "t_old", slug: "group-psychology", formerSlugs: ["crowds"], status: "retired", replacedBy: ["t_sp"] });
+  await new Promise<void>((r) => stub.server.listen(0, "127.0.0.1", r));
+  try {
+    fs.writeFileSync(path.join(root, "vocabulary.json"), JSON.stringify(FIXTURE));
+    const source = new VocabularySource(path.join(root, "vocabulary.json"), () => {}, 0);
+    await new TerminologyFollower(openDataStore(path.join(root, "data.db")), source,
+      { url: `http://127.0.0.1:${(stub.server.address() as AddressInfo).port}`, intervalSeconds: 30 }).sync();
+    expect(Object.fromEntries((source.current().file.retired ?? []).map((r) => [r.id, r.replacedBy]))).toEqual({
+      "social-sciences.society": ["social-sciences.sociology"], "social-sciences.society.social-change": ["social-sciences.sociology.social-change"],
+      "social-sciences.psychology.group-psychology": ["social-sciences.psychology.social-psychology"],
+      "social-sciences.psychology.crowds": ["social-sciences.psychology.social-psychology"],
+    });
+  } finally {
+    stub.server.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("proposing terms and the intake while following", () => {
@@ -250,6 +280,14 @@ describe("proposing terms and the intake while following", () => {
     expect(report.provisional).toEqual(["social-sciences.psychology.moral-injury"]);
     const overview = await (await fetch(`${s.base}/api/taxonomy`)).json();
     expect(overview).toMatchObject({ source: "terminology-mcp", terminology: { log: "log-1", error: null }, provisional: [{ tag: "social-sciences.psychology.moral-injury", books: 0 }] });
+  });
+
+  it("catches up before refusing a parent added in terminology-mcp since the last sync", async () => {
+    stub.change("added", [{ ...subjects()[1], id: "t_eco", slug: "economics", label: "Economics" }]);
+    const added = await tool("add_provisional_term", { parent: "social-sciences.economics", label: "Care Economy", scope_note: "Paid and unpaid care.", source: "HD4904" });
+    expect(added.isError).toBe(false);
+    expect(JSON.parse(added.text)).toMatchObject({ tag: "social-sciences.economics.care-economy", usable: true });
+    expect(stub.store.proposals.at(-1)).toMatchObject({ broader: "t_eco" });
   });
 
   it("passes on terminology-mcp's refusal and its hint", async () => {
