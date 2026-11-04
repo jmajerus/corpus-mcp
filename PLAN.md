@@ -703,7 +703,8 @@ zotero-mcp's.
 **Status (2026-11-04):** stage 3's subscriber is built: the vocabulary follows
 terminology-mcp's `cc-subjects`, `add_provisional_term` proposes terms there,
 and stage 1's overlay is gone (see [Categories](docs/categories.md#following-terminology-mcp)).
-What follows is the plan as written.
+Concept Clusters retired its push (its PR #322), so the intake and its service
+token are gone too. What follows is the plan as written.
 
 The taxonomy will keep growing:
 missing subcategories now, new fields of knowledge later.

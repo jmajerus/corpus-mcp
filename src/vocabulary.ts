@@ -210,7 +210,7 @@ export class VocabularySource {
   }
 
   /**
-   * Installs a vocabulary sent to the intake: validated first, then written beside the file and renamed
+   * Installs a vocabulary the follower built: validated first, then written beside the file and renamed
    * over it, so a reader never sees half a file. An invalid one changes nothing and returns its problems.
    */
   install(file: VocabularyFile): { problems: string[] } | { vocabulary: Vocabulary; unchanged: boolean } {
@@ -218,7 +218,7 @@ export class VocabularySource {
     if (problems.length) return { problems };
     const current = this.current();
     if (file.version && file.version === current.version && !this.error) return { vocabulary: current, unchanged: true };
-    const temp = `${this.file}.intake-${process.pid}`;
+    const temp = `${this.file}.new-${process.pid}`;
     fs.writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`);
     fs.renameSync(temp, this.file);
     this.refresh();

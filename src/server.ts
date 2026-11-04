@@ -8,7 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
-import { accessIdentity, vocabularyPushIdentity } from "./access.js";
+import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
 import { adminMetrics } from "./admin.js";
 import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
@@ -32,7 +32,7 @@ import {
   getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport,
 } from "./tagging.js";
 import { VocabularySource } from "./vocabulary.js";
-import { addTerm, installVocabulary, taxonomyOverview } from "./taxonomy/api.js";
+import { addTerm, taxonomyOverview } from "./taxonomy/api.js";
 import { TerminologyFollower } from "./taxonomy/terminology.js";
 import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
@@ -384,15 +384,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     };
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
-    if (req.method === "POST" && path === "/api/intake/vocabulary") {
-      // The vocabulary's owner pushes it here with its own service token, which unlocks nothing else.
-      const result = await vocabularyPushIdentity(req, admin.access, web.options.accessKeys);
-      if ("error" in result) return sendJson(res, result.status, { error: result.error });
-      if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return sendJson(res, 400, { error: "Send JSON." });
-      const installed = installVocabulary(c, await readJson(req, 2 * 1024 * 1024));
-      sendJson(res, installed.status, installed.body);
-    }
-    else if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
+    if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+$/.test(path)) html(BOOK_HTML);
     else if (req.method === "GET" && /^\/admin\/books\/[^/]+\/read$/.test(path)) html(READER_HTML);
@@ -690,10 +682,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
     if (!url || serveFavicon(req, res, url)) return;
-    // The intake has its own service-token identity check in serveWeb.
-    const intake = req.method === "POST" && url.pathname === "/api/intake/vocabulary";
     let via: "lan" | "access" | undefined;
-    try { if (!intake) via = (await authorizeRequest(req, url.pathname, requestAccess, options.accessKeys)).via; }
+    try { via = (await authorizeRequest(req, url.pathname, requestAccess, options.accessKeys)).via; }
     catch (error) {
       const status = error instanceof AccessError ? error.status : 500;
       res.writeHead(status, {"content-type":"application/json", "cache-control":"no-store"}).end(JSON.stringify({error:error instanceof AccessError ? error.message : "Authentication failed."}));

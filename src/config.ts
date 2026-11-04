@@ -61,7 +61,7 @@ export interface Config {
   zotero?: ZoteroConfig;
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
-  /** terminology-mcp, whose cc-subjects scheme the vocabulary follows (src/taxonomy/terminology.ts); off: CC's push installs it instead. */
+  /** terminology-mcp, whose cc-subjects scheme the vocabulary follows (src/taxonomy/terminology.ts); off: the vocabulary file stays as installed by deploy --vocabulary. */
   terminology?: TerminologyConfig;
   admin?: AdminConfig;
   public?: PublicConfig;
@@ -137,7 +137,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     admin: {
       access: {
         teamDomain: env.ACCESS_TEAM_DOMAIN || env.CORPUS_ACCESS_TEAM_DOMAIN || undefined,
-        vocabularyPush: { clientId: env.CORPUS_VOCABULARY_PUSH_CLIENT_ID || undefined },
         // Edits made directly on the LAN, recorded under this name: on unless CORPUS_LAN_EDITS is off.
         lanActor: /^(?:off|false|no|0)$/i.test(env.CORPUS_LAN_EDITS ?? "") ? undefined : env.CORPUS_LAN_ACTOR || "LAN",
         // The names the server answers to on the LAN; by default its host name, with and without .localdomain.

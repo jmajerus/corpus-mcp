@@ -121,8 +121,8 @@ In this order:
 - **Following terminology-mcp** (holdings phase 5; built). This repo's
   PLAN.md stage 3: the vocabulary follows `cc-subjects`' changelog, as
   quote-mcp follows `human-work`, and `add_provisional_term` proposes terms
-  there. The overlay is gone (it never held a term), and the intake answers
-  409 while following. Concept Clusters' push (`modules/taxonomyPush.js`)
-  retires once the cut-over has run cleanly.
+  there. The overlay is gone (it never held a term). Concept Clusters' push is
+  retired, and the intake with it; the fallback is its export, installed
+  from a file.
 - **Tool descriptions.** Arguments that take a book say they also take a
   work key or citekey from holdings-mcp's `find_work`.

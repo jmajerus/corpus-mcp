@@ -119,7 +119,7 @@ MOBI, AZW3, and KFX books so they get chapter locators.
 | `CORPUS_LAN_ACTOR` | `LAN` | The name changes made directly on the LAN are recorded under, such as your email |
 | `CORPUS_LAN_HOSTS` | the host name, and it with `.localdomain` | Comma-separated names the server is reached by on the LAN; IP addresses always work |
 | `CORPUS_PUBLIC` | `none` | `catalogue` turns on the public catalogue; its other settings are in [The public catalogue](public-site.md#setting-it-up) |
-| `CORPUS_TERMINOLOGY_URL` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, whose `cc-subjects` the vocabulary follows and where `add_provisional_term` proposes terms; `off` lets Concept Clusters' push install the vocabulary instead |
+| `CORPUS_TERMINOLOGY_URL` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, whose `cc-subjects` the vocabulary follows and where `add_provisional_term` proposes terms; `off` keeps the vocabulary as installed from a file ([categories](categories.md#installing-from-a-file)) |
 | `CORPUS_TERMINOLOGY_INTERVAL_SECONDS` | `30` | How often the follower reads terminology-mcp's changes; anything under 5 falls back to 30 |
 | `CORPUS_QUOTE_MCP_URL` | `http://quote-mcp.localdomain:8000` | quote-mcp on the LAN, which keeps the reader's quotes and where `/admin/quotes` leads; `off` turns that off |
 | `CORPUS_D1_PROXY_URL` / `CORPUS_D1_PROXY_TOKEN` | unset | The D1 proxy the public catalogue uploads through; deploy copies them from `.env` |
@@ -182,4 +182,4 @@ Direct requests from a private peer naming the service's LAN hostname/IP,
 without Cloudflare proxy headers, retain their existing LAN behavior. Separate
 public snapshot listeners and Workers are unaffected.
 
-Corpus retains its separately authenticated `/api/intake/vocabulary` service-token route, which accepts only the service token named by `CORPUS_VOCABULARY_PUSH_CLIENT_ID`; while it follows terminology-mcp, the route answers 409. `ACCESS_TEAM_DOMAIN` takes precedence over the legacy `CORPUS_ACCESS_TEAM_DOMAIN` setting.
+`ACCESS_TEAM_DOMAIN` takes precedence over the legacy `CORPUS_ACCESS_TEAM_DOMAIN` setting.
