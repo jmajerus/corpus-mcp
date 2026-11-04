@@ -681,7 +681,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     : null;
   const requestAccess = options.requestAccess ?? {
     ...requestAccessConfig(process.env, ["corpus-mcp", "corpus-mcp.localdomain", ...(fullConfig.admin!.access.lanHosts ?? [])]),
-    teamDomain: process.env.ACCESS_TEAM_DOMAIN || fullConfig.admin!.access.teamDomain,
+    // The config's (loadConfig reads ACCESS_TEAM_DOMAIN into it), so a server given its own config ignores the shell's.
+    teamDomain: fullConfig.admin!.access.teamDomain || process.env.ACCESS_TEAM_DOMAIN,
   };
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
