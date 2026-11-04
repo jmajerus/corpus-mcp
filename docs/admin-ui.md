@@ -191,31 +191,20 @@ many directly at it). Click a count to list those books. Below it:
 - **Other tags:** tags outside the vocabulary. Edit those in Calibre-Web; the
   cleanup job removes the ones flagged ⚠.
 
-Nothing on this page is edited here: the vocabulary belongs to its owner, and
-corpus-mcp's own terms are on the Taxonomy page.
+Nothing on this page is edited here: the vocabulary comes from terminology-mcp
+(see the Taxonomy page).
 
 ## Taxonomy (`/admin/taxonomy`)
 
-corpus-mcp's own terms, coined during research, merged over the supplied
-vocabulary. The cards at the top show the supplied vocabulary (version, when it
-was pushed, any problem), the merged result, and the overlay's counts.
+Where the vocabulary comes from. The cards show the vocabulary (terms, retired
+tags, version, any problem) and how far corpus-mcp follows terminology-mcp's
+`cc-subjects` (its change number, when it last synced and reported, any
+problem). A link opens terminology-mcp's editor, where terms are added, renamed,
+moved, and retired.
 
-**Add a term:** give a parent (id or title path), a label, and a scope note
-(what belongs here and what doesn't). The slug and other names are optional.
-**Add provisional term** makes it usable for tagging straight away.
-
-**Overlay terms** come in four tabs: Provisional, Confirmed, Superseded,
-Retired. On an active term:
-
-- **Confirm** accepts a provisional term.
-- **Edit** changes its label, scope note, or other names.
-- **Move** gives it a new parent or slug; the tags job re-tags its books.
-- **Retire** removes it, optionally naming a replacement. With one, the tags job
-  re-tags its books; without one, they wait for a person.
-
-A term is **superseded** when the supplied vocabulary gains a term at the same
-path. Books keep their tag. Terms whose parent disappeared are listed under
-*Left out of the merge*. The history table records every change.
+**Provisional terms** are those proposed in terminology-mcp and not yet
+confirmed there, with how many books carry each. They can be used for tagging
+now. Nothing is edited on this page.
 
 ## Citekeys (`/admin/citekeys`)
 

@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_PRESET, type PresetName, isPreset } from "./citekey.js";
+import type { TerminologyConfig } from "./taxonomy/terminology.js";
 import type { ZoteroConfig } from "./zotero.js";
 import type { AccessConfig } from "./access.js";
 
@@ -60,6 +61,8 @@ export interface Config {
   zotero?: ZoteroConfig;
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
+  /** terminology-mcp, whose cc-subjects scheme the vocabulary follows (src/taxonomy/terminology.ts); off: CC's push installs it instead. */
+  terminology?: TerminologyConfig;
   admin?: AdminConfig;
   public?: PublicConfig;
   host: string;
@@ -86,8 +89,14 @@ function publicConfig(env: NodeJS.ProcessEnv): PublicConfig {
     title: env.CORPUS_PUBLIC_TITLE || "Library",
     url: (env.CORPUS_PUBLIC_URL ?? "").replace(/\/+$/, ""),
     links: (env.CORPUS_SITE_LINKS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-    intervalMinutes: Number(env.CORPUS_PUBLISH_INTERVAL_MINUTES ?? 10) || 10,
+    intervalMinutes: interval(env.CORPUS_PUBLISH_INTERVAL_MINUTES, 10),
   };
+}
+
+/** A timer's period: the default unless the setting is a number of at least `min` (a typo mustn't make a busy loop). */
+function interval(value: string | undefined, fallback: number, min = 1): number {
+  const n = Number(value);
+  return value && Number.isFinite(n) && n >= min ? n : fallback;
 }
 
 function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
@@ -100,7 +109,7 @@ function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
   const every = zoteroOrg ? 30 : 5;
   return {
     library, apiKey: zoteroOrg ? env.CORPUS_ZOTERO_API_KEY : undefined, apiBase,
-    intervalMinutes: Number(env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? every) || every,
+    intervalMinutes: interval(env.CORPUS_ZOTERO_INTERVAL_MINUTES, every),
   };
 }
 
@@ -120,6 +129,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
     citekeyPreset: citekeyPreset(env.CORPUS_CITEKEY_PRESET),
     zotero: zoteroConfig(env),
+    terminology: /^off$/i.test(env.CORPUS_TERMINOLOGY_URL ?? "") ? undefined : {
+      url: (env.CORPUS_TERMINOLOGY_URL || "http://terminology-mcp.localdomain:8000").replace(/\/+$/, ""),
+      intervalSeconds: interval(env.CORPUS_TERMINOLOGY_INTERVAL_SECONDS, 30, 5),
+    },
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
       access: {

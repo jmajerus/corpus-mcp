@@ -26,5 +26,13 @@ it("reads Zotero from zotero.org with a key, or from holdings-mcp without one", 
   expect(loadConfig({ CORPUS_ZOTERO_LIBRARY: library, CORPUS_ZOTERO_API_KEY: "k", CORPUS_ZOTERO_API: holdings }).zotero)
     .toEqual({ library, apiKey: undefined, apiBase: holdings, intervalMinutes: 5 });
   expect(loadConfig({ CORPUS_ZOTERO_LIBRARY: library, CORPUS_ZOTERO_API: holdings, CORPUS_ZOTERO_INTERVAL_MINUTES: "2" }).zotero?.intervalMinutes).toBe(2);
+  expect(loadConfig({ CORPUS_ZOTERO_LIBRARY: library, CORPUS_ZOTERO_API: holdings, CORPUS_ZOTERO_INTERVAL_MINUTES: "-1" }).zotero?.intervalMinutes).toBe(5);
   expect(loadConfig({ CORPUS_ZOTERO_API: holdings }).zotero).toBeUndefined();
+});
+
+it("follows terminology-mcp unless it's off, never polling faster than every 5 seconds", () => {
+  expect(loadConfig({}).terminology).toEqual({ url: "http://terminology-mcp.localdomain:8000", intervalSeconds: 30 });
+  expect(loadConfig({ CORPUS_TERMINOLOGY_URL: "off" }).terminology).toBeUndefined();
+  expect(loadConfig({ CORPUS_TERMINOLOGY_INTERVAL_SECONDS: "10" }).terminology?.intervalSeconds).toBe(10);
+  for (const typo of ["-30", "0", "1", "soon"]) expect(loadConfig({ CORPUS_TERMINOLOGY_INTERVAL_SECONDS: typo }).terminology?.intervalSeconds).toBe(30);
 });

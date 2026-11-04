@@ -115,9 +115,11 @@ In this order:
 - **Zotero items from holdings-mcp** (holdings phase 4). Matching reads
   items from holdings-mcp instead of syncing zotero.org itself. Matching,
   its evidence, and its admin page stay here.
-- **Following terminology-mcp** (holdings phase 5). This repo's PLAN.md
-  stage 3: follow the subject scheme's changelog, as quote-mcp follows
-  `human-work`; the overlay's terms are proposed there, and
-  `add_provisional_term` becomes a call to terminology-mcp's `propose_term`.
+- **Following terminology-mcp** (holdings phase 5; built). This repo's
+  PLAN.md stage 3: the vocabulary follows `cc-subjects`' changelog, as
+  quote-mcp follows `human-work`, and `add_provisional_term` proposes terms
+  there. The overlay is gone (it never held a term), and the intake answers
+  409 while following. Concept Clusters' push (`modules/taxonomyPush.js`)
+  retires once the cut-over has run cleanly.
 - **Tool descriptions.** Arguments that take a book say they also take a
   work key or citekey from holdings-mcp's `find_work`.

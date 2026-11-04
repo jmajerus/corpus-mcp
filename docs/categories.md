@@ -1,9 +1,10 @@
 # Categories and the taxonomy
 
-Calibre tags (Calibre-Web's *Categories*) follow a controlled vocabulary that
-the taxonomy's owner supplies as a JSON file (format below). Here that owner is
-[Concept Clusters](https://github.com/jmajerus/concept-clusters); any project can
-supply its own. Term ids are the tags, nested with `.` such as
+Calibre tags (Calibre-Web's *Categories*) follow a controlled vocabulary:
+[terminology-mcp](https://github.com/jmajerus/terminology-mcp)'s `cc-subjects`
+scheme, the subjects [Concept Clusters](https://github.com/jmajerus/concept-clusters)
+uses too. corpus-mcp follows it into a JSON file (format below). Term ids are
+the tags, nested with `.` such as
 `social-sciences.psychology.social-psychology`, so a renamed term leaves
 Calibre's tags valid. Tools and the admin pages show the titles
 ("Social Sciences › Psychology › Social Psychology") and accept either form.
@@ -51,9 +52,41 @@ The vocabulary file (`corpus-vocabulary/1`) is a flat list of terms:
   Calibre, tags shaped like terms that the vocabulary lacks, and books tagged
   only at a term with narrower ones.
 
+## Following terminology-mcp
+
+The HTTP server follows `cc-subjects` (`src/taxonomy/terminology.ts`). It
+bootstraps once from `/api/state`, then reads `/api/changes` from its cursor
+every 30 seconds (`CORPUS_TERMINOLOGY_INTERVAL_SECONDS`), and installs the
+vocabulary it builds. It reports how far it has got to terminology-mcp
+(`/api/subscribers/corpus-mcp/progress`), so terminology-mcp's editor shows it
+among the subscribers.
+
+- A term's tag is its slug chain along `broader`, never terminology-mcp's
+  `path`, which is built from labels. A rename changes the title, not the tag.
+- Domains (the top terms) group others and aren't assignable.
+- A change that alters a tag (a slug change on a term or an ancestor, a move, a
+  merge, a split, a retire) retires the old tag. With one replacement the tags
+  job re-tags books; a split, or a retire with none, waits for a person on the
+  vocabulary report. corpus-mcp never holds a change: its cursor always moves on.
+- If terminology-mcp's store is rebuilt (its `log` id changes), the follower
+  starts over from the state and reports with `reset: true`.
+- `CORPUS_TERMINOLOGY_URL` names the server (default
+  `http://terminology-mcp.localdomain:8000`); `off` turns following off and
+  lets Concept Clusters' push install the vocabulary again.
+
+**New terms.** `add_provisional_term` proposes a term to terminology-mcp
+(`POST /api/proposals`) under an existing domain or category. `cc-subjects` is
+three levels deep, and takes a proposal only when it is copied from a term in a
+reference vocabulary (`source`, found with terminology-mcp's `search_terms`). A
+proposal is provisional and usable at once; its owner confirms, merges, or
+retires it in terminology-mcp. A refusal comes back with terminology-mcp's
+reason. When nothing fits even broadly, a person adds the term in
+terminology-mcp's editor.
+
 ## Pushing the vocabulary
 
-The owner pushes the file to `POST /api/intake/vocabulary` with a Cloudflare
+While corpus-mcp follows terminology-mcp, the intake answers 409 and installs
+nothing: one writer at a time. With `CORPUS_TERMINOLOGY_URL=off`, the owner pushes the file to `POST /api/intake/vocabulary` with a Cloudflare
 Access service token (`CORPUS_VOCABULARY_PUSH_CLIENT_ID`), through an Access
 application that covers only that path; the token unlocks nothing else. Answers:
 
@@ -63,21 +96,6 @@ application that covers only that path; the token unlocks nothing else. Answers:
 
 `npm run deploy -- --vocabulary=<file>` still validates and installs one by hand.
 
-## The taxonomy overlay
-
-corpus-mcp never edits a vocabulary another project supplies. Its own terms,
-coined during research, live in the **taxonomy overlay** (`src/taxonomy/`),
-merged over the supplied vocabulary for every tool. An agent adds one with
-`add_provisional_term`; a person confirms, edits, moves, or retires it at
-`/admin/taxonomy`.
-
-- Overlay terms have opaque, stable ids, a scope note, and a history of every
-  change.
-- A moved or retired term's old path is retired in the merged vocabulary, so the
-  tags job re-tags its books.
-- When the supplied vocabulary gains a term at the same path, it takes over, the
-  overlay term is marked superseded, and books keep the tag. So to adopt an
-  overlay term, the owner creates it with the same slug under the same parent.
-- An overlay term whose parent disappears is left out and reported, never fatal.
-
-[PLAN.md](../PLAN.md) (*Living taxonomy*) has the plan this is the first stage of.
+[PLAN.md](../PLAN.md) (*Living taxonomy*) has the plan this is stage 3 of. The
+overlay of corpus-mcp's own research terms that stage 1 built is gone: it never
+held a term, and new terms are proposed in terminology-mcp instead.

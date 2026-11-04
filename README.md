@@ -39,7 +39,7 @@ data, and Calibre changes go through a job a person previews and applies.
 |---|---|
 | [MCP tools](docs/tools.md) | Every tool's name and display title, what it does, and which ones write |
 | [Using the admin pages](docs/admin-ui.md) | A guide to the web interface at `/admin`, page by page |
-| [Categories and the taxonomy](docs/categories.md) | The controlled vocabulary, its file format and intake, tagging books, and the overlay of research terms |
+| [Categories and the taxonomy](docs/categories.md) | The controlled vocabulary, its file format, following terminology-mcp, tagging books, and proposing new terms |
 | [Citations, citekeys, and quotes](docs/citations.md) | The citation format, locators, citekeys, the Zotero mirror, and saved quotes |
 | [Operations](docs/operations.md) | How indexing works, shelves, access, Calibre jobs, bulk imports, configuration, and deployment |
 | [The public catalogue](docs/public-site.md) | What's public, the pages, linking with other sites, how the catalogue reaches Cloudflare, and running it |

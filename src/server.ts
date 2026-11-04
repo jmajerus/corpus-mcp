@@ -32,8 +32,8 @@ import {
   getTagVocabulary, listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport,
 } from "./tagging.js";
 import { VocabularySource } from "./vocabulary.js";
-import { addTerm, changeTerm, installVocabulary, taxonomyOverview, type TermAction } from "./taxonomy/api.js";
-import { Taxonomy } from "./taxonomy/taxonomy.js";
+import { addTerm, installVocabulary, taxonomyOverview } from "./taxonomy/api.js";
+import { TerminologyFollower } from "./taxonomy/terminology.js";
 import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
@@ -65,6 +65,16 @@ function json(value: unknown): CallToolResult {
 function run(body: () => CallToolResult): CallToolResult {
   try {
     return body();
+  } catch (error) {
+    if (error instanceof ToolError) return { isError: true, content: [{ type: "text", text: error.message }] };
+    throw error;
+  }
+}
+
+/** run, for a tool body that waits on another server. */
+async function runAsync(body: () => Promise<CallToolResult>): Promise<CallToolResult> {
+  try {
+    return await body();
   } catch (error) {
     if (error instanceof ToolError) return { isError: true, content: [{ type: "text", text: error.message }] };
     throw error;
@@ -146,16 +156,20 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("add_provisional_term", {
     title: "Add a provisional term",
-    description: "Coin a term for the vocabulary during research, when no existing term fits what the sources are about. It is usable at once with propose_tags (and as a tag filter), marked provisional until a person reviews it on /admin/taxonomy. It lives in corpus-mcp's overlay; if the vocabulary's owner later publishes a term at the same path, theirs takes over and books keep the tag. Prefer an existing term: check get_tag_vocabulary first.",
+    description: "Propose a new term for the vocabulary to terminology-mcp, when research turns up a subject no existing term fits. Prefer an existing term: check get_tag_vocabulary first. terminology-mcp takes a proposal only when it is copied from a term in a reference vocabulary, so first find one with terminology-mcp's search_terms (e.g. scheme \"loc-classification\", or excludeScheme \"cc-subjects\") and pass it as source. The vocabulary is three levels deep, so parent is a domain or a category. The new term is provisional and usable at once with propose_tags; its owner confirms, merges, or retires it in terminology-mcp. A refusal (no source, a duplicate, too deep) comes back with terminology-mcp's reason; when nothing fits even broadly, leave the term to a person in terminology-mcp's editor.",
     inputSchema: {
       parent: z.string().describe('The term it goes under, as an id or title path, e.g. "social-sciences.psychology" or "Social Sciences › Psychology"'),
       label: z.string().min(1).max(80).describe('Its title, e.g. "Moral Injury"'),
       scope_note: z.string().min(1).max(600).describe("What belongs under the term and what doesn't, in a sentence or two"),
       slug: z.string().optional().describe("Its id segment (lowercase letters, digits, single hyphens); made from the label when omitted"),
       alt_labels: z.array(z.string()).optional().describe("Other names for the same subject"),
+      source: z.string().optional().describe("The reference-vocabulary term it is copied from (an id, alias, IRI, or notation from search_terms)"),
+      match: z.enum(["closeMatch", "broadMatch", "narrowMatch", "exactMatch", "relatedMatch"]).optional()
+        .describe("How the new term relates to source (default closeMatch; broadMatch when the source is wider)"),
+      request_id: z.string().max(120).optional().describe("Your own id for this proposal; a retry with the same one returns the original term"),
     },
-    annotations: { title: "Add a provisional term", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  }, (args, extra) => run(() => json(addTerm(c, args, accessEmail(extra) ?? "agent"))));
+    annotations: { title: "Add a provisional term", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, (args, extra) => runAsync(async () => json(await addTerm(c, args, accessEmail(extra) ?? "agent"))));
 
   server.registerTool("tagging_worklist", {
     title: "Get books to tag",
@@ -282,15 +296,16 @@ export function createServer(c: Corpus): McpServer {
 export function openCorpus(config: Config): Corpus {
   const db = openDatabase(config.dbPath, { readonly: true });
   const data = openDataStore(config.dataDbPath);
-  const source = new VocabularySource(config.vocabularyPath);
-  // Each new merged vocabulary rewrites stored proposals into its terms (titles to ids, retired ids to their replacement).
-  const taxonomy = new Taxonomy(data, source, (vocabulary) => {
+  // Each new vocabulary rewrites stored proposals into its terms (titles to ids, retired ids to their replacement).
+  const source = new VocabularySource(config.vocabularyPath, (vocabulary) => {
     const normalized = normalizeProposalTags({ db, data, booksRoot: config.booksRoot, vocabulary });
     if (normalized) console.error(`rewrote ${normalized} tag proposal(s) into the vocabulary's terms`);
   });
+  // Both servers can propose terms; only the HTTP server runs the follower's timer.
+  const terminology = config.terminology ? new TerminologyFollower(data, source, config.terminology) : undefined;
   return {
-    db, data, booksRoot: config.booksRoot, citekeyPreset: config.citekeyPreset, vocabularySource: source, taxonomy,
-    get vocabulary() { return taxonomy.current(); },
+    db, data, booksRoot: config.booksRoot, citekeyPreset: config.citekeyPreset, vocabularySource: source, terminology,
+    get vocabulary() { return source.current(); },
   };
 }
 
@@ -325,6 +340,8 @@ export interface WebOptions {
   jobCommands?: JobCommands;
   /** false: no background Zotero sync (tests run it through the job). */
   zoteroTimer?: boolean;
+  /** false: no background terminology-mcp follower (tests sync it themselves). */
+  terminologyTimer?: boolean;
   /** false: no background rebuild of the public snapshot (tests build it themselves). */
   publishTimer?: boolean;
 }
@@ -365,7 +382,6 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
-    const termPath = path.match(/^\/api\/taxonomy\/terms(?:\/([^/]+))?$/);
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "POST" && path === "/api/intake/vocabulary") {
@@ -373,7 +389,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const result = await vocabularyPushIdentity(req, admin.access, web.options.accessKeys);
       if ("error" in result) return sendJson(res, result.status, { error: result.error });
       if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return sendJson(res, 400, { error: "Send JSON." });
-      const installed = installVocabulary(c, await readJson(req, 2 * 1024 * 1024), result.identity.subject);
+      const installed = installVocabulary(c, await readJson(req, 2 * 1024 * 1024));
       sendJson(res, installed.status, installed.body);
     }
     else if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
@@ -496,20 +512,6 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       sendJson(res, 200, "error" in result ? { can_write: false, reason: result.error } : { can_write: true, identity: result.identity });
     } else if (req.method === "GET" && path === "/api/vocabulary") sendJson(res, 200, getTagVocabulary(c));
     else if (req.method === "GET" && path === "/api/taxonomy") sendJson(res, 200, taxonomyOverview(c));
-    else if (req.method === "POST" && termPath) {
-      const by = await writer();
-      if (by === null) return;
-      const body = (await readJson(req)) as Record<string, unknown>;
-      const text = (v: unknown) => (typeof v === "string" ? v : undefined);
-      const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
-      if (!termPath[1]) {
-        if (!text(body.label)) throw new ToolError("Send label (and parent, scope_note).");
-        sendJson(res, 200, addTerm(c, {
-          parent: text(body.parent) ?? null, label: text(body.label)!, slug: text(body.slug), scope_note: text(body.scope_note),
-          alt_labels: list(body.alt_labels), status: body.status === "confirmed" ? "confirmed" : "provisional",
-        }, by));
-      } else sendJson(res, 200, changeTerm(c, decodeURIComponent(termPath[1]), body as unknown as TermAction, by));
-    }
     else if (req.method === "GET" && path === "/api/tag-proposals") {
       const number = (name: string) => (url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined);
       sendJson(res, 200, listProposals(c, { status: url.searchParams.get("status") ?? undefined, limit: number("limit"), offset: number("offset") }));
@@ -656,6 +658,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     }),
   };
   if (zotero && options.zoteroTimer !== false) zotero.start();
+  if (corpus.terminology && options.terminologyTimer !== false) corpus.terminology.start();
   const publicOn = fullConfig.public && fullConfig.public.level !== "none";
   const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
   const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
@@ -681,7 +684,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     : null;
   const requestAccess = options.requestAccess ?? {
     ...requestAccessConfig(process.env, ["corpus-mcp", "corpus-mcp.localdomain", ...(fullConfig.admin!.access.lanHosts ?? [])]),
-    teamDomain: process.env.ACCESS_TEAM_DOMAIN || fullConfig.admin!.access.teamDomain,
+    // The config's (loadConfig reads ACCESS_TEAM_DOMAIN into it), so a server given its own config ignores the shell's.
+    teamDomain: fullConfig.admin!.access.teamDomain || process.env.ACCESS_TEAM_DOMAIN,
   };
   const httpServer = http.createServer(async (req, res) => {
     const url = requestUrl(req, res);
@@ -748,6 +752,8 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   });
   httpServer.on("close", () => {
     stopPublishing();
+    zotero?.stop();
+    corpus.terminology?.stop();
     publicServer?.close();
   });
   if (publicServer) {

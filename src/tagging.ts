@@ -1,5 +1,4 @@
 import { recordChanges } from "./data.js";
-import { overlaySummary } from "./taxonomy/api.js";
 import type { BookRow, Corpus } from "./tools.js";
 import { ToolError, getBook, shelvesByBook } from "./tools.js";
 
@@ -322,7 +321,7 @@ const TERM_LIKE = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/;
  * about it: retired terms still in use (re-tagged automatically when they have one replacement, else
  * for a person), tags shaped like terms that the vocabulary does not have, and books tagged only at a
  * term that has narrower ones, grouped by term. Many books stopping at one term suggests the taxonomy
- * needs a narrower term there; its owner decides, and corpus-mcp never edits a supplied vocabulary (its own terms are the overlay).
+ * needs a narrower term there; its owner decides in terminology-mcp, where add_provisional_term proposes one.
  */
 export function vocabularyReport(c: Corpus) {
   const v = c.vocabulary;
@@ -358,7 +357,7 @@ export function vocabularyReport(c: Corpus) {
     retired_in_use: byCount(retired),
     unknown_terms: byCount(unknown),
     tagged_only_broadly: byCount(broad),
-    overlay: overlaySummary(c),
-    note: "retired_in_use with action \"automatic\" is fixed by the tags job; \"review\" needs a person to choose. unknown_terms are Calibre tags shaped like vocabulary ids that it does not have. tagged_only_broadly lists books tagged at a term with narrower terms below it, most first: re-tagging candidates, and a hint where the taxonomy may need a new term (add_provisional_term). overlay lists corpus-mcp's own terms: provisional ones await review on /admin/taxonomy, superseded ones were taken over by the supplied vocabulary, and orphans are left out because their parent is gone.",
+    provisional: v.terms.filter((t) => t.status === "provisional").map((t) => t.tag),
+    note: "retired_in_use with action \"automatic\" is fixed by the tags job; \"review\" needs a person to choose. unknown_terms are Calibre tags shaped like vocabulary ids that it does not have. tagged_only_broadly lists books tagged at a term with narrower terms below it, most first: re-tagging candidates, and a hint where the taxonomy may need a new term (add_provisional_term). provisional lists terms proposed in terminology-mcp that its owner has not yet confirmed; they can be used now.",
   };
 }

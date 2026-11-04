@@ -700,7 +700,12 @@ zotero-mcp's.
 
 ## Living taxonomy (proposed 2026-10-26)
 
-Not built; a direction to come back to. The taxonomy will keep growing:
+**Status (2026-11-04):** stage 3's subscriber is built: the vocabulary follows
+terminology-mcp's `cc-subjects`, `add_provisional_term` proposes terms there,
+and stage 1's overlay is gone (see [Categories](docs/categories.md#following-terminology-mcp)).
+What follows is the plan as written.
+
+The taxonomy will keep growing:
 missing subcategories now, new fields of knowledge later.
 
 **Where the vocabulary comes from today.** CC's `export-taxonomy.mjs` builds
