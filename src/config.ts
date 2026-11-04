@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_PRESET, type PresetName, isPreset } from "./citekey.js";
+import type { TerminologyConfig } from "./taxonomy/terminology.js";
 import type { ZoteroConfig } from "./zotero.js";
 import type { AccessConfig } from "./access.js";
 
@@ -60,6 +61,8 @@ export interface Config {
   zotero?: ZoteroConfig;
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
+  /** terminology-mcp, whose cc-subjects scheme the vocabulary follows (src/taxonomy/terminology.ts); off: CC's push installs it instead. */
+  terminology?: TerminologyConfig;
   admin?: AdminConfig;
   public?: PublicConfig;
   host: string;
@@ -120,6 +123,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     shelvesLibrary: env.CORPUS_SHELVES_LIBRARY ?? libraries[0],
     citekeyPreset: citekeyPreset(env.CORPUS_CITEKEY_PRESET),
     zotero: zoteroConfig(env),
+    terminology: /^off$/i.test(env.CORPUS_TERMINOLOGY_URL ?? "") ? undefined : {
+      url: (env.CORPUS_TERMINOLOGY_URL || "http://terminology-mcp.localdomain:8000").replace(/\/+$/, ""),
+      intervalSeconds: Number(env.CORPUS_TERMINOLOGY_INTERVAL_SECONDS ?? 30) || 30,
+    },
     vocabularyPath: path.resolve(env.CORPUS_VOCABULARY ?? "/var/lib/corpus-mcp/vocabulary.json"),
     admin: {
       access: {

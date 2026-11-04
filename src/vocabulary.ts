@@ -7,8 +7,8 @@ import fs from "node:fs";
  * and they hold no commas (Calibre's tag separator). Each term carries its own title as a label; lookups
  * accept an id, a title path, or a unique bare name.
  *
- * corpus-mcp never edits a vocabulary another project supplies. Its own terms, coined during research, live in
- * the taxonomy overlay (src/taxonomy/), which is merged over the supplied one.
+ * corpus-mcp never authors terms: the file is built from terminology-mcp's cc-subjects scheme
+ * (src/taxonomy/terminology.ts), where terms coined during research are proposed.
  */
 
 export const VOCABULARY_FORMAT = "corpus-vocabulary/1";
@@ -21,7 +21,7 @@ export interface VocabularyTerm {
   assignable?: boolean;
   /** What belongs under the term and what doesn't. */
   scopeNote?: string;
-  /** Set on overlay terms only: provisional (coined during research) or confirmed. */
+  /** provisional: proposed in terminology-mcp and not yet confirmed by its owner. */
   status?: "provisional" | "confirmed";
 }
 
@@ -100,7 +100,7 @@ export class Vocabulary {
   readonly terms: VocabularyTag[];
   readonly version: string | null;
   readonly generatedAt: string | null;
-  /** The file the vocabulary was built from, for merging the overlay over it. */
+  /** The file the vocabulary was built from. */
   readonly file: VocabularyFile;
   private readonly byId: Map<string, VocabularyTag>;
   private readonly byTitlePath: Map<string, VocabularyTag>;

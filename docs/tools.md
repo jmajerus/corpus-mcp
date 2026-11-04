@@ -25,9 +25,9 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `render_page` | Render PDF page | | Returns a PNG of a PDF page, for figures, tables, and equations. |
 | `cite_passage` | Cite a book | | A book's citation as a CSL JSON item, with a CSL locator for a page range, the reading position, and filing data: a BibTeX entry, a valid ISBN, or printed ISBN candidates, and the printed year when Calibre has none (see [Citations](citations.md)). |
 | `pin_citekey` | Pin a book's citekey | ✓ | Records the citekey a book was given elsewhere, such as in the reference manager it was filed in. |
-| `get_tag_vocabulary` | Get tag vocabulary | | The vocabulary's terms as Calibre tags, the controlled vocabulary for categories, with scope notes and, for corpus-mcp's own terms, their status. |
+| `get_tag_vocabulary` | Get tag vocabulary | | The vocabulary's terms as Calibre tags, the controlled vocabulary for categories, with scope notes and, for terms not yet confirmed in terminology-mcp, their status. |
 | `vocabulary_report` | Vocabulary report | | How Calibre's tags stand against the vocabulary: retired terms still in use, tags shaped like terms the vocabulary lacks, and books tagged only at a broad term. |
-| `add_provisional_term` | Add a provisional term | ✓ | Coins a term during research, usable for tagging at once and marked provisional until a person reviews it. |
+| `add_provisional_term` | Add a provisional term | ✓ | Proposes a term to terminology-mcp, copied from a reference-vocabulary term (`source`); usable for tagging at once, provisional until its owner confirms it there. |
 | `tagging_worklist` | Get books to tag | | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Propose tags for a book | ✓ | Proposes 1–3 vocabulary tags for a book, for a person to review. |
 | `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs, years, authors, and titles books print that Calibre lacks. |
