@@ -56,7 +56,7 @@ export interface Config {
   shelvesLibrary: string;
   /** The @jmajerus/citekey preset for proposed citekeys. */
   citekeyPreset: PresetName;
-  /** A Zotero library to mirror read-only (src/zotero.ts); off when no API key is set. */
+  /** A Zotero library to mirror read-only (src/zotero.ts); off without an API key for zotero.org, or a library for holdings-mcp (CORPUS_ZOTERO_API). */
   zotero?: ZoteroConfig;
   /** The tag vocabulary (src/vocabulary.ts), reloaded when it changes; missing means none. */
   vocabularyPath: string;
@@ -91,12 +91,16 @@ function publicConfig(env: NodeJS.ProcessEnv): PublicConfig {
 }
 
 function zoteroConfig(env: NodeJS.ProcessEnv): ZoteroConfig | undefined {
-  if (!env.CORPUS_ZOTERO_API_KEY) return undefined;
+  const apiBase = env.CORPUS_ZOTERO_API || "https://api.zotero.org";
+  // holdings-mcp's copy of Zotero (on the LAN) needs no key, and is cheap to ask often.
+  const zoteroOrg = /^https?:\/\/api\.zotero\.org(?:\/|$)/i.test(apiBase);
+  if (zoteroOrg ? !env.CORPUS_ZOTERO_API_KEY : !env.CORPUS_ZOTERO_LIBRARY) return undefined;
   const library = env.CORPUS_ZOTERO_LIBRARY ?? "";
   if (!/^(users|groups)\/\d+$/.test(library)) throw new Error(`CORPUS_ZOTERO_LIBRARY "${library}" should be "users/<user id>" or "groups/<group id>".`);
+  const every = zoteroOrg ? 30 : 5;
   return {
-    library, apiKey: env.CORPUS_ZOTERO_API_KEY, apiBase: env.CORPUS_ZOTERO_API ?? "https://api.zotero.org",
-    intervalMinutes: Number(env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? 30) || 30,
+    library, apiKey: zoteroOrg ? env.CORPUS_ZOTERO_API_KEY : undefined, apiBase,
+    intervalMinutes: Number(env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? every) || every,
   };
 }
 

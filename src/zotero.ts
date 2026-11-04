@@ -3,16 +3,17 @@ import { isbn13, validIsbn } from "./isbn.js";
 import { type BookRow, type Corpus, ToolError, getBook, pinCitekey } from "./tools.js";
 
 /**
- * A read-only view of a Zotero library through the Zotero Web API, for finding which Calibre books are
- * already filed there and pinning the citekeys they were given. zotero.org is slow to answer at times, so
- * nothing waits on it: a background sync mirrors the fields matching needs into data.db (only what
+ * A read-only view of a Zotero library through the Zotero Web API, or holdings-mcp's copy of it on the LAN
+ * (CORPUS_ZOTERO_API), which answers the same requests. It finds which Calibre books are already filed there
+ * and pins the citekeys they were given. zotero.org is slow to answer at times, so nothing waits on it: a background sync mirrors the fields matching needs into data.db (only what
  * changed since the last sync, by Zotero's library version), and every page and tool reads the mirror.
  */
 
 export interface ZoteroConfig {
   /** "users/<user id>" or "groups/<group id>". */
   library: string;
-  apiKey: string;
+  /** Needed for zotero.org; not sent elsewhere (holdings-mcp ignores it). */
+  apiKey?: string;
   apiBase: string;
   intervalMinutes: number;
   /** Per request; the API can take tens of seconds. */
@@ -46,7 +47,7 @@ export class ZoteroClient {
       let res: Response;
       try {
         res = await fetch(url, {
-          headers: { "Zotero-API-Version": "3", "Zotero-API-Key": this.config.apiKey },
+          headers: { "Zotero-API-Version": "3", ...(this.config.apiKey ? { "Zotero-API-Key": this.config.apiKey } : {}) },
           signal: AbortSignal.timeout(this.config.timeoutMs ?? 90_000),
         });
       } catch (error) {

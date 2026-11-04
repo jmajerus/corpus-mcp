@@ -120,6 +120,9 @@ last library version, with long timeouts, retries, and Zotero's `Backoff` and
 - **Setup:** make a key with read-only library access at
   zotero.org/settings/keys, put `CORPUS_ZOTERO_LIBRARY=users/<id>` and
   `CORPUS_ZOTERO_API_KEY` in `.env`, and run `npm run deploy -- --zotero`.
+  To read holdings-mcp's copy of the library instead (on the LAN, no key, synced
+  every 5 minutes by default), add
+  `CORPUS_ZOTERO_API=http://holdings-mcp.localdomain:8000/zotero`.
 
 ## Quotes
 

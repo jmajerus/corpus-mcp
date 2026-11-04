@@ -34,8 +34,10 @@ const USAGE = `Usage: npm run deploy -- [--current | --pr <number> | --main] [--
                   /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
                   A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set, unless the
                   intake is configured (CORPUS_VOCABULARY_PUSH_CLIENT_ID): then the owner pushes it.
-  --zotero        copy CORPUS_ZOTERO_LIBRARY, CORPUS_ZOTERO_API_KEY, and CORPUS_ZOTERO_INTERVAL_MINUTES
-                  from .env into the server's /etc/corpus-mcp/env (mode 0640) and restart it;
+  --zotero        copy CORPUS_ZOTERO_LIBRARY, CORPUS_ZOTERO_API, CORPUS_ZOTERO_API_KEY, and
+                  CORPUS_ZOTERO_INTERVAL_MINUTES from .env into the server's /etc/corpus-mcp/env
+                  (mode 0640) and restart it. With CORPUS_ZOTERO_API set to holdings-mcp
+                  (http://holdings-mcp.localdomain:8000/zotero) no key is needed; for zotero.org
                   an empty CORPUS_ZOTERO_API_KEY turns the mirror off
   --skip-tests    deploy without running the test suite first
 
@@ -162,15 +164,16 @@ echo "vocabulary=${vocabulary.version ?? "(no version)"} (${vocabulary.tags.leng
 /** Sets the Zotero settings in the server's env from this machine's .env, so the key never passes through a chat or a command line. */
 async function pushZotero() {
   const library = process.env.CORPUS_ZOTERO_LIBRARY ?? "";
+  const api = process.env.CORPUS_ZOTERO_API ?? "";
   const key = process.env.CORPUS_ZOTERO_API_KEY ?? "";
-  if (key && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`CORPUS_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
-  const settings = { CORPUS_ZOTERO_LIBRARY: library, CORPUS_ZOTERO_API_KEY: key, CORPUS_ZOTERO_INTERVAL_MINUTES: process.env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? "" };
+  if ((key || api) && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`CORPUS_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
+  const settings = { CORPUS_ZOTERO_LIBRARY: library, CORPUS_ZOTERO_API: api, CORPUS_ZOTERO_API_KEY: key, CORPUS_ZOTERO_INTERVAL_MINUTES: process.env.CORPUS_ZOTERO_INTERVAL_MINUTES ?? "" };
   const encoded = Buffer.from(Object.entries(settings).map(([k, v]) => `${k}=${v}`).join("\n")).toString("base64");
   await runAsRoot(CORPUS_HOST, `
 set -euo pipefail
 f=/etc/corpus-mcp/env
 printf %s ${shellQuote(encoded)} | base64 -d > /tmp/corpus-zotero.env
-grep -v -e '^CORPUS_ZOTERO_LIBRARY=' -e '^CORPUS_ZOTERO_API_KEY=' -e '^CORPUS_ZOTERO_INTERVAL_MINUTES=' "$f" > "$f.new" || true
+grep -v -e '^CORPUS_ZOTERO_LIBRARY=' -e '^CORPUS_ZOTERO_API=' -e '^CORPUS_ZOTERO_API_KEY=' -e '^CORPUS_ZOTERO_INTERVAL_MINUTES=' "$f" > "$f.new" || true
 grep -v '=$' /tmp/corpus-zotero.env >> "$f.new" || true
 rm -f /tmp/corpus-zotero.env
 chown root:corpus "$f.new" && chmod 0640 "$f.new" && mv "$f.new" "$f"

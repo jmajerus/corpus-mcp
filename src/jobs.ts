@@ -239,7 +239,7 @@ export class JobRunner {
       case "refresh":
         return this.commands.refresh(log);
       case "zotero":
-        if (!this.commands.zotero) throw new ToolError("Zotero is not configured (CORPUS_ZOTERO_API_KEY and CORPUS_ZOTERO_LIBRARY).");
+        if (!this.commands.zotero) throw new ToolError("Zotero is not configured (CORPUS_ZOTERO_LIBRARY, and CORPUS_ZOTERO_API_KEY for zotero.org).");
         return this.commands.zotero(log);
       case "backup":
         log(`Backed up to ${await backupDataStore(this.c.data, this.config.backupDir)}\n`);
