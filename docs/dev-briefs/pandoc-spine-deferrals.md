@@ -33,14 +33,16 @@ legacy index: seven have one unresolved entry each, and `main:101` has 20. The i
 therefore expose existing navigation defects rather than a new Pandoc path-resolution difference.
 No filename repair or first-match substitution was attempted.
 
-## Recommended follow-up
+## Cover correction (adapter revision 3)
 
-Handle positively identified auxiliary covers separately from primary chapter navigation. Preserve
-their TOC label/nesting as explicitly non-reading navigation, without assigning them a fabricated
-primary-text location. Continue requiring every primary chapter target to resolve, and keep
-unidentified auxiliary content and genuinely missing targets deferred. This refines the earlier
-"every target must have a reading location" policy for known auxiliary resources; it has not yet
-been implemented or used to accept a book.
+The adapter now handles positively identified auxiliary covers separately from primary chapter
+navigation. It preserves their TOC label/nesting with a null reading location and records the cover
+evidence. Every primary chapter target must still resolve; unidentified auxiliary content, absent
+cover resources, broken fragments, and genuinely missing targets remain deferred. This refines the
+earlier "every target must have a reading location" policy for known auxiliary resources.
+
+Twelve focused cover/deferral/staging checks passed, together with typecheck and build. The full
+suite and another whole-library survey were explicitly skipped for the requested direct deployment.
 
 Revalidate the affected books after that change, since the first deferral may have masked additional
 fragment/location issues. The eight books with absent resources remain deferred for separate

@@ -43,13 +43,23 @@ fidelity verdict.
 
 The adapter selects the package-declared navigation document's `toc` tree, falling back to the
 spine's NCX `navMap`. Page lists and landmarks are excluded. Unlinked TOC groups inherit their first
-child's location. Every linked target must resolve; an incomplete outline is never returned.
+reading child's location. Every primary linked target must resolve; an incomplete chapter outline
+is never returned.
+
+Adapter revision 3 retains positively identified non-linear covers as non-reading TOC entries
+with `startPage: null`. Confirmation requires a package guide cover declaration, body cover
+semantics, or an image-only body whose images match the package-declared cover asset. The target
+document must exist; any linked fragment must still be unique and present. A cover label or filename
+alone is insufficient. This exception does not apply to primary reading documents or unidentified
+auxiliary material. Cover evidence is returned in `auxiliaryCovers`, included in validation/staging
+reports, and persisted in index metadata (`pandoc_auxiliary_covers:<book-id>`). No primary-text
+location is invented for the cover, and it does not override chapter section paths.
 
 Empty spine-file markers are retained for mapping but never emitted as reading locations. A file
 target maps to the first readable location in that same file. An in-content identifier maps to the
 location containing it, including identifiers nested inside a list, table, or block quote. Div and
 section identifiers map to their first readable descendant. Empty files, empty target containers,
-duplicate identifiers/basenames, targets outside the linear XHTML spine, and misplaced or unresolved
+duplicate identifiers/basenames, non-cover targets outside the linear XHTML spine, and misplaced or unresolved
 anchors defer the entire book. URI paths and fragments are resolved relative to their actual source
 documents; basename matching is used only for Pandoc's corresponding AST identifiers.
 
@@ -73,8 +83,8 @@ is captured before plain-text serialization can normalize empty containers.
 - Version 3: Pandoc blocks. The exact Pandoc version is pinned per book in index metadata
   (`pandoc:<book-id>`). Ordinary/forced refresh retains this profile. A different or missing version
   refuses extraction and retains the existing book text; upgrades require staged migration.
-  Navigation adapter revision 2 is also pinned (`pandoc_adapter:<book-id>`). Candidates made with
-  the earlier heading-only adapter must be restaged before a forced refresh can use this revision.
+  Navigation adapter revision 3 is also pinned (`pandoc_adapter:<book-id>`). Candidates made with
+  earlier adapters must be restaged before a forced refresh can use this revision.
 
 ```sh
 npm run build
@@ -141,7 +151,7 @@ The original full-library conversion survey completed 306 records: 233 converted
 complete outline loss, and three failed. Those results belong to the heading-only adapter and do
 not establish navigation-adapter readiness.
 
-Navigation revision 2 passes 271 local tests across 17 files. Ten synthetic server checks pass with
+Navigation revision 2 passed 271 local tests across 17 files. Ten synthetic server checks passed with
 Debian's Pandoc 3.1.11.1, covering retained/recovered targets and whole-book deferrals. The actual
 Rousseau EPUB (`main:94`), previously missing all headings, now retains all 12 navigation entries
 with titles/nesting matching the legacy outline. Its source file and active profile remain unchanged.

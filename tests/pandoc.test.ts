@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { extractBook } from "../src/extract.js";
-import { extractPandocEpub } from "../src/pandoc.js";
+import { extractPandocEpub, PANDOC_ADAPTER_VERSION } from "../src/pandoc.js";
 import { relocatedAnchorPlanner } from "../src/anchor-migration.js";
 import { storeAnchor, type Anchor } from "../src/anchors.js";
 import { openDatabase } from "../src/db.js";
@@ -152,7 +152,7 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
         start_page: 2, section_path: "Chapter", text: old.text,
       });
       expect(candidate.prepare("SELECT value FROM meta WHERE key='pandoc:main:1'").pluck().get()).toBe(report.books[0].pandocVersion);
-      expect(candidate.prepare("SELECT value FROM meta WHERE key='pandoc_adapter:main:1'").pluck().get()).toBe("2");
+      expect(candidate.prepare("SELECT value FROM meta WHERE key='pandoc_adapter:main:1'").pluck().get()).toBe(String(PANDOC_ADAPTER_VERSION));
       expect(candidate.prepare("SELECT extractor_version FROM books WHERE id='main:2'").pluck().get()).toBe(1);
       expect(candidate.prepare("SELECT count(*) FROM outline WHERE book_id='main:2'").pluck().get()).toBeGreaterThan(0);
       expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 2, failed: 0 });
@@ -160,7 +160,7 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
       candidate.prepare("DELETE FROM meta WHERE key='pandoc_adapter:main:1'").run();
       expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 1, failed: 1 });
       expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);
-      candidate.prepare("INSERT INTO meta(key,value) VALUES ('pandoc_adapter:main:1','2')").run();
+      candidate.prepare("INSERT INTO meta(key,value) VALUES ('pandoc_adapter:main:1',?)").run(String(PANDOC_ADAPTER_VERSION));
       candidate.prepare("UPDATE meta SET value='different-version' WHERE key='pandoc:main:1'").run();
       expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 1, failed: 1 });
       expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);

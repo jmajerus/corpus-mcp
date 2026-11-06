@@ -7,7 +7,7 @@ import { type Anchor, storeAnchor } from "./anchors.js";
 import { chunkPage } from "./chunk.js";
 import { type DB, openDatabase } from "./db.js";
 import { type DataStore, openDataStore, recordChanges } from "./data.js";
-import { extractBook, sectionPaths } from "./extract.js";
+import { extractBook, sectionPaths, type ExtractedBook } from "./extract.js";
 import { PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
 import { pagesOf, type QuoteAnchor } from "./quotes.js";
 import type { BookRow, Corpus } from "./tools.js";
@@ -20,6 +20,7 @@ export interface StagedBook {
   anchors?: { kind: "quote" | "anchor"; id: number; status: string; reason?: string }[];
   oldLocations?: number; newLocations?: number; pandocVersion?: string;
   pandocAdapterVersion?: number; preprocessedTargets?: boolean;
+  auxiliaryCovers?: ExtractedBook["auxiliaryCovers"];
   pandocWarnings?: string;
 }
 
@@ -139,6 +140,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
       }
       if (next.pandocVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc:${id}`, next.pandocVersion);
       if (next.pandocAdapterVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc_adapter:${id}`, String(next.pandocAdapterVersion));
+      if (next.pandocVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc_auxiliary_covers:${id}`, JSON.stringify(next.auxiliaryCovers ?? []));
       db.prepare(`UPDATE books SET extractor_version = ?, page_count = ?, text_chars = ?, indexed_at = ?,
         printed_isbns_version = NULL, printed_years_version = NULL, title_page_version = NULL WHERE id = ?`)
         .run(backend === "pandoc" ? PANDOC_EXTRACTOR_VERSION : 2, next.pages.length,
@@ -167,6 +169,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     return { book: id, status: "staged", changedPages: oldPages.filter((p, i) => p.text !== newPages[i]?.text).length,
       oldLocations: oldPages.length, newLocations: newPages.length, pandocVersion: next.pandocVersion,
       pandocAdapterVersion: next.pandocAdapterVersion, preprocessedTargets: next.preprocessedTargets,
+      auxiliaryCovers: next.auxiliaryCovers,
       ...(next.pandocWarnings ? { pandocWarnings: next.pandocWarnings } : {}), anchors: summaries };
   } catch (error) {
     // Extraction refusals occur before writes. Write failures must invalidate the entire candidate.

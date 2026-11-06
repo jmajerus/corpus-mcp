@@ -26,6 +26,7 @@ if (values.worker) {
       oldLocations: book.page_count, locations: next.pages.length, oldOutline: book.outline,
       outline: next.outline.length, pandocVersion: next.pandocVersion,
       pandocAdapterVersion: next.pandocAdapterVersion, preprocessedTargets: next.preprocessedTargets,
+      auxiliaryCovers: next.auxiliaryCovers,
       warning: !!next.pandocWarnings,
       ...(next.pandocWarnings ? { pandocWarnings: next.pandocWarnings } : {}) }));
   } catch (error) {

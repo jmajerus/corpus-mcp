@@ -156,6 +156,8 @@ export function scanLibraries(config: Config, db: DB, {
           writeBook(db, config.citekeyPreset, id, library, relFolder, metadata, {
             ...file, sha256: hash, status: "indexed", reflowable: book.reflowable ? 1 : 0, page_count: book.pages.length, extractor_version: extractorVersion,
           });
+          if (pandocEpub) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)")
+            .run(`pandoc_auxiliary_covers:${id}`, JSON.stringify(book.auxiliaryCovers ?? []));
           const insertOutline = db.prepare(
             "INSERT INTO outline (book_id, ord, level, title, path, start_page) VALUES (?, ?, ?, ?, ?, ?)",
           );

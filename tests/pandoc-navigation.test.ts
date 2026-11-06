@@ -3,6 +3,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { extractPandocEpub } from "../src/pandoc.js";
 import { EpubNavigation } from "../src/epub-navigation.js";
 import { makeEpub } from "./fixtures.js";
+import { sectionPaths } from "../src/extract.js";
 
 function edit(data: Uint8Array, change: (files: ReturnType<typeof unzipSync>) => void): Uint8Array {
   const files = unzipSync(data); change(files); return zipSync(files);
@@ -14,6 +15,63 @@ function target(body: string, fragment = "target") {
   return nav(makeEpub("Targets", [{ title: "Chapter", paragraphs: [], body }]),
     `<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc"><ol><li><a href="ch1.xhtml#${fragment}">Navigation title</a></li></ol></nav>`);
 }
+
+function auxiliaryCover(evidence: "guide" | "body" | "image" | "legacy-image" | "unknown") {
+  return edit(makeEpub("Auxiliary", [{ title: "Cover", paragraphs: [],
+    body: evidence === "body" ? '<div><img src="cover.png" alt="Cover"/></div>' : '<p><img src="cover.png" alt="Cover"/></p>' },
+    { title: "Chapter", paragraphs: ["Primary chapter words."] }]), (files) => {
+    let opf = strFromU8(files["OEBPS/content.opf"]).replace('<itemref idref="c1"/>', '<itemref idref="c1" linear="no"/>');
+    if (evidence === "guide") opf = opf.replace("</package>", '<guide><reference type="cover" href="ch1.xhtml"/></guide></package>');
+    if (evidence === "body") files["OEBPS/ch1.xhtml"] = strToU8(strFromU8(files["OEBPS/ch1.xhtml"])
+      .replace("<body>", '<body xmlns:epub="http://www.idpf.org/2007/ops" epub:type="cover">'));
+    if (["image", "legacy-image"].includes(evidence)) {
+      opf = opf.replace("</manifest>", `<item id="cover-image" href="cover.png" media-type="image/png"${evidence === "image" ? ' properties="cover-image"' : ""}/></manifest>`);
+      if (evidence === "legacy-image") opf = opf.replace("</metadata>", '<meta name="cover" content="cover-image"/></metadata>');
+      files["OEBPS/cover.png"] = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jk3sAAAAASUVORK5CYII=", "base64");
+    }
+    files["OEBPS/content.opf"] = strToU8(opf);
+  });
+}
+
+it.each([['guide', 'guide'], ['body', 'body-type'], ['image', 'declared-image'], ['legacy-image', 'declared-image']] as const)(
+  "retains a confirmed auxiliary cover using %s evidence without a reading location", (kind, evidence) => {
+    const book = extractPandocEpub(auxiliaryCover(kind));
+    expect(book.outline).toMatchObject([{ title: "Cover", startPage: null }, { title: "Chapter", startPage: expect.any(Number) }]);
+    expect(book.auxiliaryCovers).toEqual([{ file: "OEBPS/ch1.xhtml", evidence }]);
+    const chapter = book.outline[1].startPage!;
+    expect(sectionPaths(book.outline, book.pages.length)[chapter]).toBe("Chapter");
+    expect(book.pages[chapter].paragraphs).toEqual(["Chapter"]);
+  });
+
+it("does not exempt an unconfirmed auxiliary document based on its cover label", () => {
+  expect(() => extractPandocEpub(auxiliaryCover("unknown"))).toThrow(/outside the linear XHTML spine/);
+});
+
+it("keeps missing primary chapter targets deferred when an auxiliary cover is recognized", () => {
+  const data = edit(auxiliaryCover("guide"), (files) => {
+    files["OEBPS/nav.xhtml"] = strToU8(strFromU8(files["OEBPS/nav.xhtml"]).replace('href="ch2.xhtml"', 'href="missing.xhtml"'));
+  });
+  expect(() => extractPandocEpub(data)).toThrow(/outside the linear XHTML spine/);
+});
+
+it("keeps a missing auxiliary cover resource deferred despite its guide declaration", () => {
+  const data = edit(auxiliaryCover("guide"), (files) => { delete files["OEBPS/ch1.xhtml"]; });
+  expect(() => extractPandocEpub(data)).toThrow(/missing resource/);
+});
+
+it("keeps a broken auxiliary cover fragment deferred", () => {
+  const data = edit(auxiliaryCover("guide"), (files) => {
+    files["OEBPS/nav.xhtml"] = strToU8(strFromU8(files["OEBPS/nav.xhtml"]).replace('href="ch1.xhtml"', 'href="ch1.xhtml#missing"'));
+  });
+  expect(() => extractPandocEpub(data)).toThrow(/missing or duplicate source target/);
+});
+
+it("starts a TOC group on its first reading child after an auxiliary cover", () => {
+  const data = nav(auxiliaryCover("guide"), '<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc"><ol><li><span>Book</span><ol><li><a href="ch1.xhtml">Cover</a></li><li><a href="ch2.xhtml">Chapter</a></li></ol></li></ol></nav>');
+  const outline = extractPandocEpub(data).outline;
+  expect(outline[0].startPage).toBe(outline[2].startPage);
+  expect(outline[1].startPage).toBeNull();
+});
 
 it("uses navigation labels and nesting, excludes landmarks/page-list, and maps containing locations", () => {
   const data = nav(makeEpub("Contents", [{ title: "Different body heading", paragraphs: [],

@@ -8,7 +8,7 @@ import { EpubNavigation, EpubNavigationError, mapPandocNavigation } from "./epub
 /** A distinct profile: Pandoc block locations intentionally differ from MuPDF pages. */
 export const PANDOC_EXTRACTOR_VERSION = 3;
 /** Pin adapter behavior independently of the Pandoc executable when refreshing staged indexes. */
-export const PANDOC_ADAPTER_VERSION = 2;
+export const PANDOC_ADAPTER_VERSION = 3;
 
 // Pandoc owns both EPUB interpretation and text serialization. This writer only adapts its
 // document blocks to our location interface. Keep the AST available for future rich output.
@@ -108,7 +108,7 @@ export function extractPandocEpub(data: Uint8Array): PandocBook {
     const outline = navigation.outline(mapped);
     const pages = parsed.locations.map(({ text }, index) => ({ index, label: null, paragraphs: [text], separatorBefore: index ? "\n\n" : "" }));
     return { reflowable: true, outline, pages, document: parsed.document, pandocVersion: parsed.version,
-      pandocAdapterVersion: PANDOC_ADAPTER_VERSION, preprocessedTargets,
+      pandocAdapterVersion: PANDOC_ADAPTER_VERSION, preprocessedTargets, auxiliaryCovers: navigation.auxiliaryCovers,
       ...(warnings ? { pandocWarnings: warnings } : {}) };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

@@ -28,6 +28,10 @@ interface Target { file: string; fragment: string }
 interface Entry { title: string; target: Target | null; children: Entry[] }
 interface SpineFile { file: string; basename: string }
 interface Anchor { file: string | null; location: number | null }
+export interface AuxiliaryCover {
+  file: string;
+  evidence: "guide" | "body-type" | "declared-image";
+}
 export interface PandocNavigationMap {
   anchors: Map<string, Anchor[]>;
   files: Map<string, { start: number; end: number }>;
@@ -49,6 +53,8 @@ function href(base: string, value: string): Target {
 /** Only package/navigation metadata is interpreted here. Pandoc remains the content reader/writer. */
 export class EpubNavigation {
   readonly spine: SpineFile[];
+  readonly auxiliaryCovers: AuxiliaryCover[] = [];
+  private readonly nonReadingCovers = new Set<string>();
   private readonly entries: Entry[];
   private readonly resources = new Map<string, string>();
   constructor(private readonly data: Uint8Array) {
@@ -104,10 +110,41 @@ export class EpubNavigation {
     }
     this.entries = entries ?? [];
     if (entries && !entries.length) throw new EpubNavigationError("empty table of contents.");
+    const targets = this.targets();
+    const targetFiles = new Set(targets.map((t) => t.file));
+    const coverImages = new Set(items.filter((item) => (attr(item, "properties") ?? "").split(/\s+/).includes("cover-image"))
+      .map((item) => href(packageFile, attr(item, "href") ?? "").file));
+    for (const meta of descendants(pkg, "meta")) {
+      if (attr(meta, "name") !== "cover") continue;
+      const item = byId.get(attr(meta, "content"));
+      if (item && attr(item, "href")) coverImages.add(href(packageFile, attr(item, "href")!).file);
+    }
+    const guideCovers = new Set(descendants(pkg, "reference").filter((ref) => attr(ref, "type") === "cover" && attr(ref, "href"))
+      .map((ref) => href(packageFile, attr(ref, "href")!)).filter((t) => !t.fragment).map((t) => t.file));
+    for (const ref of children(spine).filter((n) => local(n) === "itemref" && attr(n, "linear") === "no")) {
+      const item = byId.get(attr(ref, "idref"));
+      if (!item || !["application/xhtml+xml", "text/html"].includes(attr(item, "media-type") ?? "")) continue;
+      const file = href(packageFile, attr(item, "href") ?? "").file;
+      if (!targetFiles.has(file) || this.spine.some((s) => s.file === file) || this.nonReadingCovers.has(file)) continue;
+      const bodies = descendants(parseXml(this.read(file)), "body");
+      if (bodies.length !== 1) continue;
+      const body = bodies[0];
+      let evidence: AuxiliaryCover["evidence"] | undefined;
+      if (guideCovers.has(file)) evidence = "guide";
+      else if ((attr(body, "type") ?? "").split(/\s+/).includes("cover")) evidence = "body-type";
+      else {
+        const images = [...descendants(children(body), "img"), ...descendants(children(body), "image")];
+        if (!text(body).trim() && images.length && images.every((image) => {
+          const src = attr(image, "src") ?? attr(image, "href");
+          return !!src && coverImages.has(href(file, src).file);
+        })) evidence = "declared-image";
+      }
+      if (evidence) { this.nonReadingCovers.add(file); this.auxiliaryCovers.push({ file, evidence }); }
+    }
     // A dropped duplicate ID must not make a different retained occurrence look unique.
-    const targets = this.targets().filter((t) => t.fragment);
-    for (const file of new Set(targets.map((t) => t.file))) {
-      const wanted = new Set(targets.filter((t) => t.file === file).map((t) => t.fragment));
+    const fragments = targets.filter((t) => t.fragment);
+    for (const file of new Set(fragments.map((t) => t.file))) {
+      const wanted = new Set(fragments.filter((t) => t.file === file).map((t) => t.fragment));
       const counts = new Map<string, number>();
       const count = (nodes: Xml[]) => {
         for (const node of nodes) {
@@ -161,7 +198,7 @@ export class EpubNavigation {
    * text before the caller asks for the next; changes cannot cancel each other out. */
   *preprocess(map: PandocNavigationMap): Generator<{ data: Uint8Array; target: Target }> {
     const unique = new Map(this.targets().map((target) => [JSON.stringify(target), target]));
-    const missing = [...unique.values()].filter((target) => this.locate(target, map) === null);
+    const missing = [...unique.values()].filter((target) => !this.nonReadingCovers.has(target.file) && this.locate(target, map) === null);
     if (!missing.length) return;
     const archive = unzipSync(this.data);
     for (const file of new Set(missing.map((t) => t.file))) {
@@ -196,14 +233,15 @@ export class EpubNavigation {
     const walk = (entries: Entry[], parents: string[]) => {
       for (const entry of entries) {
         const ord = result.length, trail = [...parents, entry.title];
-        const start = entry.target ? this.locate(entry.target, map) : null;
-        if (entry.target && start === null) throw new EpubNavigationError(`unresolved target ${entry.target.file}#${entry.target.fragment}.`);
+        const auxiliary = entry.target && this.nonReadingCovers.has(entry.target.file);
+        const start = entry.target && !auxiliary ? this.locate(entry.target, map) : null;
+        if (entry.target && !auxiliary && start === null) throw new EpubNavigationError(`unresolved target ${entry.target.file}#${entry.target.fragment}.`);
         result.push({ ord, title: entry.title, level: parents.length, path: trail.join(" › "), startPage: start });
         walk(entry.children, trail);
         if (!entry.target) {
-          const child = result[ord + 1];
-          if (!child || child.level <= parents.length) throw new EpubNavigationError("unlinked toc group has no readable child.");
-          result[ord].startPage = child.startPage;
+          const subtree = result.slice(ord + 1);
+          if (!subtree.length) throw new EpubNavigationError("unlinked toc group has no child.");
+          result[ord].startPage = subtree.find((child) => child.startPage !== null)?.startPage ?? null;
         }
       }
     };
