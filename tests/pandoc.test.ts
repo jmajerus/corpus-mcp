@@ -14,6 +14,7 @@ import { stageEpubReextraction } from "../src/reextraction.js";
 import type { Config } from "../src/config.js";
 import type { Corpus } from "../src/tools.js";
 import { makeEpub, makeLibrary, tempDir } from "./fixtures.js";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -29,9 +30,11 @@ it.each(["2.19.2", "3.0", "3.0.99", "unknown", "3.1junk"])("rejects unsupported 
 
 it.each(["3.1", "3.1.3", "3.1.2.1", "3.10", "4.0"])("accepts supported Pandoc version %s", (version) => {
   vi.mocked(spawnSync).mockReturnValueOnce({ pid: 1, status: 0, signal: null, stderr: "", output: [],
-    stdout: JSON.stringify({ version, document: { "pandoc-api-version": [1, 23, 1], blocks: [], meta: {} },
-      locations: [{ text: "Text.", heading: 0 }] }) });
-  expect(extractPandocEpub(new Uint8Array()).pandocVersion).toBe(version);
+    stdout: JSON.stringify({ version, document: { "pandoc-api-version": [1, 23, 1], blocks: [
+      { t: "Para", c: [{ t: "Span", c: [["ch1.xhtml", [], []], []] }] },
+      { t: "Para", c: [{ t: "Str", c: "Text." }] },
+    ], meta: {} }, blockTexts: ["", "Text."], locations: [{ text: "Text.", heading: 0 }] }) });
+  expect(extractPandocEpub(makeEpub("Version", [{ title: "Chapter", paragraphs: ["Text."] }])).pandocVersion).toBe(version);
 });
 
 it("uses Pandoc structure and writer for prose, verse, lists, code, and nested headings", () => {
@@ -47,7 +50,7 @@ it("uses Pandoc structure and writer for prose, verse, lists, code, and nested h
     "First verse line.\nSecond verse line.", "    one\n      two", "1.  First item\n2.  Second item", "  A quotation.",
   ]);
   expect(book.outline).toMatchObject([
-    { title: "Chapter", level: 0, startPage: 0 }, { title: "Section", path: "Chapter › Section", level: 1, startPage: 1 },
+    { title: "Chapter", level: 0, startPage: 0 },
   ]);
   expect(book.pages.slice(1).every((p) => p.separatorBefore === "\n\n")).toBe(true);
   // The adapter retains the rich document: formatting remains available to future writers.
@@ -76,6 +79,19 @@ it("retains EPUB footnotes in both the readable text and the reusable AST", () =
   expect(JSON.stringify(book.document)).toContain('"t":"Note"');
 });
 
+it("refuses preprocessing when a conversion changes the text or reading locations", async () => {
+  const files = unzipSync(makeEpub("Rewrite", [{ title: "Chapter", paragraphs: [], body: '<p id="target">Words.</p>' }]));
+  files["OEBPS/nav.xhtml"] = strToU8(strFromU8(files["OEBPS/nav.xhtml"]).replace('href="ch1.xhtml"', 'href="ch1.xhtml#target"'));
+  const { spawnSync: actual } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  vi.mocked(spawnSync).mockImplementationOnce(actual).mockImplementationOnce((...args: Parameters<typeof actual>) => {
+    const result = actual(...args);
+    const parsed = JSON.parse(String(result.stdout));
+    parsed.locations[0].text += " Changed.";
+    return { ...result, stdout: JSON.stringify(parsed) };
+  });
+  expect(() => extractPandocEpub(zipSync(files))).toThrow(/preprocessing changed readable text or location boundaries/);
+});
+
 it("relocates unique quotes across blocks and refuses ambiguous or stale anchors", () => {
   const page = (text: string, page_index: number) => ({ text, page_index, label: null, section_path: null, separator_before: "\n\n" });
   const before = [page("Opening. Unique\n\nquote here. End.", 0)];
@@ -101,7 +117,8 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
   makeLibrary(root, "main", [
     { id: 1, title: "Pandoc", files: { epub } },
     { id: 2, title: "Navigation", files: { epub: makeEpub("Navigation", [{ title: "Named chapter", paragraphs: [],
-      body: "<p>A chapter identified by navigation rather than an HTML heading.</p>" }]) } },
+      body: "<p>A chapter identified by navigation rather than an HTML heading.</p>" },
+      { title: "Unresolved empty chapter", paragraphs: [], body: "" }]) } },
   ]);
   const config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"), shelvesFile: path.join(root, "shelves.json"),
@@ -120,7 +137,7 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
       books: ["main:1", "main:2"], output: path.join(root, "candidate") });
     expect(report.books[0]).toMatchObject({ status: "staged", newLocations: 3,
       anchors: expect.arrayContaining([{ kind: "anchor", id: 12, status: "remapped" }]) });
-    expect(report.books[1]).toMatchObject({ status: "refused", reason: expect.stringContaining("chapter navigation") });
+    expect(report.books[1]).toMatchObject({ status: "refused", reason: expect.stringContaining("no readable location") });
     expect(report.promotionReady).toBe(false);
     expect(pagesOf(db, "main:1", 0, 100)).toEqual(before);
     expect(data.prepare("SELECT * FROM anchors").all()).toEqual(originalAnchors);
@@ -135,10 +152,15 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
         start_page: 2, section_path: "Chapter", text: old.text,
       });
       expect(candidate.prepare("SELECT value FROM meta WHERE key='pandoc:main:1'").pluck().get()).toBe(report.books[0].pandocVersion);
+      expect(candidate.prepare("SELECT value FROM meta WHERE key='pandoc_adapter:main:1'").pluck().get()).toBe("2");
       expect(candidate.prepare("SELECT extractor_version FROM books WHERE id='main:2'").pluck().get()).toBe(1);
       expect(candidate.prepare("SELECT count(*) FROM outline WHERE book_id='main:2'").pluck().get()).toBeGreaterThan(0);
       expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 2, failed: 0 });
       expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);
+      candidate.prepare("DELETE FROM meta WHERE key='pandoc_adapter:main:1'").run();
+      expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 1, failed: 1 });
+      expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);
+      candidate.prepare("INSERT INTO meta(key,value) VALUES ('pandoc_adapter:main:1','2')").run();
       candidate.prepare("UPDATE meta SET value='different-version' WHERE key='pandoc:main:1'").run();
       expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 1, failed: 1 });
       expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);

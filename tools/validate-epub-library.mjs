@@ -25,10 +25,11 @@ if (values.worker) {
       ...(lostOutline ? { reason: "lost-chapter-navigation" } : {}), indexedStatus: book.status,
       oldLocations: book.page_count, locations: next.pages.length, oldOutline: book.outline,
       outline: next.outline.length, pandocVersion: next.pandocVersion,
+      pandocAdapterVersion: next.pandocAdapterVersion, preprocessedTargets: next.preprocessedTargets,
       warning: !!next.pandocWarnings,
       ...(next.pandocWarnings ? { pandocWarnings: next.pandocWarnings } : {}) }));
   } catch (error) {
-    console.log(JSON.stringify({ book: book.id, status: "failed", reason: error.message }));
+    console.log(JSON.stringify({ book: book.id, status: error.name === "EpubNavigationError" ? "deferred" : "failed", reason: error.message }));
   }
 } else {
   if (!values.index || !values["books-root"] || !values.output) {

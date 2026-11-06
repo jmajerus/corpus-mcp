@@ -45,6 +45,8 @@ export interface ExtractedBook {
   pages: ExtractedPage[];
   pandocVersion?: string;
   pandocWarnings?: string;
+  pandocAdapterVersion?: number;
+  preprocessedTargets?: boolean;
 }
 
 export function isReflowable(format: BookFormat): boolean {

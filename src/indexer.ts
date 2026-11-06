@@ -11,7 +11,7 @@ import { TITLE_PAGE_SCAN_VERSION, scanTitlePage } from "./titlepage.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
-import { PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
+import { PANDOC_ADAPTER_VERSION, PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
 
 export interface ScanSummary {
   scanned: number;
@@ -147,6 +147,8 @@ export function scanLibraries(config: Config, db: DB, {
         if (pandocEpub) {
           const pinned = db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(`pandoc:${id}`);
           if (pinned !== book.pandocVersion) throw new Error("Pandoc version changed or is unpinned; stage re-extraction before refreshing this book.");
+          const adapter = db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(`pandoc_adapter:${id}`);
+          if (adapter !== String(PANDOC_ADAPTER_VERSION)) throw new Error("Pandoc adapter changed; stage re-extraction before refreshing this book.");
         }
         const sections = sectionPaths(book.outline, book.pages.length);
         db.transaction(() => {

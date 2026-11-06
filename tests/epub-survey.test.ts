@@ -19,6 +19,7 @@ it("reports every book after a worker crash, retains warnings, and leaves inputs
       export function extractBook(bytes) {
         const mode = Buffer.from(bytes).toString();
         if (mode === 'crash') process.exit(9);
+        if (mode === 'navigation') { const error = new Error('Unresolved navigation target.'); error.name = 'EpubNavigationError'; throw error; }
         return { pages: [{ index: 0, paragraphs: ['Extracted content.'] }],
           outline: mode === 'defer' ? [] : [{ title: 'Chapter' }], pandocVersion: '3.1.11.1',
           ...(mode === 'convert' ? { pandocWarnings: 'A diagnostic that needs operator review.' } : {}) };
@@ -28,7 +29,7 @@ it("reports every book after a worker crash, retains warnings, and leaves inputs
     try {
       db.exec(`CREATE TABLE books (id TEXT, status TEXT, format TEXT, file_path TEXT, sha256 TEXT, page_count INTEGER, file_size INTEGER);
         CREATE TABLE outline (book_id TEXT);`);
-      ["crash", "defer", "convert"].forEach((mode, i) => {
+      ["crash", "defer", "convert", "navigation"].forEach((mode, i) => {
         const file = `${mode}.epub`, bytes = Buffer.from(mode), id = `main:${i + 1}`;
         fs.writeFileSync(path.join(root, file), bytes);
         db.prepare("INSERT INTO books VALUES (?, 'indexed', 'epub', ?, ?, 2, ?)")
@@ -48,13 +49,14 @@ it("reports every book after a worker crash, retains warnings, and leaves inputs
       expect.objectContaining({ book: "main:2", status: "deferred", reason: "lost-chapter-navigation", warning: false }),
       expect.objectContaining({ book: "main:3", status: "converted", warning: true,
         pandocWarnings: "A diagnostic that needs operator review." }),
+      { book: "main:4", status: "deferred", reason: "Unresolved navigation target." },
     ]);
     expect(records[1]).not.toHaveProperty("pandocWarnings");
     const summary = JSON.parse(fs.readFileSync(path.join(output, "summary.json"), "utf8"));
-    expect(summary).toMatchObject({ total: 3, completed: 3, converted: 1, deferred: 1, failed: 1,
+    expect(summary).toMatchObject({ total: 4, completed: 4, converted: 1, deferred: 2, failed: 1,
       promotionReady: false, finished: expect.any(String) });
-    expect(JSON.parse(run.stdout)).toMatchObject({ total: 3, completed: 3, converted: 1, deferred: 1, failed: 1 });
+    expect(JSON.parse(run.stdout)).toMatchObject({ total: 4, completed: 4, converted: 1, deferred: 2, failed: 1 });
     expect(fs.readFileSync(index)).toEqual(before);
-    for (const mode of ["crash", "defer", "convert"]) expect(fs.readFileSync(path.join(root, `${mode}.epub`), "utf8")).toBe(mode);
+    for (const mode of ["crash", "defer", "convert", "navigation"]) expect(fs.readFileSync(path.join(root, `${mode}.epub`), "utf8")).toBe(mode);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
