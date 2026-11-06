@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { planAnchorMigration, type AnchorMigration } from "./anchor-migration.js";
 import { type Anchor, storeAnchor } from "./anchors.js";
@@ -19,16 +19,9 @@ export interface StagedBook {
   anchors?: { kind: "quote" | "anchor"; id: number; status: string; reason?: string }[];
 }
 
-/**
- * Build a candidate index/data pair, never modify inputs. Refuse an entire book if any verified
- * anchor cannot be mapped without guessing. The pair is for inspection, not automatic promotion.
- */
-export async function stageEpubReextraction(options: {
-  index: string; data: string; booksRoot: string; output: string; books: string[];
-  /** Explicit mirror-path overrides; every file still has to match the indexed SHA-256. */
-  files?: Record<string, string>;
-}): Promise<{ directory: string; books: StagedBook[]; promotionReady: false }> {
-  if (!options.books.length) throw new Error("Select at least one book explicitly.");
+interface SnapshotPair { index: string; data: string; output: string }
+
+async function copyPair(options: SnapshotPair): Promise<string> {
   const output = path.resolve(options.output);
   if (fs.existsSync(output)) throw new Error("The staging output must be a new directory.");
   const sourceIndex = new Database(options.index, { readonly: true, fileMustExist: true });
@@ -40,6 +33,35 @@ export async function stageEpubReextraction(options: {
     await sourceIndex.backup(path.join(output, "corpus.db"));
     await sourceData.backup(path.join(output, "data.db"));
   } finally { sourceIndex.close(); sourceData.close(); }
+  return output;
+}
+
+/** Prepare an inspection-only rollback pair. Rotate the feed generation so consumers replay old anchors. */
+export async function prepareEpubRollback(options: SnapshotPair) {
+  const output = await copyPair(options);
+  const db = openDatabase(path.join(output, "corpus.db"));
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } finally { db.close(); }
+  const data = openDataStore(path.join(output, "data.db"));
+  try {
+    data.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES ('anchor_log',?)").run(randomUUID());
+    data.pragma("wal_checkpoint(TRUNCATE)");
+  } finally { data.close(); }
+  const report = { directory: output, promotionReady: false, rollback: true, anchorLogRotated: true, requiresQuiescedWrites: true } as const;
+  fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2) + "\n");
+  return report;
+}
+
+/**
+ * Build a candidate index/data pair, never modify inputs. Refuse an entire book if any verified
+ * anchor cannot be mapped without guessing. The pair is for inspection, not automatic promotion.
+ */
+export async function stageEpubReextraction(options: SnapshotPair & {
+  booksRoot: string; books: string[];
+  /** Explicit mirror-path overrides; every file still has to match the indexed SHA-256. */
+  files?: Record<string, string>;
+}): Promise<{ directory: string; books: StagedBook[]; promotionReady: false }> {
+  if (!options.books.length) throw new Error("Select at least one book explicitly.");
+  const output = await copyPair(options);
   const db = openDatabase(path.join(output, "corpus.db"));
   const data = openDataStore(path.join(output, "data.db"));
   const results: StagedBook[] = [];
@@ -72,7 +94,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     const newOutline = next.outline.map(({ startPage, ...entry }) => ({ ...entry, start_page: startPage }));
     if (JSON.stringify(outline) !== JSON.stringify(newOutline)) return refused("Outline mapping changed.");
     const sections = sectionPaths(next.outline, next.pages.length);
-    const newPages = next.pages.map((p) => ({ page_index: p.index, label: p.label, section_path: sections[p.index], text: p.paragraphs.join("\n\n") }));
+    const newPages = next.pages.map((p) => ({ page_index: p.index, label: p.label, section_path: sections[p.index], text: p.paragraphs.join("\n\n"), separator_before: p.separatorBefore ?? "" }));
     const planned: { kind: "quote" | "anchor"; id: number; result: AnchorMigration }[] = [];
     for (const [kind, table, key] of [["quote", "quotes", "id"], ["anchor", "anchors", "quote_id"]] as const) {
       const saved = data.prepare(`SELECT * FROM ${table} WHERE calibre_uuid = ?`).all(book.uuid) as SavedAnchor[];
@@ -94,10 +116,10 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     writesStarted = true;
     db.transaction(() => {
       db.prepare("DELETE FROM passages WHERE book_id = ?").run(id);
-      const page = db.prepare("UPDATE pages SET text = ? WHERE book_id = ? AND page_index = ?");
+      const page = db.prepare("UPDATE pages SET text = ?, separator_before = ? WHERE book_id = ? AND page_index = ?");
       const passage = db.prepare("INSERT INTO passages (book_id,page_index,ord,text) VALUES (?,?,?,?)");
       for (const p of next.pages) {
-        page.run(newPages[p.index].text, id, p.index);
+        page.run(newPages[p.index].text, newPages[p.index].separator_before, id, p.index);
         chunkPage(p.paragraphs).forEach((text, ord) => passage.run(id, p.index, ord, text));
       }
       db.prepare(`UPDATE books SET extractor_version = 2, text_chars = ?, indexed_at = ?,

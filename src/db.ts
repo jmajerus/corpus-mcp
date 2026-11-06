@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS pages (
   label TEXT,
   section_path TEXT,
   text TEXT NOT NULL,
+  separator_before TEXT,             -- exact source separator; null uses legacy newline joining
   PRIMARY KEY (book_id, page_index)
 );
 
@@ -147,6 +148,8 @@ const ADDED_BOOK_COLUMNS: Record<string, string> = {
 };
 
 function migrate(db: DB): void {
+  const pageColumns = db.prepare("PRAGMA table_info(pages)").all() as { name: string }[];
+  if (!pageColumns.some((c) => c.name === "separator_before")) db.exec("ALTER TABLE pages ADD COLUMN separator_before TEXT");
   const existing = new Set((db.prepare("PRAGMA table_info(books)").all() as { name: string }[]).map((c) => c.name));
   for (const [column, type] of Object.entries(ADDED_BOOK_COLUMNS)) {
     if (!existing.has(column)) db.exec(`ALTER TABLE books ADD COLUMN ${column} ${type}`);

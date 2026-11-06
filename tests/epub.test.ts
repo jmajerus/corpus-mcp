@@ -3,6 +3,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { extractBook } from "../src/extract.js";
 import { extractEpubSourcePages } from "../src/epub.js";
 import { sourceStyles } from "../src/epub-css.js";
+import { joinedPageText, locate } from "../src/quotes.js";
 import { makeEpub } from "./fixtures.js";
 
 const preview = (data: Uint8Array) => extractBook(data, "epub", { epubParagraphs: "source" });
@@ -55,13 +56,46 @@ it.each(["pre", "pre-line", "pre-wrap", "break-spaces"])("refuses lost significa
   expect(() => extractEpubSourcePages(book(`<p style="white-space:${mode}">First\nsecond</p>`), layout)).toThrow(/Significant EPUB whitespace/);
 });
 
-it("refuses significant whitespace whose location ownership is ambiguous", () => {
+it("assigns significant whitespace across locations only when every match agrees on ownership", () => {
   const layout = {
     resolveLink: () => 0, countPages: () => 2,
     loadPage: (index: number) => ({ destroy() {}, toStructuredText: () => ({ asText: () => index ? "second" : "First\n", destroy() {} }) }),
   } as unknown as Parameters<typeof extractEpubSourcePages>[1];
-  expect(() => extractEpubSourcePages(book('<pre>First\nsecond</pre>'), layout)).toThrow(/whitespace crosses locations/);
-  expect(() => preview(book('<pre>   </pre>'))).toThrow(/Whitespace-only preserved/);
+  expect(extractEpubSourcePages(book('<pre>First\nsecond</pre>'), layout).map((p) => p.paragraphs)).toEqual([["First\n"], ["second"]]);
+  const ambiguous = { ...layout, loadPage: (index: number) => ({ destroy() {}, toStructuredText: () => ({ asText: () => index ? "\nsecond" : "First\n", destroy() {} }) }) };
+  expect(() => extractEpubSourcePages(book('<pre>First\nsecond</pre>'), ambiguous as unknown as typeof layout)).toThrow(/ambiguous location ownership/);
+  const lost = { ...layout, loadPage: (index: number) => ({ destroy() {}, toStructuredText: () => ({ asText: () => index ? "second" : "First", destroy() {} }) }) };
+  expect(() => extractEpubSourcePages(book('<pre>First\nsecond</pre>'), lost as unknown as typeof layout)).toThrow(/whitespace differs/);
+  const blank = { ...layout, countPages: () => 1, loadPage: () => ({ destroy() {}, toStructuredText: () => ({ asText: () => "   ", destroy() {} }) }) };
+  expect(extractEpubSourcePages(book('<pre>   </pre>'), blank as unknown as typeof layout)[0].paragraphs).toEqual(["   "]);
+});
+
+it("splits one preserved indentation run across locations without adding or losing characters", () => {
+  const layout = {
+    resolveLink: () => 0, countPages: () => 2,
+    loadPage: (index: number) => ({ destroy() {}, toStructuredText: () => ({ asText: () => index ? "    second" : "First\n", destroy() {} }) }),
+  } as unknown as Parameters<typeof extractEpubSourcePages>[1];
+  const pages = extractEpubSourcePages(book('<pre>First\n    second</pre>'), layout);
+  expect(pages.map((p) => p.paragraphs)).toEqual([["First\n"], ["    second"]]);
+  expect(pages.flatMap((p) => p.paragraphs).join("")).toBe("First\n    second");
+});
+
+it.each([
+  ['<p>First second</p>', ["First", "second"], " ", "First second"],
+  ['<p>First</p><p>second</p>', ["First", "second"], "\n\n", "First\n\nsecond"],
+  ['<p>translation</p>', ["trans", "lation"], "", "translation"],
+  ['<pre>First\nsecond</pre>', ["First\n", "second"], "", "First\nsecond"],
+] as const)("reconstructs exact source separators for %s", (html, text, separator, expected) => {
+  const layout = {
+    resolveLink: () => 0, countPages: () => 2,
+    loadPage: (index: number) => ({ destroy() {}, toStructuredText: () => ({ asText: () => text[index], destroy() {} }) }),
+  } as unknown as Parameters<typeof extractEpubSourcePages>[1];
+  const extracted = extractEpubSourcePages(book(html), layout);
+  expect(extracted[1].separatorBefore).toBe(separator);
+  const pages = extracted.map((p) => ({ page_index: p.index, label: p.label, section_path: null,
+    text: p.paragraphs.join("\n\n"), separator_before: p.separatorBefore }));
+  expect(joinedPageText(pages)).toBe(expected);
+  expect(locate(pages, expected)).toMatchObject({ start_page: 0, end_page: 1, text: expected });
 });
 
 it("keeps explicit verse line breaks, separate stanzas, and preformatted indentation", () => {
@@ -69,6 +103,10 @@ it("keeps explicit verse line breaks, separate stanzas, and preformatted indenta
   expect(result.pages[0].paragraphs).toEqual([
     "A poem", "First line\nSecond line\n\nThird line", "Another stanza\nLast line", "    first code line\n      second code line",
   ]);
+});
+
+it("normalizes XML line endings before preserving source whitespace", () => {
+  expect(preview(book('<pre>First\r\nsecond\rthird</pre>')).pages[0].paragraphs).toEqual(["First\nsecond\nthird"]);
 });
 
 it("keeps default list items and headings distinct", () => {
@@ -84,6 +122,8 @@ it("splits a long source paragraph across existing locations without losing or d
   expect(result.pages.map((p) => p.index)).toEqual(old.pages.map((p) => p.index));
   expect(result.outline).toEqual(old.outline);
   const fragments = result.pages.flatMap((p) => p.paragraphs);
+  expect(result.pages.map((p) => p.separatorBefore + p.paragraphs.join("\n\n")).join(""))
+    .toBe(`First\n\n${text}\n\nNext paragraph.\n\nSecond\n\nAnother chapter.`);
   expect(fragments.join(" ").replace(/\s+/g, " ")).toBe(`First ${text} Next paragraph. Second Another chapter.`);
   expect(fragments).toContain("Next paragraph.");
   expect(fragments).toContain("Another chapter.");

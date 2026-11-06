@@ -1,4 +1,4 @@
-import { CONTEXT, normalizeWithMap, type PageText, type QuoteAnchor } from "./quotes.js";
+import { CONTEXT, joinedPageText, normalizeWithMap, type PageText, type QuoteAnchor } from "./quotes.js";
 
 export type AnchorMigration = { status: "unchanged" | "remapped"; anchor: QuoteAnchor }
   | { status: "review"; reason: string };
@@ -21,10 +21,10 @@ export function planAnchorMigration(before: PageText[], after: PageText[], old: 
     previous.push(a); next.push(b);
   }
   if (old.start_offset >= previous[0].text.length || old.end_offset > previous.at(-1)!.text.length) return review("invalid-offsets");
-  const oldText = previous.map((p, i) => p.text.slice(i === 0 ? old.start_offset : 0, i === previous.length - 1 ? old.end_offset : p.text.length)).join("\n").trim();
+  const oldText = joinedPageText(previous, old.start_offset, old.end_offset).trim();
   if (!old.text || oldText !== old.text) return review("stale-old-anchor");
   const normalized = previous.map((p, i) => ({ before: normalizeWithMap(p.text), after: normalizeWithMap(next[i].text) }));
-  if (normalized.some((p) => p.before.norm !== p.after.norm)) return review("location-text-changed");
+  if (normalized.some((p) => p.before.norm.trimEnd() !== p.after.norm.trimEnd())) return review("location-text-changed");
   const first = normalized[0], last = normalized.at(-1)!;
   const startIndex = first.before.map.findIndex((offset) => offset >= old.start_offset);
   const endIndex = last.before.map.findLastIndex((offset) => offset < old.end_offset);
@@ -32,7 +32,7 @@ export function planAnchorMigration(before: PageText[], after: PageText[], old: 
     || last.before.ends[endIndex] !== old.end_offset) return review("non-character-boundary");
   const start = first.after.map[startIndex], end = last.after.ends[endIndex];
   if (start === undefined || !Number.isFinite(end)) return review("unmappable-offsets");
-  const text = next.map((p, i) => p.text.slice(i === 0 ? start : 0, i === next.length - 1 ? end : p.text.length)).join("\n").trim();
+  const text = joinedPageText(next, start, end).trim();
   if (normalizeWithMap(text).norm.trim() !== normalizeWithMap(old.text).norm.trim()) return review("mapped-wording-changed");
   const anchor: QuoteAnchor = {
     start_page: old.start_page, end_page: old.end_page, start_offset: start, end_offset: end, text,

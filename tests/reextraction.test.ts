@@ -6,7 +6,7 @@ import { openDatabase } from "../src/db.js";
 import { openDataStore } from "../src/data.js";
 import { scanLibraries } from "../src/indexer.js";
 import { getQuote, saveQuote } from "../src/quotes.js";
-import { stageEpubReextraction } from "../src/reextraction.js";
+import { prepareEpubRollback, stageEpubReextraction } from "../src/reextraction.js";
 import { readerQuotes } from "../src/quoteMcp.js";
 import type { Config } from "../src/config.js";
 import type { BookRow, Corpus } from "../src/tools.js";
@@ -49,15 +49,20 @@ it("stages corrected text, passages, and same-file anchors in copies, retaining 
     const output = path.join(root, "candidate");
     const mirrorFile = path.join(root, "mirror.epub");
     fs.writeFileSync(mirrorFile, epub);
+    // Rehearse the additive page-separator migration on a schema-6 snapshot.
+    db.exec("ALTER TABLE pages DROP COLUMN separator_before");
+    db.prepare("UPDATE meta SET value='6' WHERE key='schema_version'").run();
     const report = await stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output, books: ["main:1", "main:2"], files: { "main:1": mirrorFile } });
     expect(report.promotionReady).toBe(false);
     expect(report.books).toMatchObject([{ book: "main:1", status: "staged" }, { book: "main:2", status: "refused" }]);
     expect(db.prepare("SELECT text FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe(before);
     expect(data.prepare("SELECT * FROM anchors").all()).toEqual(originalAnchors);
     expect(data.prepare("SELECT * FROM quotes").all()).toEqual(originalQuotes);
+    expect(db.prepare("PRAGMA table_info(pages)").all()).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "separator_before" })]));
     stagedDb = openDatabase(path.join(output, "corpus.db")); stagedData = openDataStore(path.join(output, "data.db"));
     const after = stagedDb.prepare("SELECT text FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get() as string;
     expect(after).toContain("Target\n\nlowercase");
+    expect(stagedDb.prepare("SELECT separator_before FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe("");
     expect(stagedDb.prepare("SELECT text_chars FROM books WHERE id='main:1'").pluck().get()).toBe([...after].length);
     expect([...after].length).toBeLessThan(after.length);
     expect(stagedDb.prepare("SELECT sha256 FROM books WHERE id='main:1'").pluck().get()).toBe(hash);
@@ -80,9 +85,19 @@ it("stages corrected text, passages, and same-file anchors in copies, retaining 
     const { text: omittedText, ...withoutText } = migrated;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ quotes: [{ ...external(migrated), anchor: withoutText }] }), { status: 200 })));
     expect((await readerQuotes("http://quote.test", stagedBook, 0, 0, stagedData)).quotes).toHaveLength(1);
+    const legacyBook = db.prepare("SELECT * FROM books WHERE id='main:1'").get() as BookRow;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ quotes: [{ ...external(migrated), anchor: withoutText }] }), { status: 200 })));
+    expect((await readerQuotes("http://quote.test", legacyBook, 0, 0, data)).quotes).toEqual([]);
     vi.unstubAllGlobals();
     expect(stagedDb.prepare("SELECT text FROM passages WHERE book_id='main:1' ORDER BY ord").all()).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("Target\n\nlowercase") })]));
     expect(stagedDb.prepare("SELECT extractor_version FROM books WHERE id='main:2'").pluck().get()).toBe(1);
+    const refresh = scanLibraries({ ...config, dbPath: path.join(output, "corpus.db"), dataDbPath: path.join(output, "data.db") }, stagedDb, { force: true });
+    expect(refresh).toMatchObject({ extracted: 2, failed: 0 });
+    expect(stagedDb.prepare("SELECT extractor_version FROM books WHERE id='main:1'").pluck().get()).toBe(2);
+    expect(stagedDb.prepare("SELECT extractor_version FROM books WHERE id='main:2'").pluck().get()).toBe(1);
+    expect(stagedDb.prepare("SELECT text FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe(after);
+    expect(stagedDb.prepare("SELECT separator_before FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe("");
+    expect(stagedDb.prepare("SELECT printed_years_version FROM books WHERE id='main:1'").pluck().get()).not.toBeNull();
     await expect(stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output, books: ["main:1"] })).rejects.toThrow(/new directory/);
     // A stale verified anchor refuses the whole book, with its index and anchors retained in the copy.
     data.prepare("UPDATE anchors SET start_offset=0 WHERE quote_id=70").run();
@@ -97,6 +112,13 @@ it("stages corrected text, passages, and same-file anchors in copies, retaining 
     const failedOutput = path.join(root, "write-failure");
     await expect(stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: failedOutput, books: ["main:1"] })).rejects.toThrow(/injected write failure/);
     expect(JSON.parse(fs.readFileSync(path.join(failedOutput, "report.json"), "utf8"))).toMatchObject({ failed: true, promotionReady: false });
+    const originalLog = data.prepare("SELECT value FROM meta WHERE key='anchor_log'").pluck().get();
+    const rollback = await prepareEpubRollback({ index: config.dbPath, data: config.dataDbPath, output: path.join(root, "rollback") });
+    expect(rollback).toMatchObject({ promotionReady: false, requiresQuiescedWrites: true, anchorLogRotated: true });
+    const rollbackData = openDataStore(path.join(rollback.directory, "data.db"));
+    try { expect(rollbackData.prepare("SELECT value FROM meta WHERE key='anchor_log'").pluck().get()).not.toBe(originalLog); }
+    finally { rollbackData.close(); }
+    expect(data.prepare("SELECT value FROM meta WHERE key='anchor_log'").pluck().get()).toBe(originalLog);
   } finally {
     vi.unstubAllGlobals();
     stagedDb?.close(); stagedData?.close(); db.close(); data.close();

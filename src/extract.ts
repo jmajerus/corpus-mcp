@@ -34,6 +34,8 @@ export interface ExtractedPage {
   label: string | null;
   /** Paragraphs in reading order. */
   paragraphs: string[];
+  /** Source text between the preceding location and this one; absent for legacy extraction. */
+  separatorBefore?: string;
 }
 
 export interface ExtractedBook {

@@ -403,8 +403,8 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const start = Math.min(Math.max(Number(url.searchParams.get("start")) || 1, 1), book.page_count);
       const count = Math.min(Math.max(Number(url.searchParams.get("count")) || 4, 1), 12);
       const end = Math.min(start + count - 1, book.page_count);
-      const pages = c.db.prepare("SELECT page_index, label, section_path, text FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index")
-        .all(book.id, start - 1, end - 1) as { page_index: number; label: string | null; section_path: string | null; text: string }[];
+      const pages = c.db.prepare("SELECT page_index, label, section_path, text, separator_before FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index")
+        .all(book.id, start - 1, end - 1) as { page_index: number; label: string | null; section_path: string | null; text: string; separator_before: string | null }[];
       sendJson(res, 200, {
         book_id: book.id, title: book.title, authors: JSON.parse(book.authors), page_count: book.page_count, page_kind: book.reflowable ? "location" : "pdf_page",
         // A new quote inherits these unless it is given its own.
@@ -412,7 +412,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         outline: c.db.prepare("SELECT level, title, start_page FROM outline WHERE book_id = ? AND level <= 1 AND start_page IS NOT NULL ORDER BY ord").all(book.id)
           .map((o) => ({ ...(o as { level: number; title: string; start_page: number }), page: (o as { start_page: number }).start_page + 1 })),
         start, end,
-        pages: pages.map((p) => ({ page: p.page_index + 1, label: p.label, section: p.section_path, text: p.text })),
+        pages: pages.map((p) => ({ page: p.page_index + 1, label: p.label, section: p.section_path, text: p.text, separator_before: p.separator_before })),
         ...(await quotesForReader(book, start - 1, end - 1)),
       });
     }

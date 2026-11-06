@@ -3,6 +3,7 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import type * as mupdf from "mupdf";
 import type { ExtractedPage } from "./extract.js";
 import { sourceStyles, type Sheet, type SourceStyle } from "./epub-css.js";
+import { mapEpubLocations, type SourceParagraph as Paragraph } from "./epub-locations.js";
 
 export interface SourceNode {
   name: string;
@@ -13,6 +14,8 @@ export interface SourceNode {
 }
 
 function sourceTree(html: string): SourceNode {
+  // XML normalizes both CRLF and bare CR to LF before exposing document text.
+  html = html.replace(/\r\n?/g, "\n");
   const valid = XMLValidator.validate(html);
   if (valid !== true) throw new Error(`Invalid EPUB XHTML: ${valid.err.msg}`);
   const parser = new XMLParser({ preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: "",
@@ -28,7 +31,6 @@ function sourceTree(html: string): SourceNode {
   root.children = convert(parser.parse(html), root);
   return root;
 }
-interface Paragraph { text: string; pre: boolean; whitespace: { start: number; end: number }[] }
 interface Chapter { href: string; paragraphs: Paragraph[] }
 
 const OMIT = new Set(["head", "script", "style", "template"]);
@@ -64,8 +66,7 @@ function sourceParagraphs(html: string, href: string, read: (name: string) => st
   const flush = (keepLabel = false) => {
     if (keepLabel && labelOnly) return;
     const text = trailingCollapsible ? current.slice(0, -1) : current;
-    if (text.trim()) paragraphs.push({ text, pre: preserved, whitespace });
-    else if (preserved && text) throw new Error("Whitespace-only preserved EPUB content cannot be mapped to locations.");
+    if (text.trim() || (preserved && text && whitespace.length)) paragraphs.push({ text, pre: preserved, whitespace });
     current = "";
     preserved = false;
     labelOnly = false;
@@ -169,32 +170,6 @@ function readSpine(data: Uint8Array): Chapter[] {
   return chapters;
 }
 
-/** Match characters, ignoring layout whitespace, discretionary hyphens, and font ligatures. */
-function canonical(text: string): string {
-  return text.normalize("NFKC").replace(/[\s\u00ad]/gu, "");
-}
-
-interface SourceText extends Paragraph { canonical: string; offsets: number[]; ends: number[] }
-const graphemes = new Intl.Segmenter("und", { granularity: "grapheme" });
-function sourceText({ text, pre, whitespace }: Paragraph): SourceText {
-  let normalized = "";
-  const offsets: number[] = [];
-  const ends: number[] = [];
-  for (const { segment, index } of graphemes.segment(text)) {
-    const norm = canonical(segment);
-    normalized += norm;
-    for (let i = 0; i < norm.length; i++) { offsets.push(index); ends.push(index + segment.length); }
-  }
-  offsets.push(text.length);
-  return { text, pre, whitespace, canonical: normalized, offsets, ends };
-}
-
-function lowerBound(values: number[], target: number): number {
-  let left = 0, right = values.length;
-  while (left < right) { const middle = (left + right) >>> 1; if (values[middle] < target) left = middle + 1; else right = middle; }
-  return left;
-}
-
 /**
  * Experimental EPUB extraction. Source markup supplies paragraphs/explicit line breaks; MuPDF
  * supplies the existing location boundaries. Every chapter must match character-for-character
@@ -208,79 +183,23 @@ export function extractEpubSourcePages(data: Uint8Array, doc: mupdf.Document): E
     throw new Error("EPUB source spine cannot be mapped unambiguously to MuPDF locations.");
   }
   const pages: ExtractedPage[] = [];
+  let hasContent = false;
   for (let chapter = 0; chapter < chapters.length; chapter++) {
     const { href, paragraphs } = chapters[chapter];
-    const source = paragraphs.map(sourceText);
-    const expected = source.map((p) => p.canonical).join("");
-    const gaps = new Map<number, string[]>();
-    let sourceAt = 0;
-    for (const p of source) {
-      for (const span of p.whitespace) {
-        const position = sourceAt + Math.min(lowerBound(p.offsets, span.end), p.canonical.length);
-        const parts = gaps.get(position) ?? [];
-        parts.push(p.text.slice(span.start, span.end)); gaps.set(position, parts);
-      }
-      sourceAt += p.canonical.length;
-    }
-    let at = 0, paragraph = 0, within = 0;
+    const locations: { index: number; text: string }[] = [];
     const end = starts[chapter + 1] ?? count;
     for (let index = starts[chapter]; index < end; index++) {
       const page = doc.loadPage(index);
-      let renderedText: SourceText;
       try {
-        // No dehyphenate: retain real source hyphens. Discretionary soft hyphens normalize away.
+        // Retain real hyphens and raw whitespace as evidence for source location ownership.
         const text = page.toStructuredText("preserve-whitespace");
-        try { renderedText = sourceText({ text: text.asText(), pre: false, whitespace: [] }); } finally { text.destroy(); }
+        try { locations.push({ index, text: text.asText() }); } finally { text.destroy(); }
       } finally { page.destroy(); }
-      const rendered = renderedText.canonical;
-      if (!expected.startsWith(rendered, at)) {
-        let mismatch = 0;
-        while (mismatch < rendered.length && expected[at + mismatch] === rendered[mismatch]) mismatch++;
-        throw new Error(`EPUB source/layout mismatch in ${href}, location ${index + 1}, character ${at + mismatch}: expected ${JSON.stringify(expected.slice(at + mismatch, at + mismatch + 24))}, rendered ${JSON.stringify(rendered.slice(mismatch, mismatch + 24))}.`);
-      }
-      // Character alignment alone would accept lost indentation, spaces, or explicit line breaks.
-      // Require significant source gaps to survive in the raw rendered text. A gap crossing a
-      // location cannot be assigned reliably, so refuse it rather than guessing its ownership.
-      for (const [position, parts] of gaps) {
-        if (position < at || position > at + rendered.length) continue;
-        if ((position === at && position !== 0) || (position === at + rendered.length && position !== expected.length)) {
-          throw new Error(`Significant EPUB whitespace crosses locations in ${href}, location ${index + 1}.`);
-        }
-        const relative = position - at;
-        const begin = relative === 0 ? 0 : renderedText.ends[relative - 1];
-        const finish = relative === rendered.length ? renderedText.text.length : renderedText.offsets[relative];
-        const actual = renderedText.text.slice(begin, finish);
-        let cursor = 0;
-        for (const part of parts) {
-          const found = actual.indexOf(part, cursor);
-          if (found < 0) throw new Error(`Significant EPUB whitespace differs from layout in ${href}, location ${index + 1}.`);
-          cursor = found + part.length;
-        }
-        gaps.delete(position);
-      }
-      at += rendered.length;
-      let remaining = rendered.length;
-      const fragments: string[] = [];
-      while (remaining > 0 && paragraph < source.length) {
-        const p = source[paragraph];
-        const take = Math.min(remaining, p.canonical.length - within);
-        // A page boundary must not split the expansion of one source character (e.g. a ligature).
-        if (within + take < p.canonical.length && p.offsets[within + take] === p.offsets[within + take - 1]) {
-          throw new Error(`EPUB location splits a source character in ${href}, location ${index + 1}.`);
-        }
-        const from = within === 0 ? 0 : p.ends[within - 1];
-        const to = within + take === p.canonical.length ? p.text.length : p.ends[within + take - 1];
-        const raw = p.text.slice(from, to);
-        const fragment = p.pre ? raw : raw.replace(/^[ \t]+|[ \t]+$/g, "");
-        if (fragment) fragments.push(fragment);
-        within += take;
-        remaining -= take;
-        if (within === p.canonical.length) { paragraph++; within = 0; }
-      }
-      pages.push({ index, label: null, paragraphs: fragments });
     }
-    if (at !== expected.length) throw new Error(`EPUB source has unmatched text in ${href} after location ${end}.`);
-    if (gaps.size) throw new Error(`Significant EPUB whitespace cannot be mapped in ${href}.`);
+    const mapped = mapEpubLocations(paragraphs, locations, href);
+    const first = mapped.find((p) => p.paragraphs.length);
+    if (first) { if (hasContent) first.separatorBefore = "\n\n"; hasContent = true; }
+    pages.push(...mapped);
   }
   return pages;
 }
