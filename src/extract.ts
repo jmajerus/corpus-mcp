@@ -1,4 +1,5 @@
 import * as mupdf from "mupdf";
+import { extractEpubSourcePages } from "./epub.js";
 
 /** Formats in order of preference: PDF has citable printed pages, MOBI and AZW3 have no outline in MuPDF. */
 export const FORMAT_PREFERENCE = ["pdf", "epub", "mobi", "azw3"] as const;
@@ -51,11 +52,20 @@ export function openBook(data: Uint8Array, format: BookFormat): mupdf.Document {
   return doc;
 }
 
-export function extractBook(data: Uint8Array, format: BookFormat): ExtractedBook {
+export interface ExtractionOptions {
+  /** Preview only: do not enable in the indexer until re-extraction and anchor migration are ready. */
+  epubParagraphs?: "source";
+}
+
+export function extractBook(data: Uint8Array, format: BookFormat, options: ExtractionOptions = {}): ExtractedBook {
+  if (options.epubParagraphs && format !== "epub") throw new Error("Source paragraph extraction is only supported for EPUB.");
   const reflowable = isReflowable(format);
   const doc = openBook(data, format);
   try {
     const outline = flattenOutline(doc);
+    if (options.epubParagraphs === "source") {
+      return { reflowable, outline, pages: extractEpubSourcePages(data, doc) };
+    }
     const pages: ExtractedPage[] = [];
     const count = doc.countPages();
     for (let index = 0; index < count; index++) {

@@ -42,6 +42,7 @@ export interface BookRow {
   printed_years: string | null; printed_year: number | null; title_page: string | null;
   description: string | null; format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;
   page_count: number | null; status: string; error: string | null; calibre_id: number; file_size: number | null; text_chars: number | null;
+  extractor_version?: number | null;
 }
 
 interface PageRow { page_index: number; label: string | null; section_path: string | null; text: string }

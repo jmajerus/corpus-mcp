@@ -1,4 +1,5 @@
 import type { BookRow } from "./tools.js";
+import type { DataStore } from "./data.js";
 
 /**
  * quote-mcp, where quotes are kept (docs/dev-briefs/holdings-and-quotes.md §3.4). The reader shows a book's
@@ -14,7 +15,7 @@ export interface ReaderQuote {
 
 interface QuoteMcpQuote {
   id: number; comment: string | null; tags: string[]; flags: string[]; admin_path: string;
-  anchor: { sha256: string | null; start_page: number; start_offset: number; end_page: number; end_offset: number } | null;
+  anchor: { sha256: string | null; start_page: number; start_offset: number; end_page: number; end_offset: number; text?: string } | null;
 }
 
 export class QuoteMcpError extends Error {}
@@ -37,13 +38,23 @@ async function call(base: string, method: "GET" | "POST", path: string, body?: u
  * anchored on an earlier file (its sha differs) has offsets that no longer fit, so it isn't highlighted.
  * tags are those on all the book's quotes, for the save bar's suggestions.
  */
-export async function readerQuotes(base: string, book: BookRow, from: number, to: number): Promise<{ quotes: ReaderQuote[]; tags: string[] }> {
+export async function readerQuotes(base: string, book: BookRow, from: number, to: number, data?: DataStore): Promise<{ quotes: ReaderQuote[]; tags: string[] }> {
   const r = await call(base, "GET", `/api/corpus/quotes?book=${encodeURIComponent(book.uuid ?? book.id)}`);
   if (r.status !== 200) throw new QuoteMcpError(`quote-mcp answered ${r.status} for this book's quotes.`);
   const all = r.body.quotes as QuoteMcpQuote[];
   const tags = [...new Set(all.flatMap((q) => q.tags))].sort((a, b) => a.localeCompare(b));
+  const sourceStructured = book.format === "epub" && (book.extractor_version ?? 1) >= 2;
   const quotes = all
-    .filter((q) => q.anchor && q.anchor.sha256 === book.sha256 && q.anchor.start_page <= to && q.anchor.end_page >= from)
+    .filter((q) => {
+      if (!q.anchor || q.flags.includes("anchor_lost") || q.anchor.sha256 !== book.sha256 || q.anchor.start_page > to || q.anchor.end_page < from) return false;
+      if (!sourceStructured) return true;
+      // Re-extraction can change offsets without changing the file hash. Until quote-mcp consumes
+      // the migration feed, highlight only anchors matching corpus-mcp's current verified record.
+      const current = data?.prepare("SELECT * FROM anchors WHERE quote_id = ? AND calibre_uuid = ? AND status = 'verified'")
+        .get(q.id, book.uuid) as QuoteMcpQuote["anchor"] | undefined;
+      return !!current && (["sha256", "start_page", "start_offset", "end_page", "end_offset", "text"] as const)
+        .every((key) => current[key] === q.anchor![key]);
+    })
     .map(({ id, anchor: a, comment, tags, flags, admin_path }) => ({
       id, start_page: a!.start_page + 1, start_offset: a!.start_offset, end_page: a!.end_page + 1, end_offset: a!.end_offset,
       comment, tags, flags, admin_path,

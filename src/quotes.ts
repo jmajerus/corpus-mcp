@@ -59,9 +59,10 @@ function lowerSameLength(text: string): string {
 export interface PageText { page_index: number; label: string | null; section_path: string | null; text: string }
 
 /**
- * Stored text as running prose. The extractor keeps each text block as a paragraph, and some EPUBs set
- * every printed line as its own block, so a break mid-sentence is a line break: it becomes a space. A
+ * Compatibility reflow for legacy stored text. The extractor treats layout text blocks as paragraphs,
+ * and MuPDF sometimes emits one block per visual line, so a break mid-sentence becomes a space. A
  * break after closing punctuation, before anything but a lowercase letter, stays a paragraph break.
+ * This heuristic must be bypassed when source-structured EPUB extraction is promoted.
  */
 export function reflow(text: string): string {
   return text.replace(/[ \t]*\n\s*/g, (brk: string, at: number, all: string) =>
@@ -187,14 +188,20 @@ function bookCategories(c: Corpus, uuid: string): string[] {
   return tags ? (JSON.parse(tags) as string[]).filter((t) => c.vocabulary.has(t)) : [];
 }
 
+function proseFor(book: Pick<BookRow, "format" | "extractor_version"> | undefined, text: string): string {
+  return book?.format === "epub" && (book.extractor_version ?? 1) >= 2 ? text : reflow(text);
+}
+
 function present(c: Corpus, r: QuoteRow) {
-  const reflowable = c.db.prepare("SELECT reflowable FROM books WHERE uuid = ? ORDER BY id").pluck().get(r.calibre_uuid) as number | undefined;
+  const book = c.db.prepare("SELECT format, extractor_version, reflowable FROM books WHERE id = ? OR uuid = ? ORDER BY id = ? DESC, id LIMIT 1")
+    .get(r.book_id, r.calibre_uuid, r.book_id) as Pick<BookRow, "format" | "extractor_version" | "reflowable"> | undefined;
+  const reflowable = book?.reflowable;
   const withLabel = (t: string) => ({ tag: t, label: c.vocabulary.find(t)?.label ?? t });
   const locator = r.page_label
     ? `p. ${r.page_label}${r.end_page_label && r.end_page_label !== r.page_label ? `–${r.end_page_label}` : ""}`
     : r.section_path ?? (reflowable ? `location ${r.start_page + 1}` : `page ${r.start_page + 1}`);
   return {
-    id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, prose: reflow(r.text), note: r.note,
+    id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, prose: proseFor(book, r.text), note: r.note,
     book_categories: bookCategories(c, r.calibre_uuid).map(withLabel),
     labels: JSON.parse(r.labels) as string[],
     page: r.start_page + 1, end_page: r.end_page + 1, page_label: r.page_label, end_page_label: r.end_page_label, section: r.section_path,
@@ -259,7 +266,7 @@ export function getQuote(c: Corpus, id: number) {
   }
   const citation = book ? citePassage(c, { book_id: book.id, page: r.start_page + 1, end_page: r.end_page + 1 }) : null;
   return {
-    ...present(c, r), current_book_id: book?.id ?? null, context: { before: reflow(before), after: reflow(after) },
+    ...present(c, r), current_book_id: book?.id ?? null, context: { before: proseFor(book, before), after: proseFor(book, after) },
     csl: citation?.csl ?? null, csl_locator: citation?.locator ?? null, citekey: citation?.citekey ?? null,
     citation: citation?.citation ?? null,
   };
