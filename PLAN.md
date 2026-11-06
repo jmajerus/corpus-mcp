@@ -570,8 +570,11 @@ adapts. Agreed with CC's agent, in order:
 4. **Own environment** (done 2026-10-25). corpus-mcp's own `.env`
    (gitignored; `.env.example` lists the settings), no longer
    `../concept-clusters/.env`. It holds the authoring password and
-   `CORPUS_VOCABULARY_SOURCE`, so every deploy also installs CC's latest
-   export.
+   `CORPUS_VOCABULARY_SOURCE` as the default input for an explicit vocabulary
+   installation. A normal deploy does not refresh the vocabulary. When using
+   the file fallback, set `CORPUS_TERMINOLOGY_URL=off` and run
+   `npm run deploy -- --vocabulary[=file]`; otherwise terminology-mcp following
+   supplies the vocabulary.
 
 ## Zotero mirror (stage 1 built 2026-10-25)
 
@@ -741,8 +744,8 @@ subcategory can exist before any puzzle uses it. But:
 3. Author: `plan_puzzle_references` and the draft, built on sources already
    in hand.
 
-Step 2 today is a detour: define the subcategory in CC, run the export,
-deploy corpus-mcp (`CORPUS_VOCABULARY_SOURCE`), come back. The term id is
+In this historical workflow, step 2 was a detour: define the subcategory in CC,
+run the export, explicitly install it with `--vocabulary`, and come back. The term id is
 the key that joins every stage: the Calibre tag on books, the tag on saved
 quotes, the natural Zotero tag or collection for the topic, and CC's
 subcategory. A key every stage uses shouldn't be owned by the last stage
