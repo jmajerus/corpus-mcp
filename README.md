@@ -61,6 +61,10 @@ data, and Calibre changes go through a job a person previews and applies.
 Requires Node.js 22 or later. `better-sqlite3` compiles natively, so you also
 need a C++ toolchain and Python.
 
+Pandoc EPUB extraction and its tests require **Pandoc 3.1 or later** (`pandoc` on `PATH`, or
+`CORPUS_PANDOC_PATH` pointing to its executable). See [the Pandoc extraction workflow](docs/dev-briefs/pandoc-extraction.md)
+for staged re-extraction, version pinning, and the remaining activation checks.
+
 ```bash
 npm install
 npm run build

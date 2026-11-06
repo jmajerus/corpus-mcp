@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import { planAnchorMigration, type AnchorMigration } from "./anchor-migration.js";
+import { planAnchorMigration, relocatedAnchorPlanner, type AnchorMigration } from "./anchor-migration.js";
 import { type Anchor, storeAnchor } from "./anchors.js";
 import { chunkPage } from "./chunk.js";
 import { type DB, openDatabase } from "./db.js";
 import { type DataStore, openDataStore, recordChanges } from "./data.js";
 import { extractBook, sectionPaths } from "./extract.js";
+import { PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
 import { pagesOf, type QuoteAnchor } from "./quotes.js";
 import type { BookRow, Corpus } from "./tools.js";
 
@@ -17,18 +18,13 @@ interface SavedAnchor extends QuoteAnchor {
 export interface StagedBook {
   book: string; status: "staged" | "refused"; reason?: string; changedPages?: number;
   anchors?: { kind: "quote" | "anchor"; id: number; status: string; reason?: string }[];
+  oldLocations?: number; newLocations?: number; pandocVersion?: string;
+  pandocWarnings?: string;
 }
 
-/**
- * Build a candidate index/data pair, never modify inputs. Refuse an entire book if any verified
- * anchor cannot be mapped without guessing. The pair is for inspection, not automatic promotion.
- */
-export async function stageEpubReextraction(options: {
-  index: string; data: string; booksRoot: string; output: string; books: string[];
-  /** Explicit mirror-path overrides; every file still has to match the indexed SHA-256. */
-  files?: Record<string, string>;
-}): Promise<{ directory: string; books: StagedBook[]; promotionReady: false }> {
-  if (!options.books.length) throw new Error("Select at least one book explicitly.");
+interface SnapshotPair { index: string; data: string; output: string }
+
+async function copyPair(options: SnapshotPair): Promise<string> {
   const output = path.resolve(options.output);
   if (fs.existsSync(output)) throw new Error("The staging output must be a new directory.");
   const sourceIndex = new Database(options.index, { readonly: true, fileMustExist: true });
@@ -40,12 +36,43 @@ export async function stageEpubReextraction(options: {
     await sourceIndex.backup(path.join(output, "corpus.db"));
     await sourceData.backup(path.join(output, "data.db"));
   } finally { sourceIndex.close(); sourceData.close(); }
+  return output;
+}
+
+/** Prepare an inspection-only rollback pair. Rotate the feed generation so consumers replay old anchors. */
+export async function prepareEpubRollback(options: SnapshotPair) {
+  const output = await copyPair(options);
+  const db = openDatabase(path.join(output, "corpus.db"));
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } finally { db.close(); }
+  const data = openDataStore(path.join(output, "data.db"));
+  try {
+    data.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES ('anchor_log',?)").run(randomUUID());
+    data.pragma("wal_checkpoint(TRUNCATE)");
+  } finally { data.close(); }
+  const report = { directory: output, promotionReady: false, rollback: true, anchorLogRotated: true, requiresQuiescedWrites: true } as const;
+  fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2) + "\n");
+  return report;
+}
+
+/**
+ * Build a candidate index/data pair, never modify inputs. Refuse an entire book if any verified
+ * anchor cannot be mapped without guessing. The pair is for inspection, not automatic promotion.
+ */
+export async function stageEpubReextraction(options: SnapshotPair & {
+  booksRoot: string; books: string[];
+  /** Explicit mirror-path overrides; every file still has to match the indexed SHA-256. */
+  files?: Record<string, string>;
+  /** Pandoc is the preferred candidate. Source exists only for version-2 compatibility rehearsals. */
+  backend?: "pandoc" | "source";
+}): Promise<{ directory: string; books: StagedBook[]; promotionReady: false }> {
+  if (!options.books.length) throw new Error("Select at least one book explicitly.");
+  const output = await copyPair(options);
   const db = openDatabase(path.join(output, "corpus.db"));
   const data = openDataStore(path.join(output, "data.db"));
   const results: StagedBook[] = [];
   try {
     db.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES ('epub_source_preview','inspection-only')").run();
-    for (const id of new Set(options.books)) results.push(stageBook(db, data, options.booksRoot, id, options.files?.[id]));
+    for (const id of new Set(options.books)) results.push(stageBook(db, data, options.booksRoot, id, options.files?.[id], options.backend ?? "pandoc"));
     db.pragma("wal_checkpoint(TRUNCATE)");
     data.pragma("wal_checkpoint(TRUNCATE)");
     const report = { directory: output, books: results, promotionReady: false as const };
@@ -57,7 +84,7 @@ export async function stageEpubReextraction(options: {
   } finally { db.close(); data.close(); }
 }
 
-function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourceFile?: string): StagedBook {
+function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourceFile: string | undefined, backend: "pandoc" | "source"): StagedBook {
   const refused = (reason: string, anchors?: StagedBook["anchors"]): StagedBook => ({ book: id, status: "refused", reason, ...(anchors ? { anchors } : {}) });
   const book = db.prepare<[string], BookRow>("SELECT * FROM books WHERE id = ?").get(id);
   if (!book || book.format !== "epub" || book.status !== "indexed" || !book.file_path) return refused("Book must have indexed EPUB text.");
@@ -65,21 +92,23 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
   try {
     const bytes = fs.readFileSync(sourceFile ?? path.join(booksRoot, book.file_path));
     if (createHash("sha256").update(bytes).digest("hex") !== book.sha256) return refused("Book file changed since the source index was built.");
-    const next = extractBook(bytes, "epub", { epubParagraphs: "source" });
+    const next = extractBook(bytes, "epub", { epubParagraphs: backend });
     const oldPages = pagesOf(db, id, 0, book.page_count ?? 0);
-    if (oldPages.length !== next.pages.length || oldPages.some((p, i) => p.page_index !== next.pages[i].index)) return refused("Reading locations changed.");
+    if (backend === "source" && (oldPages.length !== next.pages.length || oldPages.some((p, i) => p.page_index !== next.pages[i].index))) return refused("Reading locations changed.");
     const outline = db.prepare("SELECT ord, level, title, path, start_page FROM outline WHERE book_id = ? ORDER BY ord").all(id);
     const newOutline = next.outline.map(({ startPage, ...entry }) => ({ ...entry, start_page: startPage }));
-    if (JSON.stringify(outline) !== JSON.stringify(newOutline)) return refused("Outline mapping changed.");
+    if (backend === "source" && JSON.stringify(outline) !== JSON.stringify(newOutline)) return refused("Outline mapping changed.");
     const sections = sectionPaths(next.outline, next.pages.length);
-    const newPages = next.pages.map((p) => ({ page_index: p.index, label: p.label, section_path: sections[p.index], text: p.paragraphs.join("\n\n") }));
+    const newPages = next.pages.map((p) => ({ page_index: p.index, label: p.label, section_path: sections[p.index], text: p.paragraphs.join("\n\n"), separator_before: p.separatorBefore ?? "" }));
+    const migrate = backend === "pandoc" ? relocatedAnchorPlanner(oldPages, newPages)
+      : (anchor: QuoteAnchor) => planAnchorMigration(oldPages, newPages, anchor);
     const planned: { kind: "quote" | "anchor"; id: number; result: AnchorMigration }[] = [];
     for (const [kind, table, key] of [["quote", "quotes", "id"], ["anchor", "anchors", "quote_id"]] as const) {
       const saved = data.prepare(`SELECT * FROM ${table} WHERE calibre_uuid = ?`).all(book.uuid) as SavedAnchor[];
       for (const row of saved) {
         if (row.status !== "verified") continue; // Preserve existing orphaned records and their flags.
         const result = row.sha256 !== book.sha256 ? { status: "review" as const, reason: "anchor-file-mismatch" }
-          : planAnchorMigration(oldPages, newPages, row);
+          : migrate(row);
         planned.push({ kind, id: row[key], result });
       }
     }
@@ -94,19 +123,25 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     writesStarted = true;
     db.transaction(() => {
       db.prepare("DELETE FROM passages WHERE book_id = ?").run(id);
-      const page = db.prepare("UPDATE pages SET text = ? WHERE book_id = ? AND page_index = ?");
+      db.prepare("DELETE FROM pages WHERE book_id = ?").run(id);
+      db.prepare("DELETE FROM outline WHERE book_id = ?").run(id);
+      const insertOutline = db.prepare("INSERT INTO outline(book_id,ord,level,title,path,start_page) VALUES (?,?,?,?,?,?)");
+      for (const e of next.outline) insertOutline.run(id, e.ord, e.level, e.title, e.path, e.startPage);
+      const page = db.prepare("INSERT INTO pages(book_id,page_index,label,section_path,text,separator_before) VALUES (?,?,?,?,?,?)");
       const passage = db.prepare("INSERT INTO passages (book_id,page_index,ord,text) VALUES (?,?,?,?)");
       for (const p of next.pages) {
-        page.run(newPages[p.index].text, id, p.index);
+        page.run(id, p.index, p.label, sections[p.index], newPages[p.index].text, newPages[p.index].separator_before);
         chunkPage(p.paragraphs).forEach((text, ord) => passage.run(id, p.index, ord, text));
       }
-      db.prepare(`UPDATE books SET extractor_version = 2, text_chars = ?, indexed_at = ?,
+      if (next.pandocVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc:${id}`, next.pandocVersion);
+      db.prepare(`UPDATE books SET extractor_version = ?, page_count = ?, text_chars = ?, indexed_at = ?,
         printed_isbns_version = NULL, printed_years_version = NULL, title_page_version = NULL WHERE id = ?`)
-        .run(db.prepare("SELECT COALESCE(SUM(LENGTH(text)),0) FROM pages WHERE book_id = ?").pluck().get(id), stamp, id);
+        .run(backend === "pandoc" ? PANDOC_EXTRACTOR_VERSION : 2, next.pages.length,
+          db.prepare("SELECT COALESCE(SUM(LENGTH(text)),0) FROM pages WHERE book_id = ?").pluck().get(id), stamp, id);
     })();
     data.transaction(() => {
       for (const p of planned) {
-        if (p.result.status !== "remapped") continue;
+        if (p.result.status === "review" || (p.result.status === "unchanged" && backend === "source")) continue;
         const a = p.result.anchor;
         if (p.kind === "anchor") {
           const anchor: Anchor = { ...a, calibre_uuid: book.uuid!, sha256: book.sha256,
@@ -115,13 +150,18 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
           if (response.status !== 200) throw new Error(`Staged anchor #${p.id} failed verification.`);
         } else {
           data.prepare(`UPDATE quotes SET text = ?, start_page = ?, start_offset = ?, end_page = ?, end_offset = ?,
+            page_label = ?, end_page_label = ?, section_path = ?,
             prefix = ?, suffix = ?, updated_at = ? WHERE id = ?`)
-            .run(a.text, a.start_page, a.start_offset, a.end_page, a.end_offset, a.prefix, a.suffix, stamp, p.id);
+            .run(a.text, a.start_page, a.start_offset, a.end_page, a.end_offset,
+              newPages[a.start_page].label, newPages[a.end_page].label, newPages[a.start_page].section_path,
+              a.prefix, a.suffix, stamp, p.id);
           recordChanges(data, [{ kind: "quote_reanchored", source: "calibre", book_id: id, calibre_uuid: book.uuid, title: book.title, detail: `#${p.id} (EPUB source extraction)` }]);
         }
       }
     })();
-    return { book: id, status: "staged", changedPages: oldPages.filter((p, i) => p.text !== newPages[i].text).length, anchors: summaries };
+    return { book: id, status: "staged", changedPages: oldPages.filter((p, i) => p.text !== newPages[i]?.text).length,
+      oldLocations: oldPages.length, newLocations: newPages.length, pandocVersion: next.pandocVersion,
+      ...(next.pandocWarnings ? { pandocWarnings: next.pandocWarnings } : {}), anchors: summaries };
   } catch (error) {
     // Extraction refusals occur before writes. Write failures must invalidate the entire candidate.
     if (writesStarted) throw error;

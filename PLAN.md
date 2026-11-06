@@ -26,7 +26,7 @@ explains what changed.
 | Index | A SQLite file inside the LXC with FTS5. It is derived data and can be rebuilt from the books at any time. |
 | Libraries | `main`, the library Calibre-Web serves. The other folders on the volume (`tech`, `private`, and so on) are not pulled. A book tagged `private` in Calibre is never indexed (`CORPUS_EXCLUDE_TAGS`). |
 | Language | TypeScript on Node 22, matching Concept Clusters. |
-| Extraction | The official `mupdf` npm package (WASM). It reads PDF, EPUB, and MOBI, which covers every book currently in the allowlisted libraries. |
+| Extraction | Pandoc is the preferred EPUB re-extraction backend, with logical block locations and a reusable document AST. Existing profiles stay pinned pending staged migration. MuPDF (WASM) handles PDF, MOBI/AZW3, and legacy EPUB profiles. See [Pandoc extraction](docs/dev-briefs/pandoc-extraction.md). |
 | Writes | Read-only. corpus-mcp never writes to Calibre or Zotero. |
 
 ## Corpus facts (2026-10-24)
@@ -570,8 +570,11 @@ adapts. Agreed with CC's agent, in order:
 4. **Own environment** (done 2026-10-25). corpus-mcp's own `.env`
    (gitignored; `.env.example` lists the settings), no longer
    `../concept-clusters/.env`. It holds the authoring password and
-   `CORPUS_VOCABULARY_SOURCE`, so every deploy also installs CC's latest
-   export.
+   `CORPUS_VOCABULARY_SOURCE` as the default input for an explicit vocabulary
+   installation. A normal deploy does not refresh the vocabulary. When using
+   the file fallback, set `CORPUS_TERMINOLOGY_URL=off` and run
+   `npm run deploy -- --vocabulary[=file]`; otherwise terminology-mcp following
+   supplies the vocabulary.
 
 ## Zotero mirror (stage 1 built 2026-10-25)
 
@@ -741,8 +744,8 @@ subcategory can exist before any puzzle uses it. But:
 3. Author: `plan_puzzle_references` and the draft, built on sources already
    in hand.
 
-Step 2 today is a detour: define the subcategory in CC, run the export,
-deploy corpus-mcp (`CORPUS_VOCABULARY_SOURCE`), come back. The term id is
+In this historical workflow, step 2 was a detour: define the subcategory in CC,
+run the export, explicitly install it with `--vocabulary`, and come back. The term id is
 the key that joins every stage: the Calibre tag on books, the tag on saved
 quotes, the natural Zotero tag or collection for the topic, and CC's
 subcategory. A key every stage uses shouldn't be owned by the last stage

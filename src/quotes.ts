@@ -63,7 +63,13 @@ function lowerSameLength(text: string): string {
   return out;
 }
 
-export interface PageText { page_index: number; label: string | null; section_path: string | null; text: string }
+export interface PageText { page_index: number; label: string | null; section_path: string | null; text: string; separator_before?: string | null }
+
+/** Assemble a stored range with exact source separators, retaining legacy behavior for old pages. */
+export function joinedPageText(pages: PageText[], start = 0, end = pages.at(-1)?.text.length ?? 0): string {
+  return pages.map((p, i) => (i ? p.separator_before ?? "\n" : "") +
+    p.text.slice(i === 0 ? start : 0, i === pages.length - 1 ? end : p.text.length)).join("");
+}
 
 /**
  * Compatibility reflow for legacy stored text. The extractor treats layout text blocks as paragraphs,
@@ -86,7 +92,7 @@ export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
   const where: { page: number; offset: number; end: number }[] = [];
   pages.forEach((p, n) => {
     const { norm, map, ends } = normalizeWithMap(p.text);
-    if (n > 0 && hay.length && hay[hay.length - 1] !== " ") {
+    if (n > 0 && hay.length && hay[hay.length - 1] !== " " && ((p.separator_before ?? "\n").length > 0 || /^\s/u.test(p.text))) {
       hay += " ";
       where.push({ page: n - 1, offset: pages[n - 1].text.length, end: pages[n - 1].text.length });
     }
@@ -100,24 +106,19 @@ export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
   const last = where[at + want.length - 1];
   const start = { page: first.page, offset: first.offset };
   const end = { page: last.page, offset: last.end };
-  const parts: string[] = [];
-  for (let n = start.page; n <= end.page; n++) {
-    const t = pages[n].text;
-    parts.push(t.slice(n === start.page ? start.offset : 0, n === end.page ? end.offset : t.length));
-  }
   const startText = pages[start.page].text;
   const endText = pages[end.page].text;
   return {
     start_page: pages[start.page].page_index, start_offset: start.offset,
     end_page: pages[end.page].page_index, end_offset: end.offset,
-    text: parts.join("\n").trim(),
+    text: joinedPageText(pages.slice(start.page, end.page + 1), start.offset, end.offset).trim(),
     prefix: startText.slice(Math.max(0, start.offset - CONTEXT), start.offset),
     suffix: endText.slice(end.offset, end.offset + CONTEXT),
   };
 }
 
 export function pagesOf(db: DB, bookId: string, from: number, to: number): PageText[] {
-  return db.prepare("SELECT page_index, label, section_path, text FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index")
+  return db.prepare("SELECT page_index, label, section_path, text, separator_before FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index")
     .all(bookId, Math.max(0, from), to) as PageText[];
 }
 

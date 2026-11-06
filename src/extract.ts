@@ -1,5 +1,6 @@
 import * as mupdf from "mupdf";
 import { extractEpubSourcePages } from "./epub.js";
+import { extractPandocEpub } from "./pandoc.js";
 
 /** Formats in order of preference: PDF has citable printed pages, MOBI and AZW3 have no outline in MuPDF. */
 export const FORMAT_PREFERENCE = ["pdf", "epub", "mobi", "azw3"] as const;
@@ -34,12 +35,16 @@ export interface ExtractedPage {
   label: string | null;
   /** Paragraphs in reading order. */
   paragraphs: string[];
+  /** Source text between the preceding location and this one; absent for legacy extraction. */
+  separatorBefore?: string;
 }
 
 export interface ExtractedBook {
   reflowable: boolean;
   outline: OutlineEntry[];
   pages: ExtractedPage[];
+  pandocVersion?: string;
+  pandocWarnings?: string;
 }
 
 export function isReflowable(format: BookFormat): boolean {
@@ -53,12 +58,13 @@ export function openBook(data: Uint8Array, format: BookFormat): mupdf.Document {
 }
 
 export interface ExtractionOptions {
-  /** Preview only: do not enable in the indexer until re-extraction and anchor migration are ready. */
-  epubParagraphs?: "source";
+  /** Explicit EPUB profile; existing indexes migrate through the snapshot staging workflow. */
+  epubParagraphs?: "source" | "pandoc";
 }
 
 export function extractBook(data: Uint8Array, format: BookFormat, options: ExtractionOptions = {}): ExtractedBook {
   if (options.epubParagraphs && format !== "epub") throw new Error("Source paragraph extraction is only supported for EPUB.");
+  if (options.epubParagraphs === "pandoc") return extractPandocEpub(data);
   const reflowable = isReflowable(format);
   const doc = openBook(data, format);
   try {

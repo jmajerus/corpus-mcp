@@ -3,7 +3,7 @@ import { type DataStore, pinnedByKey } from "./data.js";
 import type { DB } from "./db.js";
 import { type HoldingsBook, hasText, holdingsBook, holdingsBookRows } from "./holdings.js";
 import { isbn13, validIsbn } from "./isbn.js";
-import { CONTEXT, MAX_QUOTE, type QuoteAnchor, find, locate, pagesOf, suggestions } from "./quotes.js";
+import { CONTEXT, MAX_QUOTE, type QuoteAnchor, find, joinedPageText, locate, pagesOf, suggestions } from "./quotes.js";
 import type { BookRow, Corpus } from "./tools.js";
 
 /**
@@ -205,7 +205,7 @@ export function storeAnchor(c: Corpus, o: AnchorOptions, body: unknown): ApiAnsw
   const [from, to, start, end] = [a.start_page, a.end_page, a.start_offset, a.end_offset] as number[];
   const pages = pagesOf(c.db, book.id, from, to);
   if (pages.length !== to - from + 1 || start > pages[0].text.length || end > pages[pages.length - 1].text.length) return stale;
-  const text = pages.map((p, n) => p.text.slice(n === 0 ? start : 0, n === pages.length - 1 ? end : p.text.length)).join("\n").trim();
+  const text = joinedPageText(pages, start, end).trim();
   if (text !== a.text) return stale;
   const again: QuoteAnchor = {
     start_page: from, start_offset: start, end_page: to, end_offset: end, text,

@@ -1,165 +1,173 @@
-# EPUB source paragraph extraction preview
+# EPUB source extraction and cutover rehearsal
 
-Status: extraction validation and migration rehearsal, **not enabled for active indexing**. The provisional reader
-reflow patch has been withdrawn. The reader again displays stored text directly.
+**Historical version-2 approach.** [Pandoc extraction](pandoc-extraction.md) supersedes this approach
+for new candidates. Both validation/staging tools now default to Pandoc; use `--backend source`
+to reproduce the version-2 results below. These results do not establish Pandoc cutover readiness.
 
-## Cause and implementation
+Status: implemented and validated in local candidates; production indexing and services have not
+been changed. Source extraction remains an explicit opt-in. Candidates and rollback bundles always
+report `promotionReady: false`.
 
-The legacy extractor treats each MuPDF layout text block as a paragraph, then the indexer inserts
-two newlines between blocks. In the Conrad volume, MuPDF sometimes emits one block per visual line
-and sometimes groups multiple source paragraphs in a block. Neither direction preserves paragraphs.
+## Source structure and location mapping
 
-`extractBook(data, "epub", { epubParagraphs: "source" })` opts into the preview. It reads the EPUB
-container, OPF manifest and spine, and the ordered XHTML source. Structural elements establish
-paragraph boundaries; inline markup and empty anchors do not. Explicit `br` breaks and `pre`
-whitespace survive. A limited CSS cascade handles linked/embedded styles, relative imports, selector
-specificity, inline styles, `!important`, inheritance, display, whitespace, and list styles. Only
-stylesheets used by the document are loaded. Default nested-list labels are retained. XHTML is parsed as XML, including self-closing
-elements such as `title` and `a`; treating those files as HTML can swallow real body content.
+The legacy extractor treats MuPDF layout blocks as paragraphs. MuPDF can split a source paragraph
+into visual-line blocks, or combine multiple paragraphs into one block. The indexer then persists
+incorrect paragraph breaks. The source EPUB need not contain hard returns at those positions.
 
-MuPDF still determines the locations using the existing layout dimensions and original, unmodified
-EPUB. Each spine document is resolved to its existing location range. The complete source character
-stream must match the complete rendered stream in order. Comparison removes whitespace and soft
-hyphens and applies Unicode NFKC normalization; output retains source spelling and intentional line
-breaks. Only CSS document whitespace collapses; non-breaking spaces remain intact. Significant
-whitespace gaps must also survive in the raw rendered stream. Gaps spanning locations and
-whitespace-only preserved blocks are conservatively refused. Normal and preserved inline runs trim
-their own edges independently. Mapping uses grapheme boundaries so ligatures/combining sequences cannot be split between
-locations. Paragraphs spanning locations become fragments of the same source paragraph. The existing
-page-string storage contract is retained; persisting source paragraph identities is future work.
+`extractBook(data, "epub", { epubParagraphs: "source" })` reads the container, OPF spine, and XHTML.
+Structural elements establish paragraphs; inline markup and empty anchors do not. A limited CSS
+cascade handles linked/embedded styles, relative imports, selector specificity, inline styles,
+`!important`, inheritance, display, whitespace, and list styles. XHTML is parsed as XML, including
+self-closing `title` and `a` elements. Only CSS document whitespace collapses; NBSP and other Unicode
+spaces retain their semantics. Ordinary and preserved inline runs trim their own edges independently.
 
-Mismatch, missing resources, ambiguous spine mapping, and unsupported source semantics raise explicit
-errors. The preview never guesses paragraph boundaries from punctuation and never silently falls
-back to layout blocks. It handles MuPDF's literal `[image]` SVG fallback only when character alignment
-confirms the renderer produced it. It does not extract diagram content.
+MuPDF lays out the original, unmodified EPUB using the existing dimensions. Each spine document
+maps to its original location range. The complete source and rendered character streams must match
+in order after NFKC normalization and removal of layout whitespace and discretionary soft hyphens.
+Grapheme boundaries prevent a source combining sequence or ligature expansion from spanning locations.
 
-## Reproduce validation without changing an index
+Significant whitespace is checked separately against raw rendered text. For every source gap, the
+mapper finds the earliest and latest valid ordered matches, without inserting synthetic page
+separators. A source whitespace character gets a location only when those bounding matches agree on
+its owner. Duplicate generated newlines within one location are acceptable; competing locations or
+missing whitespace cause a refusal. This permits an explicit verse break at one location's end and
+indentation in the next, including whitespace-only source blocks when their ownership is provable.
+
+The mapper partitions source text by those proven character locations and checks complete source
+coverage. It never infers paragraphs from punctuation, skips unmatched text, or silently falls back
+to layout blocks. Inline SVG uses MuPDF's literal `[image]` fallback only when alignment confirms it;
+diagram content is not extracted.
+
+## Exact separators and profile persistence
+
+Index schema 7 adds nullable `pages.separator_before`. Source pages store the exact source separator:
+space for a wrapped prose boundary, two newlines between paragraphs, or an empty string when the
+separator is already part of a page or a word continues across locations. Legacy rows retain null
+and their existing newline-join behavior. The reader API exposes this field.
+
+Quote lookup, verification, and staged migration use the same separator-aware assembly. This avoids
+inserting a newline into prose, duplicating a verse break, or breaking a word at a location boundary.
+Shared quote normalization maps whole graphemes with exclusive end offsets. Schema-6 migration is
+additive, is exercised on staging copies, and leaves the original snapshots unchanged.
+
+New books and deferred books continue to use extractor version 1. Explicitly staged/promoted EPUBs
+use version 2; ordinary and forced refreshes retain that source profile and its exact separators.
+Other formats retain their legacy extractor. A source extraction failure is never retried with the
+legacy extractor as a fallback. Ordinary refresh also recomputes the derived text metadata that
+staging invalidates. The global default remains 1.
+
+## Read-only validation
 
 ```sh
 npm run build
-node tools/validate-epub-extraction.mjs '/path/to/book.epub'
+node tools/validate-epub-extraction.mjs --backend source '/path/to/book.epub'
 ```
 
-The command reads the supplied files, compares legacy and preview extraction, and prints JSON. It
-opens no database and writes no library files. A refusal or changed location/outline mapping produces
-a nonzero exit status. `tests/epub.test.ts` exercises line-per-block and merged-block layouts, real
-paragraphs without terminal punctuation, inline markup, headings, lists, explicit verse breaks,
-preformatted indentation, source spelling, spine order, and paragraphs spanning locations.
+The command opens no database and writes no library files. It compares location and outline
+mappings and prints JSON; a refusal or changed mapping produces a nonzero exit status.
 
-Initial character-only validation of *Complete Works of Joseph Conrad* (main library, book 37),
-before review added significant-whitespace checks:
-
-| Measure | Result |
-| --- | ---: |
-| Reading locations | 7,447, unchanged |
-| Outline mapping | Unchanged |
-| Locations with corrected text/structure | 5,677 |
-| Legacy paragraph fragments | 101,801 |
-| Source paragraph fragments | 43,782 |
-
-Every location passed character alignment in that initial run. The original *Chance* passage at
-location 3,124 followed its XHTML paragraphs, with continuation into location 3,125. That run did not
-validate significant-whitespace ownership across locations; the current preview refuses the volume
-on that stricter check. It does not establish coverage across the library.
-
-## Broader validation
-
-All 10 EPUB files in the local `main` mirror were tested. This mirror is a subset of the deployed
-library, not a complete inventory of the server. After the review fixes, three books pass, covering
-461 locations with unchanged location and outline mappings. The earlier five-book result only checked
-character alignment and has been superseded:
+All 10 EPUBs in the local `main` mirror were tested. The mirror is a subset of the deployed library.
+Five now pass, covering 7,929 unchanged locations:
 
 | Local book | Result |
 | --- | --- |
-| Quick Start Guide | Refused: whitespace-only preserved content has no unambiguous location mapping |
+| Quick Start Guide | Passed, 21 locations |
 | Carceral Humanitarianism | Passed, 74 locations |
 | Wounded By Reality | Passed, 186 locations |
 | If I Must Die | Passed, 201 locations |
-| Complete Works of Joseph Conrad | Refused: significant whitespace crosses locations in `Ops/419.html`, location 4,035 |
+| Complete Works of Joseph Conrad | Passed, 7,447 locations |
 | Conversation with ChatGPT | Refused: remote CSS dependency |
-| The Swift Programming Language | Refused: malformed CSS (missing semicolon in page-break declarations) |
-| Mastering Node.js | Refused: whitespace-only preserved content; the earlier run also found a credits-table mismatch |
-| Applied Deep Learning with Keras | Refused: significant whitespace crosses locations; the earlier run also found omitted code characters |
-| Hands-On Internet of Things with MQTT | Refused: significant whitespace crosses locations; the earlier run also found list-number disagreement |
+| The Swift Programming Language | Refused: malformed CSS |
+| Mastering Node.js | Refused: significant whitespace absent from rendered layout |
+| Applied Deep Learning with Keras | Refused: source/layout character mismatch in code |
+| Hands-On Internet of Things with MQTT | Refused: source/rendered list-number disagreement |
 
-Policy: a refusal retains the complete existing book, rather than mixing source and layout extraction
-within a book. There is no silent fallback. Unresolved verified anchors also retain the entire book.
+The Conrad volume now passes both character and significant-whitespace checks across all locations.
+Its outline and location numbering are unchanged. The candidate changes 5,898 page strings and uses
+43,782 source paragraph fragments, versus 101,801 legacy layout-block fragments. Exact source
+separators preserve the verse break spanning locations 4,035–4,036; the original *Chance* passage at
+locations 3,124–3,125 follows its XHTML paragraphs.
 
-The same local catalogue selects 10 EPUBs, 27 PDFs, and 24 MOBIs under current format preference. Its
-two AZW3 files are not preferred for any book. MOBI/AZW3 use the same layout-block assumption but need
-a separate source-decoding path and validation; an EPUB converter alone does not prove old locations
-remain stable. PDFs need tagged-source support or layout-based paragraph reconstruction validated
-against representative pages. The EPUB preview changes neither format's extraction. Promotion must
-use format/profile-specific versions, not force a global re-extraction of all formats.
+The local catalogue prefers 10 EPUBs, 27 PDFs, and 24 MOBIs; neither AZW3 file is preferred. PDF and
+MOBI/AZW3 source reconstruction remain separate work. This preview changes neither format's text.
 
-## Staged index and anchor migration
+## Staged rebuilding and real saved anchors
 
 ```sh
-npm run build
 node tools/stage-epub-reextraction.mjs \
+  --backend source \
   --index snapshot/corpus.db --data snapshot/data.db \
   --books-root /path/to/books --output /tmp/new-candidate \
-  --book main:25 --book main:35
+  --book main:570
 ```
 
-The output must be a new directory. Both inputs open read-only and are backed up into the output.
-Extraction, passage rebuilding, anchor changes, and reports affect only those copies. A mirror path
-can be supplied as `--file 'main:35=/path/to/mirror.epub'`; its SHA-256 must still match the indexed file.
+The output must be a new private directory. Both databases open read-only and are backed up into it.
+Only the copies receive corrected pages, separators, passages/FTS entries, metadata invalidation,
+and anchor changes. `--file 'main:570=/path/to/mirror.epub'` permits a mirror-path override, but its
+SHA-256 must match the indexed file. An extraction refusal or unmappable verified anchor retains
+the complete existing book. Existing orphaned records remain orphaned. Write failures invalidate
+the candidate, independently of its extractor-version metadata.
 
-The mapper verifies the old anchor against old page text, then requires equal normalized old/new
-character streams for every covered location. Shared quote normalization maps complete graphemes,
-including exclusive end offsets for combining sequences, ligatures, and supplementary characters. Offsets map by stream position, preserving a chosen
-occurrence of repeated wording. Stale anchors, changed characters, or missing locations require
-review. It does not find the first matching phrase and assume that is the right occurrence. Existing
-orphaned records remain orphaned. Ambiguous indexed copies with verified anchors are refused.
+Anchors map by normalized character-stream position after their old offsets and wording have been
+verified, preserving the selected occurrence of repeated wording. Changed characters, stale offsets,
+missing locations, or ambiguous indexed copies require review. Per-location trailing whitespace
+may change; exact source separators determine the new range text. Character counts use SQLite
+`LENGTH` semantics. Verified source quote prose bypasses compatibility reflow; orphan prose and
+context retain it. Corpus-owned anchors are reverified and emit replacement feed events.
 
-Accepted books get corrected page strings, rebuilt passages/FTS entries, and a candidate extractor
-version of 2. Character counts use SQLite `LENGTH` semantics, including supplementary Unicode characters. Derived
-text metadata versions are invalidated for recomputation before promotion.
-Only migrated verified quotes use source prose; orphaned legacy quotes and their contexts retain
-compatibility reflow. An explicit write-phase flag makes any staging write failure invalidate the
-candidate, independently of the snapshot's extractor version. Local quotes adopt the source wording
-and paragraphs; corpus-owned anchors are reverified and emit
-`replaced` feed events, which quote-mcp already consumes. Source-extracted quote prose and context
-bypass the legacy punctuation reflow heuristic. For source-extracted books, reader highlights must
-also match the local verified anchor (optional remote text is checked only when supplied); equal
-file SHA alone cannot establish freshness while quote-mcp is catching up. Lost anchors are not highlighted.
+Read-only server snapshots and exact source files were copied locally for four EPUBs with genuine
+saved quote-mcp anchors:
 
-The existing ordinary reanchor routines still skip unchanged file hashes. The staged workflow
-explicitly performs migration rather than relying on those routines. A controlled migration and
-extractor-profile identity must be integrated before enabling ordinary source extraction.
+| Deployed book | Candidate result | Saved anchor |
+| --- | --- | --- |
+| The Complete Brothers Grimm's Fairy Tales (`main:133`) | Staged, 602 stable locations, 114 changed pages | Unchanged and verified |
+| Complete Works of Joseph Conrad (`main:570`) | Staged, 7,447 stable locations, 5,898 changed pages | Remapped and verified |
+| Fidelity (`main:581`) | Staged, 75 stable locations, 25 changed pages | Unchanged and verified |
+| Suspicious Minds (`main:53`) | Refused at location 169 for source/layout mismatch | Original book and anchor retained |
 
-Rehearsal against read-only, consistent SQLite snapshots of matching deployed records rebuilt
-`main:25`, `main:35`, `main:41`, and `main:136` (a second copy of Carceral Humanitarianism). Their 535
-locations retained their mappings; after review, 180 page strings change (including retained
-non-breaking spaces). These records had **no saved local or
-quote-mcp anchors** attached. Same-file offset changes, repeated wording, cross-location anchors,
-feed updates, stale-reader suppression, refused books, and immutable inputs were tested with fixtures.
-This rehearsal does not establish successful migration of real saved quotes on other books.
+All three accepted anchors were checked against candidate page slices, exact source separators,
+original normalized wording, and unchanged file hashes. These are real saved anchor records, not
+invented quotations. No server files, active databases, services, or quote-mcp records were changed.
+Artifacts contain an inspection subset, stay outside version control, and must not replace a full
+live index.
 
-The rehearsal artifacts (`report.json`, `corpus.db`, and `data.db`) were kept locally and excluded
-from version control. They contain a selected inspection subset of the deployed databases and must
-never replace the full live database. The report always says `promotionReady: false`.
-The server was read only; no services, files, or quotes were changed there.
+## Consumer replay and rollback
 
-## Remaining promotion requirements
+The unmodified quote-mcp `followAnchors` function was run against an isolated consumer database
+seeded with the real anchor payloads. It consumed the staged feed, updated the remapped anchor once,
+and lost none. A second pass read no changes. A rollback rehearsal reset the feed generation,
+replayed the five original events, restored the old anchor, and lost none. This verifies feed/cache
+behavior; it does not claim a live quote-mcp database migration or a fix to its prose formatter.
 
-- Preview support is for EPUB XHTML. PDF, MOBI, and AZW3 keep their existing extraction paths.
-- The CSS cascade covers ordinary author rules, not every CSS feature. Matched conditional rules,
-  unsupported display/whitespace/list values, semantic selectors the matcher cannot compile, invalid
-  CSS, and external stylesheets are refused. Character equality alone cannot prove that whitespace
-  semantics survived. Source/layout disagreement always remains a refusal.
-- The preview expects UTF-8 XHTML and an unambiguous spine-to-location mapping. Fixed-layout,
-  non-XHTML spine resources, duplicate spine resources, and unusual encodings need separate coverage.
-- `EXTRACTOR_VERSION` remains 1 and the indexer does not pass the preview option. Deploying this code
-  does not opt existing indexing jobs into the new extractor.
-- Resolve or explicitly defer the seven current refusals; extend coverage beyond the local mirror, especially
-  books with real saved anchors. Do not treat the subset candidate as a replacement index.
-- Prepare format/profile-specific indexing and freshness identity so subsequent scans retain source
-  extraction for accepted books and legacy extraction for deferred books. The global version stays 1.
-- Recompute derived text metadata in the complete candidate, and test paired index/data rollback.
-- For final capture, quiesce indexing and quote writes long enough to take a coordinated pair of full
-  snapshots. The read-only rehearsal snapshots were taken separately and are not a cutover checkpoint.
-- Apply migrations in that candidate, verify quote-mcp consumes the feed (and preserves canonical
-  source paragraph breaks in its own prose rendering), compare complete results, then perform a
-  controlled cutover with the original pair retained. Publishing and deployment remain separate work.
+```sh
+node tools/prepare-epub-rollback.mjs \
+  --index snapshot/corpus.db --data snapshot/data.db --output /tmp/new-rollback-pair
+```
+
+This makes private copies, performs the additive index migration, and rotates `anchor_log` only in
+the rollback copy. Consumers must replay restored anchors rather than retain a cursor newer than
+the restored log. Known local anchors are authoritative for reader highlighting on both source and
+legacy pages, hiding stale same-SHA offsets during forward or rollback synchronization. Optional
+remote text is compared only when supplied.
+
+Rollback requires quote/index writes to remain quiesced through the validation window. Once writes
+have resumed, restoring an older primary-data snapshot would discard new records; use a separate
+recovery plan instead. Readers must see a consistent pair, and the consumer must catch up before
+reopening the cutover window. Rollback preparation never swaps databases or restarts services.
+
+## Remaining cutover work
+
+- Resolve or explicitly defer the five local refusals and the real anchored Suspicious Minds volume.
+  Additional books outside the tested mirror still need validation.
+- Coordinate quote-mcp's canonical-source prose behavior before enabling new source-backed saves.
+  Its current compatibility reflow can erase intentional source breaks. A companion change needs
+  explicit source-text provenance on anchors and must prefer canonical anchor text for that profile,
+  while retaining compatibility behavior for legacy or orphaned text. Feed transport alone is ready.
+- Quiesce indexing and quote writes for a coordinated pair of complete snapshots. The rehearsal
+  subsets and separately captured snapshots are not a cutover checkpoint.
+- Stage selected validated books against the full snapshots, retaining deferred books. Refresh the
+  candidate using the server's exact library/filter/citekey configuration with only the database
+  paths overridden; this recomputes derived metadata without downgrading source-profile books.
+- Compare complete search/outline/quote results, verify consumer synchronization and prose, and
+  rehearse the prepared paired rollback before switching service paths. Deployment, publishing,
+  restarting services, and live re-extraction have not been performed.

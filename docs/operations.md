@@ -106,8 +106,14 @@ MOBI, AZW3, and KFX books so they get chapter locators.
 
 ## Configuration
 
+EPUB re-extraction uses [Pandoc](dev-briefs/pandoc-extraction.md) as the preferred candidate backend.
+Install Pandoc 3.1 or later separately on the indexing host before activating that profile. Serving
+the index does not require the executable. Existing books keep their extraction profile during
+normal refresh; changing backends or Pandoc versions requires staging and anchor validation.
+
 | Variable | Default | Meaning |
 |---|---|---|
+| `CORPUS_PANDOC_PATH` | `pandoc` | Pandoc executable path for EPUB profile 3; no shell arguments |
 | `CORPUS_BOOKS_ROOT` | `/srv/corpus/books` | Directory containing one folder per Calibre library |
 | `CORPUS_LIBRARIES` | `main` | Comma-separated library folders to index |
 | `CORPUS_EXCLUDE_TAGS` | `private` | Calibre tags that keep a book out of the index |

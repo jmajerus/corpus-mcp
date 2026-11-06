@@ -54,3 +54,13 @@ it("requires review for stale offsets, changed characters, and missing locations
   expect(planAnchorMigration(pages(text), pages("Changed. Quote here. Last."), a)).toEqual({ status: "review", reason: "location-text-changed" });
   expect(planAnchorMigration(pages(text), [], a)).toEqual({ status: "review", reason: "missing-location" });
 });
+
+it("uses source separators when reanchoring a quote across locations", () => {
+  const old = pages("First", "second");
+  const next = pages("First\n", "second").map((p) => ({ ...p, separator_before: "" }));
+  const a: QuoteAnchor = { start_page: 0, start_offset: 0, end_page: 1, end_offset: 6,
+    text: "First\nsecond", prefix: "", suffix: "" };
+  expect(planAnchorMigration(old, next, a)).toMatchObject({ status: "unchanged", anchor: { text: "First\nsecond" } });
+  expect(planAnchorMigration(old, pages("First", "second").map((p) => ({ ...p, separator_before: " " })), a))
+    .toMatchObject({ status: "remapped", anchor: { text: "First second" } });
+});
