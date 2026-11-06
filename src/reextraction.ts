@@ -26,6 +26,28 @@ export interface StagedBook {
 
 interface SnapshotPair { index: string; data: string; output: string }
 
+/** One isolated worker may update an unanchored book in an inspection candidate. Its index changes
+ * commit in one transaction; no saved quotes or anchors may be touched across database boundaries. */
+export function stageUnanchoredCandidateBook(options: { candidate: string; booksRoot: string; book: string }): StagedBook {
+  const index = path.join(options.candidate, "corpus.db"), dataFile = path.join(options.candidate, "data.db");
+  const probe = new Database(index, { readonly: true, fileMustExist: true });
+  try {
+    if (probe.prepare("SELECT value FROM meta WHERE key='epub_source_preview'").pluck().get() !== "inspection-only") {
+      throw new Error("Re-extraction workers require an inspection-only candidate.");
+    }
+  } finally { probe.close(); }
+  const dataProbe = new Database(dataFile, { readonly: true, fileMustExist: true });
+  dataProbe.close();
+  const db = openDatabase(index), data = openDataStore(dataFile);
+  try {
+    const book = db.prepare("SELECT uuid FROM books WHERE id=?").get(options.book) as { uuid: string | null } | undefined;
+    if (book && ["anchors", "quotes"].some((table) => data.prepare(`SELECT 1 FROM ${table} WHERE calibre_uuid=? LIMIT 1`).get(book.uuid))) {
+      return { book: options.book, status: "refused", reason: "Saved quotes or anchors require coordinated consumer migration." };
+    }
+    return stageBook(db, data, options.booksRoot, options.book, undefined, "pandoc");
+  } finally { db.close(); data.close(); }
+}
+
 async function copyPair(options: SnapshotPair): Promise<string> {
   const output = path.resolve(options.output);
   if (fs.existsSync(output)) throw new Error("The staging output must be a new directory.");
