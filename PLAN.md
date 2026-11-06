@@ -704,7 +704,13 @@ zotero-mcp's.
 terminology-mcp's `cc-subjects`, `add_provisional_term` proposes terms there,
 and stage 1's overlay is gone (see [Categories](docs/categories.md#following-terminology-mcp)).
 Concept Clusters retired its push (its PR #322), so the intake and its service
-token are gone too. What follows is the plan as written.
+token are gone too. The supported sources are terminology-mcp following, or an
+explicit file installation with `CORPUS_TERMINOLOGY_URL=off` (see
+[Categories](docs/categories.md#following-terminology-mcp)).
+
+**Historical proposal:** the following stages record the original design, not
+a current implementation plan. Stage 1 is retired; its route, service-token
+authentication, Access application, and overlay must not be restored.
 
 The taxonomy will keep growing:
 missing subcategories now, new fields of knowledge later.
@@ -751,75 +757,18 @@ only while one of the two holds the taxonomy. Stages 1 and 2 are stepping
 stones, and everything they create carries over. Settled with CC's agent on
 2026-10-26 (it read CC's code; nothing changed on either side yet).
 
-**Stage 1: CC pushes its vocabulary; corpus-mcp keeps an overlay.**
+**Stage 1 (retired): CC vocabulary push and corpus-mcp overlay.**
 
-Contract agreed with CC's agent on 2026-10-26; both sides wait for the
-user's go before building.
+This intermediate design was superseded by terminology-mcp following. The local
+overlay was removed when stage 3 shipped, and Concept Clusters retired its push
+in PR #322. `POST /api/intake/vocabulary` and its service-token authentication
+have been removed; the dedicated Access application is no longer part of the
+supported architecture. These are historical components, not work to implement.
 
-- *Push, not pull.* corpus-mcp fetching from CC (Postgres or an endpoint)
-  would make corpus-mcp depend on CC at runtime. Instead corpus-mcp offers
-  an intake, `POST /api/intake/vocabulary` (body `corpus-vocabulary/1`, CC's
-  published registry): validate with the existing rules, install, and
-  `VocabularySource` picks it up within 5 s. 200 with `{ version, terms }`;
-  200 with `unchanged: true` when the version hash matches; 422 with
-  `problems`, the same string array CC's `taxonomyVocabulary` throws, so CC
-  logs it unchanged. An invalid file is refused and the last good one
-  stays. No corpus-mcp redeploy and no separate export step.
-- *When CC pushes.* From CC's published-replica drain loop
-  (`modules/publishedReplicaSchedule.js`, every 15 s), not from the publish
-  request: stdio MCP can publish while the LAN server is down, and the loop
-  catches those up when it starts. After each drain CC rebuilds the
-  vocabulary and pushes only when the version differs from the last one
-  corpus-mcp accepted; a failed push retries next tick. Worst case about
-  20 s from publish to corpus-mcp. A manual `authoring:taxonomy:push` stays
-  for catch-up and debugging.
-- *Auth: an Access service token through the tunnel.* SSH from a
-  background loop was rejected: it needs a key on the server, blocks, and
-  gives the authoring server a shell on corpus-mcp. CC sends
-  `CF-Access-Client-Id`/`-Secret` from its `.env` and skips the push
-  (logged, not fatal) when they are unset. corpus-mcp side:
-  `verifyAccessToken` today rejects a token with no `sub`, and service
-  token JWTs carry the client id in `common_name` with `sub` empty. Accept
-  a service identity by `common_name`, and only on the intake: the service
-  token must not unlock the other admin writes
-  (`CORPUS_VOCABULARY_PUSH_CLIENT_ID`).
-- *Cloudflare side (set up 2026-10-26).* Service token
-  `cc-vocabulary-push` (id `325a5b0a-33cb-40d7-8297-f9a87ae48056`, expires
-  2027-10-26; credentials in CC's `.env` as `CF_ACCESS_CLIENT_ID`/`_SECRET`,
-  client id in corpus-mcp's `.env`). A separate Access application,
-  "corpus-mcp vocabulary intake" (`c5b830b1-10c7-4356-9dc7-9dd4dfa17c85`),
-  covers only `corpus-mcp.majerus.us/api/intake/vocabulary`, with one
-  Service Auth policy for that token, so the token passes Access nowhere
-  else. Its own audience tag (`81975844…77683`) means corpus-mcp accepts a
-  second audience on the intake only (`CORPUS_VOCABULARY_PUSH_AUD`). The
-  intake isn't under `/api/vocabulary` because Access paths match by
-  prefix, and the admin pages fetch `/api/vocabulary` and
-  `/api/vocabulary/report` from the browser. Tested: with the token the
-  intake reaches the origin; without it, and on any other path with it,
-  Access answers 401.
-- *The overlay.* corpus-mcp's own terms, for research: coined during
-  research, usable at once for tagging books and quotes, nothing published
-  to players. The vocabulary served to tools is CC's push plus the overlay.
-  When CC publishes a term with the same path, CC's term wins and the
-  overlay entry is marked superseded, so books stay tagged. Agents read the
-  overlay over MCP: `status` and `scopeNote` on `get_tag_vocabulary`, so a
-  research-then-author agent with both servers connected can reuse a
-  provisional term's slug in `update_category`, with no CC code involved.
-  If CC code ever reads it, that is advisory only: an unreachable
-  corpus-mcp never blocks a CC write. Finer terms and
-  fields CC doesn't need can live there without CC maintaining them. The
-  ownership rule gains one exception: corpus-mcp edits its own overlay,
-  never a vocabulary another project supplies.
-- *Built to the master's model, so nothing migrates later:*
-  - its own module (`src/taxonomy/`) and storage, not tangled with books
-    or tags, so it can lift out as the server's seed;
-  - stable opaque ids from day one, with the path as alias;
-  - per term: scope note, alternative labels, status
-    (provisional/confirmed/superseded);
-  - every change logged as an event (added, renamed, moved, merged,
-    retired), which becomes the master's changelog;
-  - consumers stay unaware of the source: `VocabularySource` takes a
-    validated vocabulary from whoever supplies it.
+For a standalone file fallback, disable following with
+`CORPUS_TERMINOLOGY_URL=off` and explicitly install the validated vocabulary with
+`npm run deploy -- --vocabulary[=file]`. Regular deployment does not install a
+vocabulary or re-enable the retired intake.
 
 **Stage 2: CC maps its categories to terms.** An optional master-term id on
 CC's category and subcategory documents (CC's proposal). CC slugs stay as
