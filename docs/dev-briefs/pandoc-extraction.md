@@ -55,6 +55,26 @@ node tools/stage-epub-reextraction.mjs \
 ```
 
 Both tools default to Pandoc; `--backend source` explicitly selects the earlier version-2 backend.
+For a whole-library conversion survey that continues after individual failures:
+
+```sh
+node tools/validate-epub-library.mjs \
+  --index /var/lib/corpus-mcp/corpus.db --books-root /srv/corpus/books \
+  --output /var/lib/corpus-mcp/validation/new-survey
+```
+
+The output directory must be new. `summary.json` records progress; `books.jsonl` records each result.
+Workers run sequentially in separate processes, so each book releases its extraction memory before
+the next starts. The tool opens the index read-only and leaves books and anchors untouched. When
+running a copied survey script on an indexing host, `--extractor /release/dist/extract.js` selects
+the installed backend and its dependencies. Run it under resource limits appropriate to that host.
+This is a conversion survey, not an anchor migration or a coordinated cutover snapshot.
+
+If a book has an existing outline and Pandoc produces none, both the survey and staging defer that
+book; staging retains its complete previous index and anchors. Other books continue. This catches
+complete navigation loss, not partial outline loss or other fidelity problems. A single deferred
+book does not block validation or eventual selective activation of accepted books.
+
 The validator reports `converted`, location counts, outline changes, warnings, and the writer
 version. Changed locations are expected. It writes no databases or library files.
 

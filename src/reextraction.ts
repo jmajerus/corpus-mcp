@@ -97,6 +97,9 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     if (backend === "source" && (oldPages.length !== next.pages.length || oldPages.some((p, i) => p.page_index !== next.pages[i].index))) return refused("Reading locations changed.");
     const outline = db.prepare("SELECT ord, level, title, path, start_page FROM outline WHERE book_id = ? ORDER BY ord").all(id);
     const newOutline = next.outline.map(({ startPage, ...entry }) => ({ ...entry, start_page: startPage }));
+    if (backend === "pandoc" && outline.length && !newOutline.length) {
+      return refused("Pandoc lost the existing chapter navigation; this book was kept unchanged.");
+    }
     if (backend === "source" && JSON.stringify(outline) !== JSON.stringify(newOutline)) return refused("Outline mapping changed.");
     const sections = sectionPaths(next.outline, next.pages.length);
     const newPages = next.pages.map((p) => ({ page_index: p.index, label: p.label, section_path: sections[p.index], text: p.paragraphs.join("\n\n"), separator_before: p.separatorBefore ?? "" }));

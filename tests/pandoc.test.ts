@@ -98,7 +98,11 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
     "A long continuous paragraph with enough words to wrap over visual lines. ".repeat(10),
     "A unique saved passage for anchor migration.",
   ] }]);
-  makeLibrary(root, "main", [{ id: 1, title: "Pandoc", files: { epub } }]);
+  makeLibrary(root, "main", [
+    { id: 1, title: "Pandoc", files: { epub } },
+    { id: 2, title: "Navigation", files: { epub: makeEpub("Navigation", [{ title: "Named chapter", paragraphs: [],
+      body: "<p>A chapter identified by navigation rather than an HTML heading.</p>" }]) } },
+  ]);
   const config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"), shelvesFile: path.join(root, "shelves.json"),
     shelvesLibrary: "main", citekeyPreset: "author-year-word" } as Config;
@@ -113,9 +117,10 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
     expect(saveQuote({ db, data } as Corpus, { book_id: "main:1", text: old.text }, undefined, "agent").saved).toBe(true);
     const originalAnchors = data.prepare("SELECT * FROM anchors").all();
     const report = await stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root,
-      books: ["main:1"], output: path.join(root, "candidate") });
+      books: ["main:1", "main:2"], output: path.join(root, "candidate") });
     expect(report.books[0]).toMatchObject({ status: "staged", newLocations: 3,
       anchors: expect.arrayContaining([{ kind: "anchor", id: 12, status: "remapped" }]) });
+    expect(report.books[1]).toMatchObject({ status: "refused", reason: expect.stringContaining("chapter navigation") });
     expect(report.promotionReady).toBe(false);
     expect(pagesOf(db, "main:1", 0, 100)).toEqual(before);
     expect(data.prepare("SELECT * FROM anchors").all()).toEqual(originalAnchors);
@@ -130,10 +135,12 @@ it("stages Pandoc locations and anchors in copies and retains the profile during
         start_page: 2, section_path: "Chapter", text: old.text,
       });
       expect(candidate.prepare("SELECT value FROM meta WHERE key='pandoc:main:1'").pluck().get()).toBe(report.books[0].pandocVersion);
-      expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 1, failed: 0 });
+      expect(candidate.prepare("SELECT extractor_version FROM books WHERE id='main:2'").pluck().get()).toBe(1);
+      expect(candidate.prepare("SELECT count(*) FROM outline WHERE book_id='main:2'").pluck().get()).toBeGreaterThan(0);
+      expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 2, failed: 0 });
       expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);
       candidate.prepare("UPDATE meta SET value='different-version' WHERE key='pandoc:main:1'").run();
-      expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 0, failed: 1 });
+      expect(scanLibraries(config, candidate, { force: true })).toMatchObject({ extracted: 1, failed: 1 });
       expect(pagesOf(candidate, "main:1", 0, 100)).toEqual(pages);
       expect(joinedPageText(pages)).toContain("Chapter\n\nA long continuous paragraph");
     } finally { candidate.close(); candidateData.close(); }
