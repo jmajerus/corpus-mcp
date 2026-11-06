@@ -32,8 +32,8 @@ const USAGE = `Usage: npm run deploy -- [--current | --pr <number> | --main] [--
   --vocabulary[=file]
                   validate the tag vocabulary (default CORPUS_VOCABULARY_SOURCE) and install it as
                   /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
-                  A plain deploy also installs it when CORPUS_VOCABULARY_SOURCE is set, unless the
-                  intake is configured (CORPUS_VOCABULARY_PUSH_CLIENT_ID): then the owner pushes it.
+                  Only with CORPUS_TERMINOLOGY_URL=off in the server's /etc/corpus-mcp/env: while
+                  following terminology-mcp, the server replaces it within a sync.
   --zotero        copy CORPUS_ZOTERO_LIBRARY, CORPUS_ZOTERO_API, CORPUS_ZOTERO_API_KEY, and
                   CORPUS_ZOTERO_INTERVAL_MINUTES from .env into the server's /etc/corpus-mcp/env
                   (mode 0640) and restart it. With CORPUS_ZOTERO_API set to holdings-mcp
@@ -183,20 +183,17 @@ sleep 2
 }
 
 /**
- * Settings copied from this machine's .env to the server's on every deploy, when given: the vocabulary
- * intake's service token (client id, Access audience), the D1 proxy the public catalogue's drain ships to, and
- * who edits made directly on the LAN are recorded as.
+ * Settings copied from this machine's .env to the server's on every deploy, when given: the D1 proxy the
+ * public catalogue's drain ships to, and who edits made directly on the LAN are recorded as.
  */
-function intakeSettings() {
-  return ["CORPUS_VOCABULARY_PUSH_CLIENT_ID", "CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN", "CORPUS_LAN_ACTOR", "CORPUS_LAN_EDITS"].filter((name) => process.env[name])
+function copiedSettings() {
+  return ["CORPUS_D1_PROXY_URL", "CORPUS_D1_PROXY_TOKEN", "CORPUS_LAN_ACTOR", "CORPUS_LAN_EDITS"].filter((name) => process.env[name])
     .map((name) => `sed -i '/^${name}=/d' /etc/corpus-mcp/env && echo ${shellQuote(`${name}=${process.env[name]}`)} >> /etc/corpus-mcp/env\n`).join("");
 }
 
 async function deploy({ skipTests }) {
   execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
   if (!skipTests) execFileSync("npm", ["test"], { cwd: root, stdio: "inherit" });
-  // Once the vocabulary's owner pushes it to the intake, a local copy could be older than what it pushed.
-  if (process.env.CORPUS_VOCABULARY_SOURCE && !process.env.CORPUS_VOCABULARY_PUSH_CLIENT_ID) await pushVocabulary(process.env.CORPUS_VOCABULARY_SOURCE);
 
   const id = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
   const tarball = path.join(os.tmpdir(), `corpus-mcp-${id}.tgz`);
@@ -220,7 +217,7 @@ chown root:corpus /etc/corpus-mcp/env && chmod 0640 /etc/corpus-mcp/env
 touch /var/lib/corpus-mcp/refresh.log && chown corpus:corpus /var/lib/corpus-mcp/refresh.log
 # Settings added after first install.
 grep -q '^CORPUS_ACCESS_TEAM_DOMAIN=' /etc/corpus-mcp/env || echo 'CORPUS_ACCESS_TEAM_DOMAIN=https://linkbud.cloudflareaccess.com' >> /etc/corpus-mcp/env
-${intakeSettings()}# The two settings needed below, read before the release is switched so a failure leaves the server as it
+${copiedSettings()}# The two settings needed below, read before the release is switched so a failure leaves the server as it
 # was. The file is systemd's EnvironmentFile, not a shell script: a value with parentheses must not run as shell.
 env_value() { sed -n "s/^$1=//p" /etc/corpus-mcp/env | tail -n 1 | tr -d '"'; }
 CORPUS_DB=$(env_value CORPUS_DB); CORPUS_PORT=$(env_value CORPUS_PORT)
@@ -345,11 +342,9 @@ async function deployCommit(source, rest) {
   execFileSync("git", ["worktree", "add", "--detach", "--quiet", tree, source.commit], { cwd: root, stdio: "inherit" });
   try {
     execFileSync("npm", ["ci", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: tree, stdio: "inherit" });
-    // The environment already holds .env, so the worktree's script needs no copy of it, but a relative
-    // vocabulary path in it means this checkout, not the worktree. NESTED: this script records the
-    // source below, which the worktree's (a detached checkout) would get wrong.
-    const vocabulary = process.env.CORPUS_VOCABULARY_SOURCE ? { CORPUS_VOCABULARY_SOURCE: path.resolve(process.env.CORPUS_VOCABULARY_SOURCE) } : {};
-    execFileSync(process.execPath, [path.join(tree, "tools", "deploy.mjs"), ...rest], { cwd: tree, stdio: "inherit", env: { ...process.env, ...vocabulary, CORPUS_DEPLOY_NESTED: "1" } });
+    // The environment already holds .env, so the worktree's script needs no copy of it. NESTED: this
+    // script records the source below, which the worktree's (a detached checkout) would get wrong.
+    execFileSync(process.execPath, [path.join(tree, "tools", "deploy.mjs"), ...rest], { cwd: tree, stdio: "inherit", env: { ...process.env, CORPUS_DEPLOY_NESTED: "1" } });
   } finally {
     execFileSync("git", ["worktree", "remove", "--force", tree], { cwd: root, stdio: "inherit" });
   }

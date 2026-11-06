@@ -4,7 +4,6 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
 import { openDatabase } from "../src/db.js";
@@ -34,12 +33,12 @@ function subjects(): TerminologyTerm[] {
 }
 
 describe("building the vocabulary from cc-subjects", () => {
-  it("matches the pushed vocabulary on the first build, except the puzzle kinds cc-subjects leaves out", () => {
+  it("matches the file's vocabulary on the first build, except the puzzle kinds cc-subjects leaves out", () => {
     const built = buildVocabulary(subjects(), new Map());
-    const pushed = FIXTURE.terms.filter((t) => t.id !== "trivia")
+    const installed = FIXTURE.terms.filter((t) => t.id !== "trivia")
       .map((t) => ({ id: t.id, label: t.label, parent: t.parent ?? null, ...(t.assignable === false ? { assignable: false } : {}) }))
       .sort((a, b) => a.id.localeCompare(b.id));
-    expect(built.terms).toEqual(pushed);
+    expect(built.terms).toEqual(installed);
     expect(built.retired).toEqual([]);
     expect(built.version).toMatch(/^terminology:[0-9a-f]{16}$/);
     expect(buildVocabulary(subjects(), new Map()).version).toBe(built.version);
@@ -99,34 +98,18 @@ async function setup(root: string, terminologyUrl?: string) {
     files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } }]);
   const vocabularyPath = path.join(root, "vocabulary.json");
   fs.writeFileSync(vocabularyPath, JSON.stringify(FIXTURE));
-  const team = "https://team.example.com";
   const config: Config = { booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"),
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
     citekeyPreset: "author-year-word", vocabularyPath, ...(terminologyUrl ? { terminology: { url: terminologyUrl, intervalSeconds: 30 } } : {}),
-    admin: { access: { teamDomain: team, vocabularyPush: { clientId: "push-client.access" } },
+    admin: { access: {},
       neighbors: [], source: "x", sshKey: "x", refreshUnit: "x", refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json") } };
   const db = openDatabase(config.dbPath);
   scanLibraries(config, db);
   db.close();
-  // A stand-in Cloudflare Access. A service token's JWT has an empty subject and names the token in common_name.
-  const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
-  const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256" };
-  const jwt = (claims: Record<string, unknown>, audience: string, subject: string) => new SignJWT(claims).setProtectedHeader({ alg: "RS256", kid: "k1" })
-    .setIssuer(team).setAudience(audience).setSubject(subject).setIssuedAt().setExpirationTime("5m").sign(privateKey);
-  const tokens = {
-    user: await jwt({ email: "me@example.com" }, "corpus-aud", "user-1"),
-    push: await jwt({ common_name: "push-client.access" }, "intake-aud", ""),
-    wrongService: await jwt({ common_name: "someone-else.access" }, "intake-aud", ""),
-    forged: await new SignJWT({ common_name: "push-client.access" }).setProtectedHeader({ alg: "RS256", kid: "k1" })
-      .setIssuer(team).setAudience("intake-aud").setSubject("").setIssuedAt().setExpirationTime("5m").sign((await generateKeyPair("RS256")).privateKey),
-  };
-  const server = await serveHttp(config, { accessKeys: createLocalJWKSet({ keys: [jwk] }), jobCommands: { async refresh() {}, async calibre() {} }, zoteroTimer: false, terminologyTimer: false });
+  const server = await serveHttp(config, { jobCommands: { async refresh() {}, async calibre() {} }, zoteroTimer: false, terminologyTimer: false });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const push = (body: unknown, token?: string) => fetch(`${base}/api/intake/vocabulary`, {
-    method: "POST", headers: { "content-type": "application/json", ...(token ? { "cf-access-jwt-assertion": token } : {}) }, body: JSON.stringify(body),
-  });
-  return { server, base, vocabularyPath, tokens, push };
+  return { server, base, vocabularyPath };
 }
 
 describe("following terminology-mcp", () => {
@@ -151,7 +134,7 @@ describe("following terminology-mcp", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("replaces the pushed vocabulary with cc-subjects on its first sync, and reports how far it got", async () => {
+  it("replaces the installed vocabulary with cc-subjects on its first sync, and reports how far it got", async () => {
     await follower.sync();
     expect(tags()).toEqual(FIXTURE.terms.map((t) => t.id).filter((t) => t !== "trivia").sort());
     expect(retired()).toEqual({});
@@ -238,7 +221,7 @@ it("retires the old tags terminology-mcp records on a first bootstrap: former sl
   }
 });
 
-describe("proposing terms and the intake while following", () => {
+describe("proposing terms while following", () => {
   let root: string;
   let stub: ReturnType<typeof stubTerminology>;
   let s: Awaited<ReturnType<typeof setup>>;
@@ -294,15 +277,9 @@ describe("proposing terms and the intake while following", () => {
     const refused = await tool("add_provisional_term", { parent: "social-sciences.sociology", label: "Care Work", scope_note: "Unpaid care." });
     expect(refused).toMatchObject({ isError: true, text: expect.stringMatching(/refused the proposal \(422\): Pass source.*"hint":"search_terms"/) });
   });
-
-  it("refuses CC's push: one writer at a time", async () => {
-    const pushed = await s.push(FIXTURE, s.tokens.push);
-    expect([pushed.status, (await pushed.json()).error]).toEqual([409, expect.stringMatching(/follows terminology-mcp/)]);
-    expect(JSON.parse(fs.readFileSync(s.vocabularyPath, "utf8")).version).toMatch(/^terminology:/);
-  });
 });
 
-describe("the intake while corpus-mcp doesn't follow terminology-mcp", () => {
+describe("while corpus-mcp doesn't follow terminology-mcp", () => {
   let root: string;
   let s: Awaited<ReturnType<typeof setup>>;
   beforeAll(async () => {
@@ -313,29 +290,12 @@ describe("the intake while corpus-mcp doesn't follow terminology-mcp", () => {
     s.server.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const withTerm = (file: VocabularyFile, id: string, label: string, version: string): VocabularyFile => ({
-    ...file, version, terms: [...file.terms, { id, label, parent: id.slice(0, id.lastIndexOf(".")) }],
-  });
 
-  it("accepts only the intake's service token", async () => {
-    const next = withTerm(FIXTURE, "social-sciences.sociology.care-work", "Care Work", "test-2");
-    expect((await s.push(next)).status).toBe(401);
-    expect((await s.push(next, s.tokens.user)).status).toBe(403);
-    expect((await s.push(next, s.tokens.wrongService)).status).toBe(403);
-    expect((await s.push(next, s.tokens.forged)).status).toBe(403);
-  });
-
-  it("installs a pushed vocabulary, says when it is unchanged, and refuses an invalid one with its problems", async () => {
-    const next = withTerm(FIXTURE, "social-sciences.sociology.care-work", "Care Work", "test-2");
-    const first = await s.push(next, s.tokens.push);
-    expect([first.status, await first.json()]).toEqual([200, { version: "test-2", terms: 10 }]);
-    expect(JSON.parse(fs.readFileSync(s.vocabularyPath, "utf8")).version).toBe("test-2");
-    expect(await (await s.push(next, s.tokens.push)).json()).toMatchObject({ version: "test-2", unchanged: true });
-    const bad = await s.push({ ...next, version: "test-3", terms: [...next.terms, { id: "Bad Id", label: "Bad" }] }, s.tokens.push);
-    expect(bad.status).toBe(422);
-    expect((await bad.json()).problems).toEqual(expect.arrayContaining([expect.stringContaining('"Bad Id"')]));
-    expect(JSON.parse(fs.readFileSync(s.vocabularyPath, "utf8")).version).toBe("test-2");
-    expect(await (await fetch(`${s.base}/api/taxonomy`)).json()).toMatchObject({ source: "push", terminology: null, vocabulary: { version: "test-2" } });
+  it("serves the vocabulary installed from a file, and has no intake to push one to", async () => {
+    expect(await (await fetch(`${s.base}/api/taxonomy`)).json()).toMatchObject({ source: "file", terminology: null, vocabulary: { version: FIXTURE.version } });
     expect((await (await fetch(`${s.base}/admin/taxonomy`)).text())).toContain("<title>Taxonomy</title>");
+    const pushed = await fetch(`${s.base}/api/intake/vocabulary`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(FIXTURE) });
+    expect(pushed.status).toBe(404);
+    expect(JSON.parse(fs.readFileSync(s.vocabularyPath, "utf8")).version).toBe(FIXTURE.version);
   });
 });

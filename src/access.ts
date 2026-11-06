@@ -21,11 +21,6 @@ import { type JWTVerifyGetKey, createRemoteJWKSet, jwtVerify } from "jose";
 export interface AccessConfig {
   /** e.g. https://linkbud.cloudflareaccess.com */
   teamDomain?: string;
-  /**
-   * The vocabulary intake's service token, by client id. The token is accepted on the intake alone, never
-   * for the other writes.
-   */
-  vocabularyPush?: { clientId?: string };
   /** The name LAN edits are recorded under; unset, direct LAN requests are read-only. */
   lanActor?: string;
   /** The names the server is reached by on the LAN, besides IP addresses ("corpus-mcp.localdomain"). */
@@ -105,30 +100,6 @@ export async function accessIdentity(req: http.IncomingMessage, config: AccessCo
   }
   try {
     return { identity: { ...(await verifyAccessToken(token, { teamDomain: config.teamDomain }, keys)), via: "access" } };
-  } catch (error) {
-    return { status: 403, error: `Cloudflare Access token rejected: ${(error as Error).message}` };
-  }
-}
-
-/**
- * The vocabulary intake's caller: a service token's JWT for the intake's own Access application. Service
- * tokens carry no subject; Access names the token by its client id in common_name.
- */
-export async function vocabularyPushIdentity(req: http.IncomingMessage, config: AccessConfig, keys?: JWTVerifyGetKey): Promise<AccessResult> {
-  const token = req.headers["cf-access-jwt-assertion"];
-  if (typeof token !== "string" || !token) return { status: 401, error: "Send the vocabulary through Cloudflare Access with the intake's service token." };
-  const push = config.vocabularyPush;
-  if (!config.teamDomain || !push?.clientId) {
-    return { status: 503, error: "The vocabulary intake is not configured (CORPUS_VOCABULARY_PUSH_CLIENT_ID)." };
-  }
-  try {
-    const payload = await verifiedPayload(token, config.teamDomain, keys);
-    if (payload.common_name !== push.clientId) {
-      // Claim names only, never values, so a token shaped differently than expected can be diagnosed.
-      console.error(`vocabulary intake: token is not the intake's service token (claims: ${Object.keys(payload).sort().join(", ")})`);
-      return { status: 403, error: "Not the vocabulary intake's service token." };
-    }
-    return { identity: { subject: `service:${push.clientId}` } };
   } catch (error) {
     return { status: 403, error: `Cloudflare Access token rejected: ${(error as Error).message}` };
   }

@@ -26,7 +26,7 @@ function render(data) {
   const v = data.vocabulary, t = data.terminology;
   document.getElementById("lead").innerHTML = t
     ? 'Followed from terminology-mcp\\'s <code>cc-subjects</code> scheme, where terms are added, renamed, and moved: <a href="' + esc(editor(t)) + '">open its editor</a>. A change that alters a tag retires the old one; the tags job re-tags books when there is one replacement, and the <a href="/admin/categories">vocabulary report</a> lists the rest for a person.'
-    : "Installed by Concept Clusters' push (CORPUS_TERMINOLOGY_URL is off).";
+    : "Installed from a file with <code>npm run deploy -- --vocabulary=&lt;file&gt;</code> (CORPUS_TERMINOLOGY_URL is off).";
   document.getElementById("summary").innerHTML =
     card("Vocabulary", num(v.assignable), [["Terms", num(v.terms)], ["Retired tags", num(v.retired)], ["Version", short(v.version)], ["Problem", v.error ? esc(v.error) : "none"]]) +
     (t ? card("Following terminology-mcp", t.through ? "#" + num(t.through) : "–", [["Synced", t.synced_at ? esc(ago(t.synced_at)) : "not yet"], ["Reported", t.reported_at ? esc(ago(t.reported_at)) : "not yet"],

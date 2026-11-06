@@ -71,8 +71,8 @@ among the subscribers.
 - If terminology-mcp's store is rebuilt (its `log` id changes), the follower
   starts over from the state and reports with `reset: true`.
 - `CORPUS_TERMINOLOGY_URL` names the server (default
-  `http://terminology-mcp.localdomain:8000`); `off` turns following off and
-  lets Concept Clusters' push install the vocabulary again.
+  `http://terminology-mcp.localdomain:8000`); `off` turns following off, and the vocabulary stays as last installed
+  (see [Installing from a file](#installing-from-a-file)).
 
 **New terms.** `add_provisional_term` proposes a term to terminology-mcp
 (`POST /api/proposals`) under an existing domain or category. `cc-subjects` is
@@ -83,18 +83,20 @@ retires it in terminology-mcp. A refusal comes back with terminology-mcp's
 reason. When nothing fits even broadly, a person adds the term in
 terminology-mcp's editor.
 
-## Pushing the vocabulary
+## Installing from a file
 
-While corpus-mcp follows terminology-mcp, the intake answers 409 and installs
-nothing: one writer at a time. With `CORPUS_TERMINOLOGY_URL=off`, the owner pushes the file to `POST /api/intake/vocabulary` with a Cloudflare
-Access service token (`CORPUS_VOCABULARY_PUSH_CLIENT_ID`), through an Access
-application that covers only that path; the token unlocks nothing else. Answers:
+The fallback when terminology-mcp can't be followed is a file: Concept Clusters'
+export, or any `corpus-vocabulary/1` file.
 
-- 200 with `version` and `terms`, plus `unchanged: true` when that version is
-  already installed;
-- 422 with `problems`, a list of strings, when invalid.
+1. Set `CORPUS_TERMINOLOGY_URL=off` in the server's `/etc/corpus-mcp/env` and
+   restart it. This comes first: while following, the server replaces the file
+   with its own build within a sync.
+2. Run `npm run deploy -- --vocabulary=<file>`, which validates the file and
+   installs it. The server picks it up without a restart.
 
-`npm run deploy -- --vocabulary=<file>` still validates and installs one by hand.
+While it is off, `add_provisional_term` refuses, since new terms are proposed in
+terminology-mcp. Remove the setting and restart to follow again; the follower
+carries on from its cursor and replaces the file with its own build.
 
 [PLAN.md](../PLAN.md) (*Living taxonomy*) has the plan this is stage 3 of. The
 overlay of corpus-mcp's own research terms that stage 1 built is gone: it never
