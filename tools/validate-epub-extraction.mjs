@@ -20,6 +20,8 @@ for (const file of files) {
     // Successful conversion is not a fidelity verdict. Pandoc intentionally changes locations.
     console.log(JSON.stringify({ file, backend: values.backend, status: values.backend === "pandoc" ? "converted" : "passed",
       pandocVersion: preview.pandocVersion, baselineLocations: baseline.pages.length, locations: preview.pages.length, locationsStable, outlineStable,
+      pandocAdapterVersion: preview.pandocAdapterVersion, preprocessedTargets: preview.preprocessedTargets,
+      auxiliaryCovers: preview.auxiliaryCovers,
       ...(preview.pandocWarnings ? { pandocWarnings: preview.pandocWarnings } : {}),
       changedPages: baseline.pages.filter((p, i) => p.paragraphs.join("\n\n") !== preview.pages[i]?.paragraphs.join("\n\n")).length,
       baselineParagraphFragments: baseline.pages.reduce((n, p) => n + p.paragraphs.length, 0),

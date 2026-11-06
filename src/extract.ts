@@ -45,6 +45,10 @@ export interface ExtractedBook {
   pages: ExtractedPage[];
   pandocVersion?: string;
   pandocWarnings?: string;
+  pandocAdapterVersion?: number;
+  preprocessedTargets?: boolean;
+  /** Confirmed non-linear covers retained in the outline without primary-text locations. */
+  auxiliaryCovers?: { file: string; evidence: "guide" | "body-type" | "declared-image" }[];
 }
 
 export function isReflowable(format: BookFormat): boolean {

@@ -7,7 +7,7 @@ import { type Anchor, storeAnchor } from "./anchors.js";
 import { chunkPage } from "./chunk.js";
 import { type DB, openDatabase } from "./db.js";
 import { type DataStore, openDataStore, recordChanges } from "./data.js";
-import { extractBook, sectionPaths } from "./extract.js";
+import { extractBook, sectionPaths, type ExtractedBook } from "./extract.js";
 import { PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
 import { pagesOf, type QuoteAnchor } from "./quotes.js";
 import type { BookRow, Corpus } from "./tools.js";
@@ -19,6 +19,8 @@ export interface StagedBook {
   book: string; status: "staged" | "refused"; reason?: string; changedPages?: number;
   anchors?: { kind: "quote" | "anchor"; id: number; status: string; reason?: string }[];
   oldLocations?: number; newLocations?: number; pandocVersion?: string;
+  pandocAdapterVersion?: number; preprocessedTargets?: boolean;
+  auxiliaryCovers?: ExtractedBook["auxiliaryCovers"];
   pandocWarnings?: string;
 }
 
@@ -97,6 +99,9 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     if (backend === "source" && (oldPages.length !== next.pages.length || oldPages.some((p, i) => p.page_index !== next.pages[i].index))) return refused("Reading locations changed.");
     const outline = db.prepare("SELECT ord, level, title, path, start_page FROM outline WHERE book_id = ? ORDER BY ord").all(id);
     const newOutline = next.outline.map(({ startPage, ...entry }) => ({ ...entry, start_page: startPage }));
+    if (backend === "pandoc" && outline.length && !newOutline.length) {
+      return refused("Pandoc lost the existing chapter navigation; this book was kept unchanged.");
+    }
     if (backend === "source" && JSON.stringify(outline) !== JSON.stringify(newOutline)) return refused("Outline mapping changed.");
     const sections = sectionPaths(next.outline, next.pages.length);
     const newPages = next.pages.map((p) => ({ page_index: p.index, label: p.label, section_path: sections[p.index], text: p.paragraphs.join("\n\n"), separator_before: p.separatorBefore ?? "" }));
@@ -134,6 +139,8 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
         chunkPage(p.paragraphs).forEach((text, ord) => passage.run(id, p.index, ord, text));
       }
       if (next.pandocVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc:${id}`, next.pandocVersion);
+      if (next.pandocAdapterVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc_adapter:${id}`, String(next.pandocAdapterVersion));
+      if (next.pandocVersion) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)").run(`pandoc_auxiliary_covers:${id}`, JSON.stringify(next.auxiliaryCovers ?? []));
       db.prepare(`UPDATE books SET extractor_version = ?, page_count = ?, text_chars = ?, indexed_at = ?,
         printed_isbns_version = NULL, printed_years_version = NULL, title_page_version = NULL WHERE id = ?`)
         .run(backend === "pandoc" ? PANDOC_EXTRACTOR_VERSION : 2, next.pages.length,
@@ -161,6 +168,8 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     })();
     return { book: id, status: "staged", changedPages: oldPages.filter((p, i) => p.text !== newPages[i]?.text).length,
       oldLocations: oldPages.length, newLocations: newPages.length, pandocVersion: next.pandocVersion,
+      pandocAdapterVersion: next.pandocAdapterVersion, preprocessedTargets: next.preprocessedTargets,
+      auxiliaryCovers: next.auxiliaryCovers,
       ...(next.pandocWarnings ? { pandocWarnings: next.pandocWarnings } : {}), anchors: summaries };
   } catch (error) {
     // Extraction refusals occur before writes. Write failures must invalidate the entire candidate.

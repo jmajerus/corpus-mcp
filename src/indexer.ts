@@ -11,7 +11,7 @@ import { TITLE_PAGE_SCAN_VERSION, scanTitlePage } from "./titlepage.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
-import { PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
+import { PANDOC_ADAPTER_VERSION, PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
 
 export interface ScanSummary {
   scanned: number;
@@ -147,6 +147,8 @@ export function scanLibraries(config: Config, db: DB, {
         if (pandocEpub) {
           const pinned = db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(`pandoc:${id}`);
           if (pinned !== book.pandocVersion) throw new Error("Pandoc version changed or is unpinned; stage re-extraction before refreshing this book.");
+          const adapter = db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(`pandoc_adapter:${id}`);
+          if (adapter !== String(PANDOC_ADAPTER_VERSION)) throw new Error("Pandoc adapter changed; stage re-extraction before refreshing this book.");
         }
         const sections = sectionPaths(book.outline, book.pages.length);
         db.transaction(() => {
@@ -154,6 +156,8 @@ export function scanLibraries(config: Config, db: DB, {
           writeBook(db, config.citekeyPreset, id, library, relFolder, metadata, {
             ...file, sha256: hash, status: "indexed", reflowable: book.reflowable ? 1 : 0, page_count: book.pages.length, extractor_version: extractorVersion,
           });
+          if (pandocEpub) db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)")
+            .run(`pandoc_auxiliary_covers:${id}`, JSON.stringify(book.auxiliaryCovers ?? []));
           const insertOutline = db.prepare(
             "INSERT INTO outline (book_id, ord, level, title, path, start_page) VALUES (?, ?, ?, ?, ?, ?)",
           );
