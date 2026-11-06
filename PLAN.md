@@ -26,7 +26,7 @@ explains what changed.
 | Index | A SQLite file inside the LXC with FTS5. It is derived data and can be rebuilt from the books at any time. |
 | Libraries | `main`, the library Calibre-Web serves. The other folders on the volume (`tech`, `private`, and so on) are not pulled. A book tagged `private` in Calibre is never indexed (`CORPUS_EXCLUDE_TAGS`). |
 | Language | TypeScript on Node 22, matching Concept Clusters. |
-| Extraction | The official `mupdf` npm package (WASM). It reads PDF, EPUB, and MOBI, which covers every book currently in the allowlisted libraries. |
+| Extraction | Pandoc is the preferred EPUB re-extraction backend, with logical block locations and a reusable document AST. Existing profiles stay pinned pending staged migration. MuPDF (WASM) handles PDF, MOBI/AZW3, and legacy EPUB profiles. See [Pandoc extraction](docs/dev-briefs/pandoc-extraction.md). |
 | Writes | Read-only. corpus-mcp never writes to Calibre or Zotero. |
 
 ## Corpus facts (2026-10-24)

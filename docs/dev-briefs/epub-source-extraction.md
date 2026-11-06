@@ -1,5 +1,9 @@
 # EPUB source extraction and cutover rehearsal
 
+**Historical version-2 approach.** [Pandoc extraction](pandoc-extraction.md) supersedes this approach
+for new candidates. Both validation/staging tools now default to Pandoc; use `--backend source`
+to reproduce the version-2 results below. These results do not establish Pandoc cutover readiness.
+
 Status: implemented and validated in local candidates; production indexing and services have not
 been changed. Source extraction remains an explicit opt-in. Candidates and rollback bundles always
 report `promotionReady: false`.
@@ -56,7 +60,7 @@ staging invalidates. The global default remains 1.
 
 ```sh
 npm run build
-node tools/validate-epub-extraction.mjs '/path/to/book.epub'
+node tools/validate-epub-extraction.mjs --backend source '/path/to/book.epub'
 ```
 
 The command opens no database and writes no library files. It compares location and outline
@@ -91,6 +95,7 @@ MOBI/AZW3 source reconstruction remain separate work. This preview changes neith
 
 ```sh
 node tools/stage-epub-reextraction.mjs \
+  --backend source \
   --index snapshot/corpus.db --data snapshot/data.db \
   --books-root /path/to/books --output /tmp/new-candidate \
   --book main:570

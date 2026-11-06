@@ -52,7 +52,7 @@ it("stages corrected text, passages, and same-file anchors in copies, retaining 
     // Rehearse the additive page-separator migration on a schema-6 snapshot.
     db.exec("ALTER TABLE pages DROP COLUMN separator_before");
     db.prepare("UPDATE meta SET value='6' WHERE key='schema_version'").run();
-    const report = await stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output, books: ["main:1", "main:2"], files: { "main:1": mirrorFile } });
+    const report = await stageEpubReextraction({ backend: "source", index: config.dbPath, data: config.dataDbPath, booksRoot: root, output, books: ["main:1", "main:2"], files: { "main:1": mirrorFile } });
     expect(report.promotionReady).toBe(false);
     expect(report.books).toMatchObject([{ book: "main:1", status: "staged" }, { book: "main:2", status: "refused" }]);
     expect(db.prepare("SELECT text FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe(before);
@@ -98,19 +98,19 @@ it("stages corrected text, passages, and same-file anchors in copies, retaining 
     expect(stagedDb.prepare("SELECT text FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe(after);
     expect(stagedDb.prepare("SELECT separator_before FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get()).toBe("");
     expect(stagedDb.prepare("SELECT printed_years_version FROM books WHERE id='main:1'").pluck().get()).not.toBeNull();
-    await expect(stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output, books: ["main:1"] })).rejects.toThrow(/new directory/);
+    await expect(stageEpubReextraction({ backend: "source", index: config.dbPath, data: config.dataDbPath, booksRoot: root, output, books: ["main:1"] })).rejects.toThrow(/new directory/);
     // A stale verified anchor refuses the whole book, with its index and anchors retained in the copy.
     data.prepare("UPDATE anchors SET start_offset=0 WHERE quote_id=70").run();
-    const blocked = await stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: path.join(root, "blocked"), books: ["main:1"] });
+    const blocked = await stageEpubReextraction({ backend: "source", index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: path.join(root, "blocked"), books: ["main:1"] });
     expect(blocked.books[0]).toMatchObject({ status: "refused", anchors: expect.arrayContaining([expect.objectContaining({ id: 70, status: "review", reason: "stale-old-anchor" })]) });
     // Existing version-2 metadata must not turn a pre-write extraction refusal into a write failure.
     db.prepare("UPDATE books SET extractor_version=2 WHERE id='main:2'").run();
-    const preversioned = await stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: path.join(root, "preversioned"), books: ["main:2"] });
+    const preversioned = await stageEpubReextraction({ backend: "source", index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: path.join(root, "preversioned"), books: ["main:2"] });
     expect(preversioned.books[0]).toMatchObject({ status: "refused" });
     data.prepare("UPDATE anchors SET start_offset=? WHERE quote_id=70").run(offset);
     db.exec("CREATE TRIGGER injected_failure BEFORE INSERT ON passages BEGIN SELECT RAISE(ABORT, 'injected write failure'); END");
     const failedOutput = path.join(root, "write-failure");
-    await expect(stageEpubReextraction({ index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: failedOutput, books: ["main:1"] })).rejects.toThrow(/injected write failure/);
+    await expect(stageEpubReextraction({ backend: "source", index: config.dbPath, data: config.dataDbPath, booksRoot: root, output: failedOutput, books: ["main:1"] })).rejects.toThrow(/injected write failure/);
     expect(JSON.parse(fs.readFileSync(path.join(failedOutput, "report.json"), "utf8"))).toMatchObject({ failed: true, promotionReady: false });
     const originalLog = data.prepare("SELECT value FROM meta WHERE key='anchor_log'").pluck().get();
     const rollback = await prepareEpubRollback({ index: config.dbPath, data: config.dataDbPath, output: path.join(root, "rollback") });

@@ -11,6 +11,7 @@ import { TITLE_PAGE_SCAN_VERSION, scanTitlePage } from "./titlepage.js";
 import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
+import { PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
 
 export interface ScanSummary {
   scanned: number;
@@ -121,7 +122,8 @@ export function scanLibraries(config: Config, db: DB, {
       // Only an explicitly staged/promoted EPUB uses the source profile. Other books retain the
       // legacy extractor; ordinary refreshes must not downgrade an opted-in book back to version 1.
       const sourceEpub = choice.format === "epub" && existing?.extractor_version === 2;
-      const extractorVersion = sourceEpub ? 2 : EXTRACTOR_VERSION;
+      const pandocEpub = choice.format === "epub" && existing?.extractor_version === PANDOC_EXTRACTOR_VERSION;
+      const extractorVersion = pandocEpub ? PANDOC_EXTRACTOR_VERSION : sourceEpub ? 2 : EXTRACTOR_VERSION;
       const sameVersion = existing?.extractor_version === extractorVersion && existing.status === "indexed";
       const file = { format: choice.format, file_path: relFile, file_size: stat.size, file_mtime: mtime };
 
@@ -141,7 +143,11 @@ export function scanLibraries(config: Config, db: DB, {
       }
 
       try {
-        const book = extractBook(data, choice.format, sourceEpub ? { epubParagraphs: "source" } : {});
+        const book = extractBook(data, choice.format, pandocEpub ? { epubParagraphs: "pandoc" } : sourceEpub ? { epubParagraphs: "source" } : {});
+        if (pandocEpub) {
+          const pinned = db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(`pandoc:${id}`);
+          if (pinned !== book.pandocVersion) throw new Error("Pandoc version changed or is unpinned; stage re-extraction before refreshing this book.");
+        }
         const sections = sectionPaths(book.outline, book.pages.length);
         db.transaction(() => {
           clearContent(db, id);
@@ -168,6 +174,13 @@ export function scanLibraries(config: Config, db: DB, {
         else if (!force) change("book_reextracted", "file changed");
         log(`indexed ${id} ${metadata.title} (${choice.format}, ${book.pages.length} pages)`);
       } catch (error) {
+        // A missing/upgraded Pandoc must not erase the previously indexed canonical text.
+        // Changing writer versions requires the same staged migration as changing backends.
+        if (pandocEpub) {
+          summary.failed++;
+          log(`failed ${id} ${metadata.title}: ${(error as Error).message}; retained previous Pandoc text`);
+          continue;
+        }
         db.transaction(() => {
           clearContent(db, id);
           writeBook(db, config.citekeyPreset, id, library, relFolder, metadata, { ...file, sha256: hash, status: "failed", extractor_version: extractorVersion, error: String((error as Error).message ?? error) });
