@@ -11,8 +11,8 @@ interface Rule {
   conditional: boolean;
 }
 export interface SourceStyle { display: string; whiteSpace: string; listType: string }
-const BLOCKS = new Set(["address", "article", "aside", "blockquote", "div", "dl", "dt", "dd", "figcaption", "figure",
-  "footer", "header", "h1", "h2", "h3", "h4", "h5", "h6", "li", "main", "menu", "nav", "ol", "p", "pre", "section", "ul", "table", "tr"]);
+const BLOCKS = new Set(["html", "body", "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "dt", "dd", "fieldset", "figcaption", "figure", "form",
+  "footer", "header", "hgroup", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "legend", "li", "main", "menu", "nav", "ol", "p", "pre", "search", "section", "summary", "ul", "table", "tr"]);
 const TABLE_DISPLAY: Record<string, string> = { table: "table", tr: "table-row", td: "table-cell", th: "table-cell",
   thead: "table-header-group", tbody: "table-row-group", tfoot: "table-footer-group", caption: "table-caption" };
 const relevant = (property: string) => ["display", "white-space", "white-space-collapse", "text-wrap-mode", "list-style", "list-style-type", "all"].includes(property);

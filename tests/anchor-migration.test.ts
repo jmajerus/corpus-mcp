@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { planAnchorMigration } from "../src/anchor-migration.js";
-import { CONTEXT, type PageText, type QuoteAnchor } from "../src/quotes.js";
+import { CONTEXT, locate, type PageText, type QuoteAnchor } from "../src/quotes.js";
 
 const pages = (...text: string[]): PageText[] => text.map((text, page_index) => ({ page_index, label: null, section_path: null, text }));
 const anchor = (text: string, offset: number, quote: string): QuoteAnchor => ({
@@ -37,6 +37,15 @@ it("maps quotes spanning stable locations and preserves source paragraph breaks"
 it("leaves an identical anchor unchanged", () => {
   const text = "First. Quote here. Last.";
   expect(planAnchorMigration(pages(text), pages(text), anchor(text, 7, "Quote here."))).toMatchObject({ status: "unchanged" });
+});
+
+it("maps composed, decomposed, ligature, and non-BMP text using complete grapheme boundaries", () => {
+  const old = "Before. Cafe\u0301 \ufb01ne \u{1f642}. After.", next = "Before. Café fine \u{1f642}. After.";
+  const quote = "Cafe\u0301 \ufb01ne \u{1f642}.";
+  expect(planAnchorMigration(pages(old), pages(next), anchor(old, old.indexOf("Cafe"), quote))).toMatchObject({
+    status: "remapped", anchor: { text: "Café fine \u{1f642}.", start_offset: next.indexOf("Café"), end_offset: next.indexOf(" After.") },
+  });
+  expect(locate(pages("Before Cafe\u0301 after."), "Café")).toMatchObject({ text: "Cafe\u0301", start_offset: 7, end_offset: 12 });
 });
 
 it("requires review for stale offsets, changed characters, and missing locations", () => {

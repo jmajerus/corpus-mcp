@@ -52,8 +52,8 @@ export async function readerQuotes(base: string, book: BookRow, from: number, to
       // the migration feed, highlight only anchors matching corpus-mcp's current verified record.
       const current = data?.prepare("SELECT * FROM anchors WHERE quote_id = ? AND calibre_uuid = ? AND status = 'verified'")
         .get(q.id, book.uuid) as QuoteMcpQuote["anchor"] | undefined;
-      return !!current && (["sha256", "start_page", "start_offset", "end_page", "end_offset", "text"] as const)
-        .every((key) => current[key] === q.anchor![key]);
+      return !!current && (["sha256", "start_page", "start_offset", "end_page", "end_offset"] as const)
+        .every((key) => current[key] === q.anchor![key]) && (q.anchor.text === undefined || current.text === q.anchor.text);
     })
     .map(({ id, anchor: a, comment, tags, flags, admin_path }) => ({
       id, start_page: a!.start_page + 1, start_offset: a!.start_offset, end_page: a!.end_page + 1, end_offset: a!.end_offset,

@@ -29,8 +29,8 @@ export function planAnchorMigration(before: PageText[], after: PageText[], old: 
   const startIndex = first.before.map.findIndex((offset) => offset >= old.start_offset);
   const endIndex = last.before.map.findLastIndex((offset) => offset < old.end_offset);
   if (startIndex < 0 || endIndex < 0 || first.before.map[startIndex] !== old.start_offset
-    || last.before.map[endIndex] + 1 !== old.end_offset) return review("non-character-boundary");
-  const start = first.after.map[startIndex], end = last.after.map[endIndex] + 1;
+    || last.before.ends[endIndex] !== old.end_offset) return review("non-character-boundary");
+  const start = first.after.map[startIndex], end = last.after.ends[endIndex];
   if (start === undefined || !Number.isFinite(end)) return review("unmappable-offsets");
   const text = next.map((p, i) => p.text.slice(i === 0 ? start : 0, i === next.length - 1 ? end : p.text.length)).join("\n").trim();
   if (normalizeWithMap(text).norm.trim() !== normalizeWithMap(old.text).norm.trim()) return review("mapped-wording-changed");

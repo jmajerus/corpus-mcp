@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { extractBook } from "../src/extract.js";
 import { extractEpubSourcePages } from "../src/epub.js";
+import { sourceStyles } from "../src/epub-css.js";
 import { makeEpub } from "./fixtures.js";
 
 const preview = (data: Uint8Array) => extractBook(data, "epub", { epubParagraphs: "source" });
@@ -29,6 +30,38 @@ it("preserves inline text, entities, anchors, and real hyphens", () => {
   expect(preview(data).pages[0].paragraphs).toEqual([
     "One emphasized phrase and an inline link, well-known & useful.", "A discretionary hyphen.",
   ]);
+});
+
+it.each(["normal", "pre-line"])("preserves non-breaking Unicode spaces with white-space: %s", (mode) => {
+  const data = book('<p>A&nbsp;B &#x202F; C\t \nD</p>', `p {white-space:${mode}}`);
+  expect(preview(data).pages[0].paragraphs).toEqual([mode === "normal" ? "A\u00a0B \u202f C D" : "A\u00a0B \u202f C\nD"]);
+});
+
+it("trims ordinary paragraph edges independently of preserved inline descendants", () => {
+  const data = book('<p>   Before <span style="white-space:pre">  code  </span> after   </p>');
+  expect(preview(data).pages[0].paragraphs).toEqual(["Before   code   after"]);
+});
+
+it("keeps default block boundaries for details, summary, and fieldsets", () => {
+  expect(preview(book('<details><summary>Summary</summary>Details</details><fieldset><legend>Legend</legend>Field</fieldset>')).pages[0].paragraphs)
+    .toEqual(["Summary", "Details", "Legend", "Field"]);
+});
+
+it.each(["pre", "pre-line", "pre-wrap", "break-spaces"])("refuses lost significant whitespace in %s text", (mode) => {
+  const layout = {
+    resolveLink: () => 0, countPages: () => 1,
+    loadPage: () => ({ destroy() {}, toStructuredText: () => ({ asText: () => "First second", destroy() {} }) }),
+  } as unknown as Parameters<typeof extractEpubSourcePages>[1];
+  expect(() => extractEpubSourcePages(book(`<p style="white-space:${mode}">First\nsecond</p>`), layout)).toThrow(/Significant EPUB whitespace/);
+});
+
+it("refuses significant whitespace whose location ownership is ambiguous", () => {
+  const layout = {
+    resolveLink: () => 0, countPages: () => 2,
+    loadPage: (index: number) => ({ destroy() {}, toStructuredText: () => ({ asText: () => index ? "second" : "First\n", destroy() {} }) }),
+  } as unknown as Parameters<typeof extractEpubSourcePages>[1];
+  expect(() => extractEpubSourcePages(book('<pre>First\nsecond</pre>'), layout)).toThrow(/whitespace crosses locations/);
+  expect(() => preview(book('<pre>   </pre>'))).toThrow(/Whitespace-only preserved/);
 });
 
 it("keeps explicit verse line breaks, separate stanzas, and preformatted indentation", () => {
@@ -83,7 +116,10 @@ it("uses CSS flow overrides for boundaries and omits hidden source text", () => 
 it("applies the author cascade, inheritance, source order, and important precedence", () => {
   const data = book('<div class="verse"><p id="poem" class="line" style="white-space:normal">Line one\nLine two</p></div>',
     '.verse {white-space:pre-line} p {white-space:normal!important} #poem {white-space:pre-line!important} .line {white-space:normal!important}');
-  expect(preview(data).pages[0].paragraphs).toEqual(["Line one\nLine two"]);
+  const styles = sourceStyles([{ href: "style.css", css: '.verse {white-space:pre-line} p {white-space:normal!important} #poem {white-space:pre-line!important} .line {white-space:normal!important}' }], () => { throw new Error("unexpected import"); });
+  expect(styles({ name: "p", attrs: { id: "poem", class: "line", style: "white-space:normal" }, children: [] }).whiteSpace).toBe("pre-line");
+  // MuPDF's cascade disagrees with this important rule, so source extraction must refuse it.
+  expect(() => preview(data)).toThrow(/Significant EPUB whitespace/);
   expect(preview(book('<div style="white-space:pre-line"><span>First\nsecond</span></div>')).pages[0].paragraphs).toEqual(["First\nsecond"]);
 });
 
@@ -93,7 +129,13 @@ it("loads only linked stylesheets and resolves their imports relative to each st
   files["OEBPS/css/main.css"] = strToU8('@import "nested/verse.css"; .verse {display:block}');
   files["OEBPS/css/nested/verse.css"] = strToU8('.verse {white-space:pre-line}');
   files["OEBPS/unused.css"] = strToU8('.verse {display:grid}');
-  expect(preview(zipSync(files)).pages[0].paragraphs).toEqual(["First\nsecond"]);
+  const styles = sourceStyles([{ href: "OEBPS/css/main.css", css: '@import "nested/verse.css"; .verse {display:block}' }], (base, relative) => {
+    expect(base).toBe("OEBPS/css/main.css"); expect(relative).toBe("nested/verse.css");
+    return { href: "OEBPS/css/nested/verse.css", css: '.verse {white-space:pre-line}' };
+  });
+  expect(styles({ name: "div", attrs: { class: "verse" }, children: [] }).whiteSpace).toBe("pre-line");
+  // The source cascade resolves the import, but MuPDF omits its newline in the rendered stream.
+  expect(() => preview(zipSync(files))).toThrow(/Significant EPUB whitespace/);
 });
 
 it("refuses unsupported matched or conditional layout rules, but permits unused rules", () => {

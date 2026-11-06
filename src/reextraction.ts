@@ -61,6 +61,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
   const refused = (reason: string, anchors?: StagedBook["anchors"]): StagedBook => ({ book: id, status: "refused", reason, ...(anchors ? { anchors } : {}) });
   const book = db.prepare<[string], BookRow>("SELECT * FROM books WHERE id = ?").get(id);
   if (!book || book.format !== "epub" || book.status !== "indexed" || !book.file_path) return refused("Book must have indexed EPUB text.");
+  let writesStarted = false;
   try {
     const bytes = fs.readFileSync(sourceFile ?? path.join(booksRoot, book.file_path));
     if (createHash("sha256").update(bytes).digest("hex") !== book.sha256) return refused("Book file changed since the source index was built.");
@@ -90,6 +91,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     const stamp = new Date().toISOString();
     // Both databases are disposable staging copies. A failed write aborts the candidate operation;
     // promotionReady remains false, and inputs are never touched.
+    writesStarted = true;
     db.transaction(() => {
       db.prepare("DELETE FROM passages WHERE book_id = ?").run(id);
       const page = db.prepare("UPDATE pages SET text = ? WHERE book_id = ? AND page_index = ?");
@@ -100,7 +102,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
       }
       db.prepare(`UPDATE books SET extractor_version = 2, text_chars = ?, indexed_at = ?,
         printed_isbns_version = NULL, printed_years_version = NULL, title_page_version = NULL WHERE id = ?`)
-        .run(newPages.reduce((n, p) => n + p.text.length, 0), stamp, id);
+        .run(db.prepare("SELECT COALESCE(SUM(LENGTH(text)),0) FROM pages WHERE book_id = ?").pluck().get(id), stamp, id);
     })();
     data.transaction(() => {
       for (const p of planned) {
@@ -122,7 +124,7 @@ function stageBook(db: DB, data: DataStore, booksRoot: string, id: string, sourc
     return { book: id, status: "staged", changedPages: oldPages.filter((p, i) => p.text !== newPages[i].text).length, anchors: summaries };
   } catch (error) {
     // Extraction refusals occur before writes. Write failures must invalidate the entire candidate.
-    if (db.prepare("SELECT extractor_version FROM books WHERE id = ?").pluck().get(id) === 2) throw error;
+    if (writesStarted) throw error;
     return refused((error as Error).message);
   }
 }

@@ -20,26 +20,33 @@ const QUOTE_MARKS: [RegExp, string][] = [
   [/[­​-‍﻿]/g, ""],
 ];
 
-/** A text in comparison form, with the original index of every comparison character. */
-export function normalizeWithMap(text: string): { norm: string; map: number[] } {
+const quoteGraphemes = new Intl.Segmenter("und", { granularity: "grapheme" });
+
+/** Comparison code units mapped to complete original graphemes, including their exclusive ends. */
+export function normalizeWithMap(text: string): { norm: string; map: number[]; ends: number[] } {
   let norm = "";
   const map: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    let ch = text[i].normalize("NFKC");
+  const ends: number[] = [];
+  for (const { segment, index } of quoteGraphemes.segment(text)) {
+    let ch = segment.normalize("NFKC");
     for (const [pattern, replacement] of QUOTE_MARKS) ch = ch.replace(pattern, replacement);
     for (const c of ch) {
       if (/\s/.test(c)) {
         if (norm.length && norm[norm.length - 1] !== " ") {
           norm += " ";
-          map.push(i);
+          map.push(index);
+          ends.push(index + segment.length);
         }
       } else {
         norm += c;
-        map.push(i);
+        for (let n = 0; n < c.length; n++) {
+          map.push(index);
+          ends.push(index + segment.length);
+        }
       }
     }
   }
-  return { norm, map };
+  return { norm, map, ends };
 }
 
 export function normalizeQuote(text: string): string {
@@ -76,15 +83,15 @@ export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
   const want = normalizeQuote(needle);
   if (!want) return null;
   let hay = "";
-  const where: { page: number; offset: number }[] = [];
+  const where: { page: number; offset: number; end: number }[] = [];
   pages.forEach((p, n) => {
-    const { norm, map } = normalizeWithMap(p.text);
+    const { norm, map, ends } = normalizeWithMap(p.text);
     if (n > 0 && hay.length && hay[hay.length - 1] !== " ") {
       hay += " ";
-      where.push({ page: n - 1, offset: pages[n - 1].text.length });
+      where.push({ page: n - 1, offset: pages[n - 1].text.length, end: pages[n - 1].text.length });
     }
     hay += norm;
-    for (const i of map) where.push({ page: n, offset: i });
+    map.forEach((offset, i) => where.push({ page: n, offset, end: ends[i] }));
   });
   let at = hay.indexOf(want);
   if (at < 0) at = lowerSameLength(hay).indexOf(lowerSameLength(want));
@@ -92,7 +99,7 @@ export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
   const first = where[at];
   const last = where[at + want.length - 1];
   const start = { page: first.page, offset: first.offset };
-  const end = { page: last.page, offset: last.offset + 1 };
+  const end = { page: last.page, offset: last.end };
   const parts: string[] = [];
   for (let n = start.page; n <= end.page; n++) {
     const t = pages[n].text;
@@ -188,8 +195,8 @@ function bookCategories(c: Corpus, uuid: string): string[] {
   return tags ? (JSON.parse(tags) as string[]).filter((t) => c.vocabulary.has(t)) : [];
 }
 
-function proseFor(book: Pick<BookRow, "format" | "extractor_version"> | undefined, text: string): string {
-  return book?.format === "epub" && (book.extractor_version ?? 1) >= 2 ? text : reflow(text);
+function proseFor(book: Pick<BookRow, "format" | "extractor_version"> | undefined, text: string, verified: boolean): string {
+  return verified && book?.format === "epub" && (book.extractor_version ?? 1) >= 2 ? text : reflow(text);
 }
 
 function present(c: Corpus, r: QuoteRow) {
@@ -201,7 +208,7 @@ function present(c: Corpus, r: QuoteRow) {
     ? `p. ${r.page_label}${r.end_page_label && r.end_page_label !== r.page_label ? `–${r.end_page_label}` : ""}`
     : r.section_path ?? (reflowable ? `location ${r.start_page + 1}` : `page ${r.start_page + 1}`);
   return {
-    id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, prose: proseFor(book, r.text), note: r.note,
+    id: r.id, book_id: r.book_id, calibre_uuid: r.calibre_uuid, title: r.title, text: r.text, prose: proseFor(book, r.text, r.status === "verified"), note: r.note,
     book_categories: bookCategories(c, r.calibre_uuid).map(withLabel),
     labels: JSON.parse(r.labels) as string[],
     page: r.start_page + 1, end_page: r.end_page + 1, page_label: r.page_label, end_page_label: r.end_page_label, section: r.section_path,
@@ -266,7 +273,7 @@ export function getQuote(c: Corpus, id: number) {
   }
   const citation = book ? citePassage(c, { book_id: book.id, page: r.start_page + 1, end_page: r.end_page + 1 }) : null;
   return {
-    ...present(c, r), current_book_id: book?.id ?? null, context: { before: proseFor(book, before), after: proseFor(book, after) },
+    ...present(c, r), current_book_id: book?.id ?? null, context: { before: proseFor(book, before, r.status === "verified"), after: proseFor(book, after, r.status === "verified") },
     csl: citation?.csl ?? null, csl_locator: citation?.locator ?? null, citekey: citation?.citekey ?? null,
     citation: citation?.citation ?? null,
   };
