@@ -67,6 +67,12 @@ export function extractPandocEpub(data: Uint8Array): PandocBook {
       || parsed.locations.some((p) => typeof p.text !== "string" || !Number.isInteger(p.heading) || p.heading < 0)) {
       throw new Error("Pandoc returned an invalid extraction document.");
     }
+    const version = /^(\d+)\.(\d+)(?:\.\d+)*$/.exec(parsed.version);
+    const major = Number(version?.[1]), minor = Number(version?.[2]);
+    if (!version || !Number.isSafeInteger(major) || !Number.isSafeInteger(minor)
+      || major < 3 || (major === 3 && minor < 1)) {
+      throw new Error(`Unsupported Pandoc version ${JSON.stringify(parsed.version)}; install Pandoc >= 3.1.`);
+    }
     if (!parsed.locations.length) throw new Error("Pandoc EPUB extraction produced no readable text.");
     const outline: OutlineEntry[] = [];
     const parents: { level: number; title: string }[] = [];

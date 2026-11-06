@@ -15,6 +15,25 @@ import type { Config } from "../src/config.js";
 import type { Corpus } from "../src/tools.js";
 import { makeEpub, makeLibrary, tempDir } from "./fixtures.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, spawnSync: vi.fn(original.spawnSync) };
+});
+
+it.each(["2.19.2", "3.0", "3.0.99", "unknown", "3.1junk"])("rejects unsupported Pandoc version %s before accepting its document", (version) => {
+  vi.mocked(spawnSync).mockReturnValueOnce({ pid: 1, status: 0, signal: null, stderr: "", output: [],
+    stdout: JSON.stringify({ version, document: { "pandoc-api-version": [1, 23, 1], blocks: [], meta: {} },
+      locations: [{ text: "Text.", heading: 0 }] }) });
+  expect(() => extractPandocEpub(new Uint8Array())).toThrow(/Unsupported Pandoc version.*install Pandoc >= 3\.1/);
+});
+
+it.each(["3.1", "3.1.3", "3.1.2.1", "3.10", "4.0"])("accepts supported Pandoc version %s", (version) => {
+  vi.mocked(spawnSync).mockReturnValueOnce({ pid: 1, status: 0, signal: null, stderr: "", output: [],
+    stdout: JSON.stringify({ version, document: { "pandoc-api-version": [1, 23, 1], blocks: [], meta: {} },
+      locations: [{ text: "Text.", heading: 0 }] }) });
+  expect(extractPandocEpub(new Uint8Array()).pandocVersion).toBe(version);
+});
+
 it("uses Pandoc structure and writer for prose, verse, lists, code, and nested headings", () => {
   const data = makeEpub("Structure", [{ title: "Chapter", paragraphs: [], body: `
     <h1>Chapter</h1><div><h2>Section</h2>
