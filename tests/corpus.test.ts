@@ -1065,7 +1065,7 @@ describe("quotes", () => {
   });
 
   it("reflows line-per-block text as prose, keeping paragraph breaks", () => {
-    // Conrad's Chance in the Delphi EPUB: every printed line is a block, and a page break is a single newline.
+    // Legacy MuPDF extraction of Conrad's Chance emits visual lines as blocks; a page break is a single newline.
     expect(reflow("curiosity. Curiosity about\n\ndaily facts, the most respectable\n\nfaculty of an incurious\nmind. It would be like a chamber"))
       .toBe("curiosity. Curiosity about daily facts, the most respectable faculty of an incurious mind. It would be like a chamber");
     expect(reflow("locked up.\n\nBut in this case")).toBe("locked up.\n\nBut in this case");

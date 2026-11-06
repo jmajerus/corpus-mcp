@@ -92,12 +92,12 @@ function zip(entries: [string, string][]): Buffer {
   return Buffer.concat([...locals, ...centrals, end]);
 }
 
-export function makeEpub(title: string, chapters: { title: string; paragraphs: string[] }[]): Buffer {
-  const xhtml = (heading: string, body: string) =>
-    `<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${heading}</title></head><body>${body}</body></html>`;
+export function makeEpub(title: string, chapters: { title: string; paragraphs: string[]; body?: string; css?: string }[]): Buffer {
+  const xhtml = (heading: string, body: string, css?: string) =>
+    `<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${heading}</title>${css ? `<style>${css}</style>` : ""}</head><body>${body}</body></html>`;
   const files: [string, string][] = chapters.map((c, i) => [
     `OEBPS/ch${i + 1}.xhtml`,
-    xhtml(c.title, `<h1>${c.title}</h1>${c.paragraphs.map((p) => `<p>${p}</p>`).join("")}`),
+    xhtml(c.title, c.body ?? `<h1>${c.title}</h1>${c.paragraphs.map((p) => `<p>${p}</p>`).join("")}`, c.css),
   ]);
   const nav = xhtml("Contents", `<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc"><ol>${chapters
     .map((c, i) => `<li><a href="ch${i + 1}.xhtml">${c.title}</a></li>`).join("")}</ol></nav>`);

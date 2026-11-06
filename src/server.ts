@@ -371,7 +371,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
   // The reader's highlights: the book's quotes from quote-mcp, or none, with why, when it can't be asked.
   const quotesForReader = async (book: BookRow, from: number, to: number) => {
     if (!admin.quoteMcpUrl) return { quotes: [], quote_tags: [], quotes_error: "quote-mcp isn't set up here (CORPUS_QUOTE_MCP_URL)." };
-    try { const { quotes, tags } = await readerQuotes(admin.quoteMcpUrl, book, from, to); return { quotes, quote_tags: tags }; }
+    try { const { quotes, tags } = await readerQuotes(admin.quoteMcpUrl, book, from, to, c.data); return { quotes, quote_tags: tags }; }
     catch (error) { if (error instanceof QuoteMcpError) return { quotes: [], quote_tags: [], quotes_error: error.message }; throw error; }
   };
   const html = (body: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(body);
