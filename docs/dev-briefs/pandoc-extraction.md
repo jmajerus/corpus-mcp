@@ -64,6 +64,7 @@ node tools/validate-epub-library.mjs \
 ```
 
 The output directory must be new. `summary.json` records progress; `books.jsonl` records each result.
+Results include `pandocWarnings` when Pandoc emits a diagnostic, so it can be reviewed on the host.
 Workers run sequentially in separate processes, so each book releases its extraction memory before
 the next starts. The tool opens the index read-only and leaves books and anchors untouched. When
 running a copied survey script on an indexing host, `--extractor /release/dist/extract.js` selects
