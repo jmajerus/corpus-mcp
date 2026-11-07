@@ -169,3 +169,14 @@ it("reuses unchanged catalogue scans, invalidates on WAL updates and atomic repl
  fs.renameSync(replacement,file);
  expect(duplicatePairs(c,'main').pairs.length).toBe(1);expect(scans()).toBe(4);
 });
+
+it("keeps a blocked source preview reviewable and refuses to apply it",async()=>{
+ const calls:string[]=[];
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!),reviewed:'source'},blockers:['Calibre-Web shelf Main contains the duplicate. Remove its membership first.','Retain the keeper format.']}})+'\n');
+ }});
+ const preview=await wait(r,r.start('duplicates','preview',{duplicate:select()}));
+ expect(preview.status).toBe('succeeded');expect(preview.items[0].duplicate_review?.blockers).toHaveLength(2);
+ expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/Resolve the blockers/);
+ expect(calls).toEqual(['duplicates-preview']);
+});

@@ -322,7 +322,12 @@ formats, or reference counts) makes the pair appear again automatically.
 To resolve a pair, select the keeper, explicitly choose whether its versions should
 win for conflicting formats, and select **Preview resolution**. The source preview
 compares all book files and metadata. On the resulting job, review the format changes,
-metadata comparison and blockers, then **Apply this preview**. Source metadata and
+metadata comparison and blockers, then **Apply this preview**. Shelf and other
+reference blockers are shown together in the preview; Apply stays unavailable while
+any remain. Public shelf names are shown, while private shelf names stay hidden.
+If the keeper already belongs to a blocking shelf, remove only the duplicate's
+membership in Calibre-Web. Otherwise add the keeper first, then remove the duplicate's
+membership. Preview again after resolving the references. Source metadata and
 file hashes must still match the reviewed plan, and previews expire after an hour.
 
 Resolution copies unique formats and supplementary files, unions tags, fills missing

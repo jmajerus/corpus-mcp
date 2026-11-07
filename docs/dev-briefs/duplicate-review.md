@@ -25,6 +25,10 @@ Native `add_format(..., replace=False, run_hooks=False)` preserves unique format
 without replacing keeper files. The native `remove_books(..., permanent=False)`
 operation runs only after format verification and a second source-reference check.
 The helper runs through Calibre's installed Python environment, via `calibre-debug`.
+Only explicitly raised `DuplicateReviewError` validation failures receive concise
+stderr output. Unexpected native, programming, OS, and database exceptions propagate
+with their tracebacks; invalid JSON and malformed book identities are explicitly
+validated before opening Calibre.
 
 The snapshots are `metadata.db.before-duplicates-TIMESTAMP` and its matching `.files`
 directory. The latter contains folders named by the two Calibre IDs and `review.json`
@@ -59,22 +63,26 @@ The committed `tools/validate-calibre-duplicates.py` ran as `authoring` (UID 100
 on calibre-web.localdomain using Calibre 8.5 and a new disposable library on the
 same ext4 filesystem as production. Evidence is retained privately in:
 
-`/mnt/Calibre/.corpus-duplicate-operator-ZDexbxik`
+`/mnt/Calibre/.corpus-duplicate-operator-Kfu5rHXq`
 
 It passed:
 
 - Explicit review of different PDF bytes and preservation of a unique EPUB.
-- Refusal after a new Calibre-Web shelf link appeared following preview.
+- A successful, reviewable preview showing public-shelf membership and conflicting
+  formats together. It explains when the keeper already belongs to that shelf.
+- Refusal after a new Calibre-Web shelf link appeared following preview, without
+  an expected-reference-error traceback.
 - Refusal after source metadata changed following preview.
 - Preview blockers for a damaged EPUB that would survive the resolution.
-- An injected native failure immediately after copying a format: both records
+- An injected native failure immediately after copying a format retained its
+  unexpected OSError traceback while an expected shelf blocker stayed concise. Both records
   remained, an interrupted-resolution event was emitted, and retry succeeded.
 - Merging tags, comments, a missing cover, and supplementary content, trashing the duplicate, and
   restoring it through Calibre's native trash API.
 - Retention of both pre-mutation snapshots from the interrupted attempt and retry.
 
 The source helper SHA-256 was:
-`731da14e29a4ed6b732d8e66eaf328e9b67e8611ac6fb1a30041fd6ded0b6486`.
+`f2eafa0a164e765fd50c6c063a89ccfbfef07154aebf823a1c6d5911cad9f85a`.
 Read-only fingerprints of production books/authors/author links/formats matched
 before and after the exercise. No production helper was installed, no real book
 was merged or deleted, and no production service was restarted.
