@@ -33,7 +33,7 @@ export interface TitlePageScan {
 }
 
 /** Bump when scanTitlePage changes, so the indexer recomputes stored candidates (no re-extraction). */
-export const TITLE_PAGE_SCAN_VERSION = 2;
+export const TITLE_PAGE_SCAN_VERSION = 3;
 
 export interface ScanPage { page_index: number; section_path: string | null; text: string }
 
@@ -106,7 +106,7 @@ export const squash = (s: string) => s.toLowerCase().normalize("NFKD").replace(/
  * run together in lower case ("awscloudprojects", "masteringgo fourthedition").
  */
 export function mangledTitle(title: string): boolean {
-  return /\.(?:docx?|indd|pdf|epub|txt|rtf)$/i.test(title) || /^Microsoft Word - /i.test(title) || /^[A-Z]?\d{4,}_/.test(title)
+  return /^(?:unknown|untitled|no title)?$/i.test(title.trim()) || /\.(?:docx?|indd|pdf|epub|txt|rtf)$/i.test(title) || /^Microsoft Word - /i.test(title) || /^[A-Z]?\d{4,}_/.test(title)
     || title.split(/\s+/).some((w) => /^[a-z0-9+#-]{14,}$/.test(w))
     || (title === title.toLowerCase() && title.split(/\s+/).some((w) => /^[a-z0-9+#-]{10,}$/.test(w)));
 }
@@ -126,15 +126,18 @@ const isTitlePage = (p: ScanPage) => titlePageRank(p) > 0;
  * Edition" for "3rd edition"). Title pages first.
  */
 function findTitle(pages: ScanPage[], calibreTitle: string): TitleCandidate | null {
-  const want = squash(calibreTitle.replace(/^Microsoft Word - /i, "").replace(/\.\w{2,4}$/, "").replace(/^[A-Z]?\d{4,}_/, ""));
+  const want = squash(calibreTitle.replace(/^(?:the|an?)\s+/i, "").replace(/^Microsoft Word - /i, "").replace(/\.\w{2,4}$/, "").replace(/^[A-Z]?\d{4,}_/, ""));
   if (want.length < 10) return null;
   let best: TitleCandidate & { score: number } | null = null;
   for (const p of [...pages.filter(isTitlePage), ...pages.filter((x) => !isTitlePage(x))]) {
     for (const line of p.text.split("\n")) {
-      const got = squash(line);
+      let got = squash(line), common = 0;
       if (got.length < 10 || line.length > 160) continue;
-      let common = 0;
-      while (common < got.length && common < want.length && got[common] === want[common]) common++;
+      for (const candidate of [got, squash(line.replace(/^(?:the|an?)\s+/i, ""))]) {
+        let count = 0;
+        while (count < candidate.length && count < want.length && candidate[count] === want[count]) count++;
+        if (count > common) { common = count; got = candidate; }
+      }
       if (common < 10) continue;
       const shorter = Math.min(got.length, want.length);
       if (common < shorter && (common < 15 || common < 0.6 * shorter)) continue;
@@ -202,8 +205,23 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
 
   // The title page orders the names it shows, and adds a name printed alone on its own line.
   // The page marked "Title Page" in the outline, before a cover, which may carry only the title.
-  const titlePage = pages.find((p) => titlePageRank(p) === 2 && p.text.trim()) ?? pages.find((p) => titlePageRank(p) === 1 && p.text.trim())
+  let titlePage = pages.find((p) => titlePageRank(p) === 2 && p.text.trim()) ?? pages.find((p) => titlePageRank(p) === 1 && p.text.trim())
     ?? pages.find((p) => p.text.split("\n").filter((l) => l.trim()).length >= 2);
+  // Pandoc may put the title and each author in separate blocks. Use the initial title
+  // run, stopping before copyright/front-matter boundaries, rather than a later multiline code block.
+  const titleStart = pages.findIndex(p => p.page_index < 20 && titles.some(t => squash(p.text).includes(t)));
+  if (titleStart >= 0 && (!titlePage || titlePage.page_index > pages[titleStart].page_index + 10)) titlePage = pages[titleStart];
+  if (titlePage && titlePage.text.split("\n").filter(l => l.trim()).length < 2) {
+    const start = pages.indexOf(titlePage), parts = [titlePage.text];
+    let size = titlePage.text.length;
+    for (let i = start + 1; i < pages.length && i <= start + 20; i++) {
+      const p = pages[i];
+      if (p.page_index !== pages[i - 1].page_index + 1 || p.section_path !== titlePage.section_path
+        || /copyright|all rights reserved|table of contents|about the author/i.test(p.text) || size + p.text.length > 8000) break;
+      parts.push(p.text); size += p.text.length;
+    }
+    titlePage = { ...titlePage, text: parts.join("\n\n") };
+  }
   const order: string[] = [];
   if (titlePage) {
     for (const line of titlePage.text.split("\n")) {
@@ -217,7 +235,8 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
       const titled = titles.some((t) => t.includes(part) || part.includes(t));
       if (!keys.length && !titled && line.trim().split(/\s+/).length <= 3) {
         const before = found.size;
-        add(line, "title_page", titlePage, titlePage.text.indexOf(line));
+        const source = pages.find(p => p.page_index >= titlePage!.page_index && p.text.split("\n").includes(line)) ?? titlePage;
+        add(line, "title_page", source, source.text.indexOf(line));
         if (found.size > before) order.push([...found.keys()].at(-1)!);
       }
     }

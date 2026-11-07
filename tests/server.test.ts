@@ -68,6 +68,12 @@ beforeAll(async () => {
       async calibre(command, stdin, log) {
         calibreCalls.push({ command, stdin });
         log(`ran ${command}\n`);
+        if (command === "metadata-preview") return;
+        if (command === "metadata-apply") {
+          const book = JSON.parse(stdin!).books[0];
+          log("@@change " + JSON.stringify({calibre_id:book.calibre_id,uuid:book.uuid,title:book.after.title,metadata:{before:book.before,after:book.after}}) + "\n");
+          return;
+        }
         // Like calibre-tags.sh: one structured line per book, split across chunks to test reassembly.
         for (const book of stdin ? (JSON.parse(stdin) as { books: { calibre_id: number; uuid: string; title: string; add?: string[] }[] }).books : []) {
           const line = `@@change ${JSON.stringify({ calibre_id: book.calibre_id, uuid: book.uuid, title: book.title, added: book.add ?? [], removed: [] })}\n`;
@@ -352,4 +358,29 @@ it("verifies and anchors quote-mcp's quotes on the LAN only", async () => {
   expect((await post("/api/verify", { book: "main:1", text: "Weak ties" }, tunnel)).status).toBe(403);
   expect((await post("/api/anchors", { quote_id: 42, anchor }, tunnel)).status).toBe(403);
   expect((await fetch(`${base}/api/anchors/changes`, { headers: tunnel })).status).toBe(403);
+});
+
+it("applies reviewed metadata in one authenticated job using identical preview/apply plans", async () => {
+  const book = await (await fetch(`${base}/api/books/main%3A1`)).json();
+  const body = { title: "Networks, revised", authors: ["Ann Author", "Bob Writer"], before: { title: book.title, authors: book.authors } };
+  const send = (headers: Record<string,string>, value = body) => fetch(`${base}/api/books/main%3A1/metadata`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(value) });
+  expect((await send({})).status).toBe(401);
+  expect((await send({"cf-access-jwt-assertion":token},{...body,before:{title:"stale",authors:[]}})).status).toBe(400);
+  const count = refreshes;
+  const response = await send({"cf-access-jwt-assertion":token});expect(response.status).toBe(202);
+  const job = await waitForJob((await response.json()).id);
+  expect(job.status).toBe("succeeded");
+  expect(calibreCalls.slice(-2).map(c=>c.command)).toEqual(["metadata-preview","metadata-apply"]);
+  expect(calibreCalls.at(-2)?.stdin).toBe(calibreCalls.at(-1)?.stdin);
+  expect(JSON.parse(calibreCalls.at(-1)!.stdin!).books[0]).toMatchObject({calibre_id:1,uuid:book.uuid,before:body.before,after:{title:body.title,authors:body.authors}});
+  expect(refreshes).toBe(count+1);
+  expect(job.items).toHaveLength(1);expect(job.items[0].metadata).toEqual({before:body.before,after:{title:body.title,authors:body.authors}});
+  const audit=await(await fetch(`${base}/api/changes?job=${job.id}`)).json();
+  expect(audit.rows).toEqual([expect.objectContaining({kind:"metadata_corrected",actor:"me@example.com"})]);
+});
+
+it("renders an actual PDF cover for metadata review", async () => {
+  const response = await fetch(`${base}/api/books/main%3A1/cover`);
+  expect(response.status).toBe(200);expect(response.headers.get("content-type")).toBe("image/png");
+  expect(Buffer.from(await response.arrayBuffer()).subarray(1,4).toString()).toBe("PNG");
 });

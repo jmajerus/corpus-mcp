@@ -145,6 +145,21 @@ describe("indexer", () => {
     expect(scanLibraries(config, db)).toMatchObject({ extracted: 0, unchanged: 5 });
   });
 
+  it("keeps extraction and anchors when a metadata correction moves an unchanged book", () => {
+    scanLibraries(config, db);
+    const old = db.prepare("SELECT * FROM books WHERE id='main:1'").get() as any;
+    const pages = db.prepare("SELECT * FROM pages WHERE book_id='main:1' ORDER BY page_index").all();
+    const nextFolder = "Correct Author/Correct Title (1)";
+    fs.mkdirSync(path.join(root,"main",nextFolder), { recursive: true });
+    fs.renameSync(path.join(root,old.file_path),path.join(root,"main",nextFolder,"Correct Title.pdf"));
+    const catalogue = new Database(path.join(root,"main","metadata.db"));
+    catalogue.prepare("UPDATE books SET title='Correct Title',path=? WHERE id=1").run(nextFolder);
+    catalogue.prepare("UPDATE data SET name='Correct Title' WHERE book=1 AND format='PDF'").run();catalogue.close();
+    expect(scanLibraries(config, db)).toMatchObject({extracted:0,unchanged:5});
+    expect(db.prepare("SELECT * FROM pages WHERE book_id='main:1' ORDER BY page_index").all()).toEqual(pages);
+    expect(db.prepare("SELECT title,file_path,sha256,extractor_version,indexed_at FROM books WHERE id='main:1'").get()).toEqual({title:"Correct Title",file_path:"main/"+nextFolder+"/Correct Title.pdf",sha256:old.sha256,extractor_version:old.extractor_version,indexed_at:old.indexed_at});
+  });
+
   it("re-extracts a changed file and removes deleted books", () => {
     scanLibraries(config, db);
     const echoes = path.join(root, "main", "Cy Writer", "Echoes (2)", "Echoes - Cy Writer.epub");
@@ -648,6 +663,7 @@ describe("shelves", () => {
     // Stand-ins that report how they were called.
     fs.writeFileSync(path.join(tools, "calibre-tags.sh"), 'echo "tags $* plan=$(printf %s "$TAG_PLAN" | base64 -d)"\n');
     fs.writeFileSync(path.join(tools, "calibre-convert.sh"), 'echo "convert $*"\n');
+    fs.writeFileSync(path.join(tools, "calibre-metadata.py"), 'import sys; print("metadata " + " ".join(sys.argv[1:]) + " plan=" + sys.stdin.read())\n');
     const script = fs.readFileSync(new URL("../deploy/corpus-source.sh", import.meta.url), "utf8")
       .replace(/^TOOLS_DIR=.*$/m, `TOOLS_DIR="${tools}"`).replace(/^LIBRARY=.*$/m, 'LIBRARY="/lib/main"');
     const run = (command: string, input = "") =>
@@ -656,6 +672,8 @@ describe("shelves", () => {
     expect(run("tags-apply", '{"books":[1]}')).toBe('tags --apply /lib/main plan={"books":[1]}');
     expect(run("convert-preview")).toBe("convert /lib/main");
     expect(run("convert-apply")).toBe("convert --apply /lib/main");
+    expect(run("metadata-preview", '{"books":[]}')).toBe('metadata /lib/main plan={"books":[]}');
+    expect(run("metadata-apply", '{"books":[1]}')).toBe('metadata --apply /lib/main plan={"books":[1]}');
   });
 });
 

@@ -8,6 +8,9 @@ export const BOOK_HTML = page({
 .head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: flex-start; }
 .head .links { font-size: 0.9rem; }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-top: 14px; }
+.metadata-review { display:grid; grid-template-columns:minmax(0,1fr) 120px; gap:12px; align-items:start; }
+.metadata-review .cover { grid-column:2; grid-row:1 / span 2; }
+.metadata-review label { grid-column:1; }
 .card h2 { margin: 0 0 8px; font-size: 1rem; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 0.88rem; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
@@ -92,14 +95,25 @@ function render() {
         '</td><td class="note">' + esc(p.context) + "</td></tr>").join("") + "</tbody></table>" : "") + "</div>";
   const tp = b.title_page;
   const fromLabels = { about: "About the author", by: "a by-line", copyright: "the copyright line", title_page: "the title page" };
-  const authorNote = { calibre: "", printed: "Calibre has no author; these are printed in the book. Confirm them and add them in Calibre.",
-    none: "Calibre has no author, and none was found printed in the book.", merged: "Calibre has several people in one author record; these are printed separately in the book." };
-  const titlePageCard = (tp.authors.length || tp.title || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
+  const authorNote = { calibre: "", printed: "Review the correction below and apply it to Calibre.",
+    none: "Enter the author from the cover or title page below.", merged: "Calibre has several people in one author record; these are printed separately in the book." };
+  const corroborated = tp.authors.filter(a => a.sources.includes("title_page"));
+  const candidates = corroborated.length ? corroborated : tp.authors.filter(a => a.sources.includes("about") || a.sources.includes("by"));
+  const needsAuthor = tp.author_state !== "calibre";
+  const authorValues = needsAuthor && candidates.length ? candidates.map(a => a.name) : tp.author_state === "none" ? [] : b.authors.map(a => a.replaceAll("|", ","));
+  const repair = (needsAuthor || tp.title_is_file_name) ? '<div class="editor"><h2>Correct title and authors</h2>' +
+    '<div class="note">Review these values against the book. Apply saves them in Calibre and refreshes this book’s metadata.</div>' +
+    '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
+    '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canWrite ? "" : " disabled") + '></label>' +
+    '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canWrite ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label></div>' +
+    '<p><a href="/admin/books/' + encodeURIComponent(id) + '/read?page=1">Read the opening pages</a></p>' +
+    '<button type="button" class="primary" id="apply-metadata"' + (canWrite ? "" : " disabled") + '>Apply to Calibre</button></div>' : "";
+  const titlePageCard = (tp.authors.length || tp.title || tp.title_is_file_name || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
     (tp.title_is_file_name ? kv([["Printed title", tp.title ? esc(tp.title.title) + ' <span class="note">page ' + tp.title.page + ", for Calibre's file name of a title</span>" : '<span class="note">Not found</span>']]) : "") +
     (tp.authors.length ? '<table style="margin-top:8px"><thead><tr><th>Author</th><th>From</th><th>Where</th><th>Line</th></tr></thead><tbody>' +
       tp.authors.map((a) => "<tr><td>" + esc(a.name) + "</td><td>" + esc(a.sources.map((x) => fromLabels[x] || x).join(", ")) + "</td><td>page " + a.page +
         '</td><td class="note">' + esc(a.context) + "</td></tr>").join("") + "</tbody></table>" : "") +
-    (authorNote[tp.author_state] ? '<p class="note">' + esc(authorNote[tp.author_state]) + "</p>" : "") + "</div>" : "";
+    (authorNote[tp.author_state] ? '<p class="note">' + esc(authorNote[tp.author_state]) + "</p>" : "") + repair + "</div>" : "";
   const changes = b.changes.length ? '<div class="scroll"><table><thead><tr><th>When</th><th>Change</th><th>Detail</th><th>Source</th><th>By</th></tr></thead><tbody>' +
     b.changes.map((ch) => "<tr><td>" + esc(when(ch.at)) + "</td><td>" + esc(String(ch.kind).replace("_", " ")) + "</td><td>" +
       (["tag_added", "tag_removed", "tag_proposed", "proposal_approved"].includes(ch.kind) ? tagChip(ch.detail) : esc(ch.detail || "")) + "</td><td>" +
@@ -146,7 +160,17 @@ document.getElementById("book").addEventListener("click", async (e) => {
   const t = e.target;
   if (t.dataset.remove) { desired = desired.filter((x) => x !== t.dataset.remove); renderDesired(); return; }
   try {
-    if (t.dataset.zkey) {
+    if (t.id === "apply-metadata") {
+      t.disabled = true;
+      try {
+        const out = await post("/api/books/" + encodeURIComponent(id) + "/metadata", {
+          title: document.getElementById("metadata-title").value,
+          before: { title: book.title, authors: book.authors },
+          authors: document.getElementById("metadata-authors").value.split("\\n").map(a => a.trim()).filter(Boolean)
+        });
+        location.href = "/admin/jobs/" + out.id;
+      } catch (err) { t.disabled = false; throw err; }
+    } else if (t.dataset.zkey) {
       const out = await post("/api/zotero/link", { book_id: id, key: t.dataset.zkey, action: t.dataset.zaction });
       toast(t.dataset.zaction === "confirm" ? "Linked" + (out.pinned.length ? " and pinned " + out.pinned.join(", ") : "") + "." : "Marked as not this book."); await load();
     } else if (t.id === "addbtn") {

@@ -2,6 +2,7 @@ import { afterAll, afterEach, expect, it } from "vitest";
 import { openDatabase } from "../src/db.js";
 import { refreshDerivedMetadata } from "../src/indexer.js";
 import { metadataPages, METADATA_FRONT_CHARS, METADATA_BACK_CHARS } from "../src/metadata-window.js";
+import { TITLE_PAGE_SCAN_VERSION } from "../src/titlepage.js";
 import { findPrintedIsbns } from "../src/isbn.js";
 import { findPrintedYears, printedYear } from "../src/years.js";
 
@@ -78,7 +79,7 @@ it("invalidates prior Pandoc window caches once while leaving legacy caches unch
   book("legacy", 1, [{ text: "Copyright 2012" }]);
   db.prepare(`UPDATE books SET year=2000, text_chars=10, printed_isbns='[]', printed_isbns_version=2,
     printed_years='[]', printed_years_version=2, printed_year=1999,
-    title_page='{"authors":[],"title":null,"for_title":"Example Book"}',title_page_version=2`).run();
+    title_page='{"authors":[],"title":null,"for_title":"Example Book"}',title_page_version=?`).run(TITLE_PAGE_SCAN_VERSION);
   const legacy = db.prepare("SELECT * FROM books WHERE id='legacy'").get();
   refreshDerivedMetadata(db, "author-year-word");
   expect(db.prepare("SELECT printed_year FROM books WHERE id='logical'").pluck().get()).toBe(2016);

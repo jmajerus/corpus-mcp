@@ -268,3 +268,23 @@ How far behind origin, and whether the public site answers, come from GitHub's
 API and from the site itself, checked every few minutes. While the Internet is
 down they show as unknown or unreachable, and the rest of the page is current.
 
+
+### Correcting missing authors and filename titles
+
+Use **Books → Correct authors or title** to list books needing review. The book's Title page card has an editable title and one author per line, prefilled
+from its title page when available. It shows the cover beside the correction;
+PDFs can render the first page when no Calibre cover image has been mirrored yet.
+Compare the values with the book, edit them if needed, then choose **Apply to Calibre**.
+The single action checks the same reviewed plan on the source host, backs up
+`metadata.db`, changes title/authors and regenerates their sort fields through Calibre’s metadata API, records the change,
+and refreshes the index. An unchanged-file move caused by Calibre renaming the
+book's folder preserves extracted text and saved anchors. Resolved citekey blockers
+then clear normally; other missing fields can still block a citekey.
+
+If metadata changed since the form loaded, reload and review it again. Extracted
+names remain suggestions until Apply; they do not silently become citation authors.
+The source host needs the updated named `metadata-preview` and `metadata-apply`
+commands (`deploy --source-setup` or `--source-setup-user-key`). These commands use
+`tools/calibre-metadata.py`; the existing tag and conversion commands are unchanged.
+
+The source writer uses `calibre-debug` from the same Calibre installation as the existing source tools. The metadata API accepts ordered author lists directly, preserving author order and comma-containing names, and recomputes title/author sort values. See the [Calibre database API](https://manual.calibre-ebook.com/db_api.html).

@@ -86,3 +86,24 @@ describe("title-page scan", () => {
     expect(personName("Packt Publishing")).toBeNull();
   });
 });
+
+it("reads a logical title run instead of mistaking a later product name for an author", () => {
+  const result = scanTitlePage([
+    page(0, "[]"), page(1, "ASP.NET Core 9 Web API Cookbook"), page(2, "Over 60 hands-on recipes"),
+    page(3, "Luke Avedon"), page(4, "Garry Cabrera"),
+    page(5, "Copyright © 2025 Packt Publishing", "Copyright"),
+    page(36, "About the authors", "Contributors"), page(37, "Luke Avedon is a developer.", "Contributors"), page(38, "Garry Cabrera has seven years of experience.", "Contributors"),
+    page(65, "Docker Desktop\nInstallation", "Getting Started"),
+  ], "ASP.NET Core 9 Web API Cookbook");
+  expect(names(result)).toEqual(["Luke Avedon", "Garry Cabrera"]);
+  expect(result.authors.every(a => a.sources.includes("title_page"))).toBe(true);
+});
+
+it("recovers the full title with its leading article rather than a later partial mention", () => {
+  const result = scanTitlePage([page(1, "The Kubernetes Bible\nSecond Edition\nGineesh Madapparambath\nRuss McKendrick"),page(6, "“Kubernetes.”")], "kubernetesbible");
+  expect(result.title).toEqual({ title: "The Kubernetes Bible", page: 2 });
+});
+
+it("keeps leading articles when the filename contains them", () => {
+  expect(scanTitlePage([page(1,"The Kubernetes Bible\nSecond Edition")],"thekubernetesbible").title?.title).toBe("The Kubernetes Bible");
+});

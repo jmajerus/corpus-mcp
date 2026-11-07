@@ -90,7 +90,9 @@ function renderActions() {
     convert: "Add an EPUB to every MOBI/AZW3/KFX-only book so it gets chapter citations.",
     zotero: "Fetch what changed in the Zotero library since the last sync (it also runs on its own timer), and pin the citekeys of matched books.",
   };
-  document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) =>
+  document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) => kind === "metadata"
+    ? '<div class="card action"><h3>Correct authors and titles</h3><p>Review the suggested metadata beside each book’s cover.</p><a href="/admin/books?metadata=repair">Review books</a></div>'
+    :
     '<div class="card action"><h3>' + esc(spec.title) + "</h3><p>" + esc(help[kind] || "") + "</p>" +
     (kind === "cleanup" ? '<input type="text" id="also" placeholder="Also remove these tags (comma-separated)" aria-label="Also remove these tags">' : "") +
     '<div class="buttons"><button type="button" class="primary" data-kind="' + kind + '" data-mode="' + (spec.previewable ? "preview" : "apply") + '"' + (canWrite ? "" : " disabled") + ">" +

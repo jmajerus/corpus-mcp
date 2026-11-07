@@ -238,7 +238,7 @@ export async function backupDataStore(data: DataStore, dir: string, keep = 14): 
 export const CHANGE_KINDS = [
   "tag_added", "tag_removed", "format_added", "book_added", "book_reextracted", "book_removed", "extraction_failed",
   "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "citekey_pinned",
-  "categories_edited", "citekey_unpinned",
+  "metadata_corrected", "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
   "zotero_linked",
 ] as const;

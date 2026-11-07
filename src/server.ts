@@ -1,7 +1,7 @@
 import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessConfig } from './http-access.js';
 import fs from "node:fs";
 import http from "node:http";
-import path from "node:path";
+import path, { resolve as resolvePath, sep as pathSep } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -382,7 +382,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
-    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes)?$/);
+    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes|\/metadata|\/cover)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
@@ -396,6 +396,17 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const base = !admin.quoteMcpUrl ? undefined : /^corpus-mcp[.:]/.test(host) ? `${scheme}://${host.replace(/^corpus-mcp/, "quote-mcp")}` : admin.quoteMcpUrl;
       if (!base) sendJson(res, 404, { error: "Quotes are kept in quote-mcp, which isn't set up here (CORPUS_QUOTE_MCP_URL)." });
       else res.writeHead(302, { location: base + path + url.search }).end();
+    }
+    else if (req.method === "GET" && bookPath?.[2] === "/cover") {
+      const book = getBook(c, decodeURIComponent(bookPath[1]));
+      const folder = c.db.prepare("SELECT folder FROM books WHERE id=?").pluck().get(book.id) as string;
+      const cover = resolvePath(config.booksRoot, folder, "cover.jpg");
+      if (!cover.startsWith(resolvePath(config.booksRoot) + pathSep)) throw new ToolError("Invalid cover path.");
+      if (fs.existsSync(cover)) res.writeHead(200, { "content-type": "image/jpeg", "cache-control": "private, max-age=300" }).end(fs.readFileSync(cover));
+      else if (book.format === "pdf") {
+        const image = renderPage(c, { book_id: book.id, page: 1, scale: 1 });
+        res.writeHead(200, { "content-type": "image/png", "cache-control": "private, max-age=300" }).end(Buffer.from(image.png, "base64"));
+      } else sendJson(res, 404, { error: "No cover image is available yet." });
     }
     else if (req.method === "GET" && bookPath?.[2] === "/pages") {
       const book = getBook(c, decodeURIComponent(bookPath[1]));
@@ -432,7 +443,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const p = url.searchParams;
       const text = (name: string) => p.get(name)?.trim() || undefined;
       sendJson(res, 200, adminBooks(c, {
-        q: text("q"), library: text("library"), format: text("format"), status: text("status"), shelf: text("shelf"), tag: text("tag"),
+        metadata: oneOf(p.get("metadata"), ["repair"] as const), q: text("q"), library: text("library"), format: text("format"), status: text("status"), shelf: text("shelf"), tag: text("tag"),
         category: oneOf(p.get("category"), ["uncategorized", "categorized", "pending", "not_applied"] as const),
         citekey: oneOf(p.get("citekey"), ["calibre", "pinned", "ready", "blocked"] as const),
         isbn: oneOf(p.get("isbn"), ["valid", "invalid", "printed", "none"] as const),
@@ -443,6 +454,13 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
       }));
     } else if (req.method === "GET" && bookPath && !bookPath[2]) sendJson(res, 200, adminBook(c, config, decodeURIComponent(bookPath[1])));
+    else if (req.method === "POST" && bookPath?.[2] === "/metadata") {
+      const by = await writer();
+      if (by === null) return;
+      const body = await readJson(req) as { title?: unknown; authors?: unknown; before?: unknown };
+      const id = runner.start("metadata", "apply", { metadata: { book_id: decodeURIComponent(bookPath[1]), title: body?.title, authors: body?.authors, before: body?.before } }, by);
+      sendJson(res, 202, { id });
+    }
     else if (req.method === "POST" && bookPath?.[2] === "/categories") {
       const by = await writer();
       if (by === null) return;
