@@ -49,7 +49,7 @@ export interface AdminBookQuery {
   category?: CategoryState; citekey?: CitekeyState; isbn?: IsbnState; year?: YearState; author?: AuthorState; problem?: Problem; sort?: "title" | "year" | "id"; limit?: number; offset?: number;
 }
 
-export function adminBooks(c: Corpus, query: AdminBookQuery) {
+export function adminBooks(c: Corpus, query: AdminBookQuery, writableLibrary?: string) {
   const where: string[] = [];
   const params: Record<string, unknown> = {};
   if (query.q) {
@@ -89,7 +89,7 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
     for (const p of s.problems) facets.problem[p] = (facets.problem[p] ?? 0) + 1;
   }
   const filtered = all.filter(({ b, s }) =>
-    (!query.metadata || s.author !== "calibre" || mangledTitle(b.title) || b.year === null) && (!query.category || s.category === query.category) && (!query.citekey || s.citekey === query.citekey)
+    (!query.metadata || ((!writableLibrary || b.library === writableLibrary) && (s.author !== "calibre" || mangledTitle(b.title) || b.year === null))) && (!query.category || s.category === query.category) && (!query.citekey || s.citekey === query.citekey)
     && (!query.isbn || s.isbn === query.isbn) && (!query.year || s.year === query.year) && (!query.author || s.author === query.author) && (!query.problem || s.problems.includes(query.problem)));
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
   const offset = Math.max(query.offset ?? 0, 0);
@@ -126,6 +126,7 @@ export function adminBook(c: Corpus, config: Config, id: string) {
       ...zotero, link: zotero.match ? zoteroItemLink(config.zotero?.library, zotero.match.key) : null,
       candidates: zotero.candidates.map((x) => ({ ...x, link: zoteroItemLink(config.zotero?.library, x.key) })),
     },
+    metadata_writable: b.library === config.shelvesLibrary && b.uuid !== null,
     book_id: b.id, library: b.library, calibre_id: b.calibre_id, uuid: b.uuid, title: b.title, authors: JSON.parse(b.authors) as string[],
     author_sorts: JSON.parse(b.author_sorts) as string[], publisher: b.publisher, year: b.year, language: b.language,
     description: b.description, status: b.status, error: b.error,

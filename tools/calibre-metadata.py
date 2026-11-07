@@ -5,9 +5,19 @@ import datetime
 import json
 import os
 import pathlib
+import shutil
+import hashlib
 import sqlite3
 import subprocess
 import sys
+
+
+def digest(file):
+    value = hashlib.sha256()
+    with open(file, 'rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(block)
+    return value.hexdigest()
 
 
 def main():
@@ -94,21 +104,54 @@ def main():
     print(json.dumps({'before': current, 'after': after}, ensure_ascii=False))
     if not args.apply:
         return
+    binary = pathlib.Path(os.environ.get('CALIBRE_BIN', '/usr/bin')) / 'calibre-debug'
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError(f'Calibre runtime is unavailable: {binary}. No metadata was written.')
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
     backup = library / f'metadata.db.before-metadata-{stamp}'
     with sqlite3.connect(f'file:{library / "metadata.db"}?mode=ro', uri=True) as src, sqlite3.connect(backup) as dst:
         src.backup(dst)
-    print(f'Backed up metadata.db to {backup}', flush=True)
+    # A database alone cannot recover book files after Calibre has renamed their folders.
+    files = backup.with_name(backup.name + '.files')
+    files.mkdir(mode=0o700)
+    with sqlite3.connect(backup) as db:
+        folder = db.execute('SELECT path FROM books WHERE id=?', (book_id,)).fetchone()[0]
+        formats = db.execute('SELECT format,name FROM data WHERE book=? ORDER BY format', (book_id,)).fetchall()
+    original = (library / folder).resolve()
+    if not original.is_relative_to(library.resolve()):
+        raise ValueError('Book folder is outside the library; no metadata was written.')
+    if original.exists():
+        shutil.copytree(original, files / 'book', symlinks=True)
+    else:
+        (files / 'book').mkdir()
+    manifest = {'book_id': book_id, 'uuid': book['uuid'], 'folder': folder, 'formats': formats, 'files': {}}
+    for file in (files / 'book').rglob('*'):
+        if file.is_symlink():
+            raise ValueError('Book contains a symlink; no metadata was written.')
+        if file.is_file():
+            manifest['files'][str(file.relative_to(files / 'book'))] = digest(file)
+    for fmt, name in formats:
+        if f'{name}.{fmt.lower()}' not in manifest['files']:
+            raise ValueError('An indexed format is missing from the book backup; no metadata was written.')
+    (files / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    print(f'Backed up metadata.db to {backup}; book files to {files}', flush=True)
     # Recheck after the backup. Both preview and apply refuse a stale reviewed value.
     if read() != current:
         raise ValueError('Metadata changed during backup. Refresh and review again.')
-    binary = pathlib.Path(os.environ.get('CALIBRE_BIN', '/usr/bin')) / 'calibre-debug'
     command = [str(binary), '-e', str(pathlib.Path(__file__).resolve()), '--', '--calibre-write', str(library)]
-    subprocess.run(command, input=json.dumps(plan), text=True, check=True)
+    result = subprocess.run(command, input=json.dumps(plan), text=True)
     actual = read()
-    if actual['year'] != after['year'] or actual['title'] != after['title'] or [a.replace('|', ',') for a in actual['authors']] != after['authors']:
+    matches = actual['year'] == after['year'] and actual['title'] == after['title'] and [a.replace('|', ',') for a in actual['authors']] == after['authors']
+    if actual != current:
+        correction = {'before': current, 'after': actual}
+        if result.returncode or not matches:
+            correction['partial'] = True
+        print('@@change ' + json.dumps({'calibre_id': book_id, 'uuid': book['uuid'], 'title': actual['title'], 'metadata': correction}, ensure_ascii=False), flush=True)
+    if result.returncode or not matches:
+        print(f'Metadata apply did not complete. Keep {backup} and {files}. Recover this book with calibre-metadata-recover.py after reviewing the failure; do not replace the live database alone.', file=sys.stderr)
+        result.check_returncode()
         raise ValueError('Calibre did not store the reviewed values; inspect the job and its backup.')
-    print('@@change ' + json.dumps({'calibre_id': book_id, 'uuid': book['uuid'], 'title': after['title'], 'metadata': {'before': current, 'after': after}}, ensure_ascii=False))
+
 
 
 if __name__ == '__main__':

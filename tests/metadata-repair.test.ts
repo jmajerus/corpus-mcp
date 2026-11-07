@@ -9,8 +9,8 @@ let root: string, library: string, plan: any;
 beforeEach(() => {
  root=tempDir();library=path.join(root,"main");fs.mkdirSync(library);
  const db=new Database(path.join(library,"metadata.db"));
- db.exec(`CREATE TABLE books(id INTEGER PRIMARY KEY,uuid TEXT,title TEXT,comment TEXT,pubdate TEXT);CREATE TABLE authors(id INTEGER PRIMARY KEY,name TEXT);CREATE TABLE books_authors_link(id INTEGER PRIMARY KEY,book INTEGER,author INTEGER);
- INSERT INTO books VALUES(1,'uuid-1','awscloudprojects','keep this comment',NULL);INSERT INTO authors VALUES(1,'Unknown');INSERT INTO books_authors_link VALUES(1,1,1);`);db.close();
+ db.exec(`CREATE TABLE books(id INTEGER PRIMARY KEY,uuid TEXT,title TEXT,comment TEXT,pubdate TEXT,path TEXT);CREATE TABLE data(book INTEGER,format TEXT,name TEXT);CREATE TABLE authors(id INTEGER PRIMARY KEY,name TEXT);CREATE TABLE books_authors_link(id INTEGER PRIMARY KEY,book INTEGER,author INTEGER);
+ INSERT INTO books VALUES(1,'uuid-1','awscloudprojects','keep this comment',NULL,'book');INSERT INTO authors VALUES(1,'Unknown');INSERT INTO books_authors_link VALUES(1,1,1);`);db.close();fs.mkdirSync(path.join(library,"book"));fs.writeFileSync(path.join(library,"book","notes.txt"),"extra data");
  plan={library:"main",books:[{calibre_id:1,uuid:"uuid-1",title:"awscloudprojects",before:{title:"awscloudprojects",authors:["Unknown"],year:null},after:{title:"AWS Cloud Projects",authors:["Ivo Pinto","Pedro Santos"],year:2024}}]};
  fs.writeFileSync(path.join(root,"calibre-debug"),`#!/usr/bin/env python3
 import sys,sqlite3,json,pathlib
@@ -37,13 +37,13 @@ it('previews without writing and applies only the reviewed fields with a consist
  expect(run().status).toBe(0);expect(fs.existsSync(path.join(root,'calls.json'))).toBe(false);
  const result=run(true);expect(result.status,result.stderr).toBe(0);expect(result.stdout).toContain('@@change');
  const db=new Database(path.join(library,'metadata.db'));expect(db.prepare('SELECT title,comment FROM books').get()).toEqual({title:'AWS Cloud Projects',comment:'keep this comment'});db.close();
- const backups=fs.readdirSync(library).filter(f=>f.startsWith('metadata.db.before-metadata-'));expect(backups).toHaveLength(1);
+ const backups=fs.readdirSync(library).filter(f=>f.startsWith('metadata.db.before-metadata-')&&!f.endsWith('.files'));expect(backups).toHaveLength(1);
  const old=new Database(path.join(library,backups[0]));expect(old.prepare('SELECT title FROM books').pluck().get()).toBe('awscloudprojects');old.close();
  fs.unlinkSync(path.join(root,'calls.json'));expect(run(true).status).toBe(0);expect(fs.existsSync(path.join(root,'calls.json'))).toBe(false);
 });
 it('refuses changed metadata or a reused Calibre id before any write',()=>{
  plan.books[0].before.title='stale';expect(run(true).status).toBe(1);expect(fs.existsSync(path.join(root,'calls.json'))).toBe(false);
- plan.books[0].before.title='awscloudprojects';plan.books[0].uuid='wrong';expect(run(true).status).toBe(1);expect(fs.readdirSync(library)).toEqual(['metadata.db']);
+ plan.books[0].before.title='awscloudprojects';plan.books[0].uuid='wrong';expect(run(true).status).toBe(1);expect(fs.readdirSync(library).filter(f=>f.startsWith('metadata.db.before-'))).toEqual([]);
 });
 it('passes literal titles safely and preserves separate authors and comma-containing names',()=>{
  plan.books[0].after={title:'A title: $(touch SHOULD_NOT_EXIST)',authors:['Research and Development','William Strunk, Jr.'],year:2024};
@@ -70,4 +70,20 @@ it('keeps an existing complete publication date when its year is unchanged',()=>
  plan.books[0].before.year=2019;plan.books[0].after.year=2019;
  expect(run(true).status).toBe(0);
  const after=new Database(path.join(library,'metadata.db'));expect(after.prepare('SELECT pubdate FROM books').pluck().get()).toBe('2019-05-17T12:34:56+00:00');after.close();
+});
+
+it('reports a partial native write and retains both database and book-file backups',()=>{
+ const binary=path.join(root,'calibre-debug');
+ fs.writeFileSync(binary,fs.readFileSync(binary,'utf8').replace("db.execute('DELETE FROM books_authors_link", "db.commit(); sys.exit(3)\ndb.execute('DELETE FROM books_authors_link"));
+ const result=run(true);expect(result.status).toBe(1);expect(result.stdout).toContain('@@change');
+ const change=JSON.parse(result.stdout.split('\n').find(l=>l.startsWith('@@change '))!.slice(9));
+ expect(change.metadata).toMatchObject({partial:true,after:{title:'AWS Cloud Projects',authors:['Unknown'],year:2024}});
+ const files=fs.readdirSync(library).find(f=>f.endsWith('.files'))!;
+ expect(fs.readFileSync(path.join(library,files,'book','notes.txt'),'utf8')).toBe('extra data');
+ expect(result.stderr).toContain('do not replace the live database alone');
+});
+it('fails before backup or mutation if the Calibre runtime is unavailable',()=>{
+ fs.unlinkSync(path.join(root,'calibre-debug'));
+ const result=run(true);expect(result.status).toBe(1);expect(result.stderr).toContain('runtime is unavailable');
+ expect(fs.readdirSync(library).filter(f=>f.startsWith('metadata.db.before-'))).toEqual([]);
 });

@@ -102,15 +102,17 @@ function render() {
   const needsAuthor = tp.author_state !== "calibre";
   const authorValues = needsAuthor && candidates.length ? candidates.map(a => a.name) : tp.author_state === "none" ? [] : b.authors.map(a => a.replaceAll("|", ","));
   const needsYear = y.calibre === null;
+  const canCorrect = canWrite && b.metadata_writable;
   const repair = (needsAuthor || tp.title_is_file_name || needsYear) ? '<div class="editor"><h2>Correct title, authors, and year</h2>' +
     '<div class="note">Review these values against the book. Apply saves them in Calibre and refreshes this book’s metadata.</div>' +
     '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
-    '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canWrite ? "" : " disabled") + '></label>' +
-    '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canWrite ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +
-    '<label>Publication year<input id="metadata-year" type="number" min="1001" max="9999" step="1" placeholder="Unknown" style="display:block;width:100%;box-sizing:border-box" value="' + esc(y.calibre ?? y.printed ?? "") + '"' + (canWrite ? "" : " disabled") + '></label></div>' +
+    '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canCorrect ? "" : " disabled") + '></label>' +
+    '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canCorrect ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +
+    '<label>Publication year<input id="metadata-year" type="number" min="1001" max="9999" step="1" placeholder="Unknown" style="display:block;width:100%;box-sizing:border-box" value="' + esc(y.calibre ?? y.printed ?? "") + '"' + (canCorrect ? "" : " disabled") + '></label></div>' +
     (needsYear && y.printed ? '<p class="note">Year suggested from the book’s publication/copyright evidence above.</p>' : "") +
     '<p><a href="/admin/books/' + encodeURIComponent(id) + '/read?page=1">Read the opening pages</a></p>' +
-    '<button type="button" class="primary" id="apply-metadata"' + (canWrite ? "" : " disabled") + '>Apply to Calibre</button></div>' : "";
+    (!b.metadata_writable ? '<p class="note">This library is read-only.</p>' : "") +
+    '<button type="button" class="primary" id="apply-metadata"' + (canCorrect ? "" : " disabled") + '>Apply to Calibre</button></div>' : "";
   const titlePageCard = (tp.authors.length || tp.title || tp.title_is_file_name || needsYear || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
     (tp.title_is_file_name ? kv([["Printed title", tp.title ? esc(tp.title.title) + ' <span class="note">page ' + tp.title.page + ", for Calibre's file name of a title</span>" : '<span class="note">Not found</span>']]) : "") +
     (tp.authors.length ? '<table style="margin-top:8px"><thead><tr><th>Author</th><th>From</th><th>Where</th><th>Line</th></tr></thead><tbody>' +

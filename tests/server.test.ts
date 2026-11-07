@@ -20,6 +20,7 @@ let otherToken: string;
 let mcpToken: string;
 const calibreCalls: { command: string; stdin?: string }[] = [];
 let refreshes = 0;
+let failMetadataWrite = false;
 // A stand-in quote-mcp: its /api/corpus/quotes, holding what the reader saved.
 let quoteMcp: http.Server;
 const saves: Record<string, unknown>[] = [];
@@ -71,7 +72,9 @@ beforeAll(async () => {
         if (command === "metadata-preview") return;
         if (command === "metadata-apply") {
           const book = JSON.parse(stdin!).books[0];
-          log("@@change " + JSON.stringify({calibre_id:book.calibre_id,uuid:book.uuid,title:book.after.title,metadata:{before:book.before,after:book.after}}) + "\n");
+          const actual=failMetadataWrite ? {...book.before,title:book.after.title} : book.after;
+          log("@@change " + JSON.stringify({calibre_id:book.calibre_id,uuid:book.uuid,title:actual.title,metadata:{before:book.before,after:actual,...(failMetadataWrite ? {partial:true} : {})}}) + "\n");
+          if(failMetadataWrite) throw new Error("Injected failure after a partial write");
           return;
         }
         // Like calibre-tags.sh: one structured line per book, split across chunks to test reassembly.
@@ -394,4 +397,20 @@ it("accepts year-only corrections and rejects invalid or stale reviewed years", 
   const response=await send(body);expect(response.status).toBe(202);
   const job=await waitForJob((await response.json()).id);expect(job.status).toBe("succeeded");
   expect(job.params.plan.books[0]).toMatchObject({before:body.before,after:{title:book.title,authors:book.authors,year:2023}});
+});
+
+it("records and refreshes actual partial corrections while keeping the job failed",async()=>{
+ const book=await(await fetch(`${base}/api/books/main%3A1`)).json();
+ const before={title:book.title,authors:book.authors,year:book.publication_year.calibre};
+ const count=refreshes;
+ failMetadataWrite=true;
+ try{
+  const response=await fetch(`${base}/api/books/main%3A1/metadata`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:JSON.stringify({before,title:"Partially changed",authors:["New Writer"],year:2024})});
+  expect(response.status).toBe(202);
+  const job=await waitForJob((await response.json()).id);
+  expect(job.status).toBe("failed");expect(refreshes).toBe(count+1);
+  expect(job.items[0].metadata).toEqual({before,after:{...before,title:"Partially changed"},partial:true});
+  const audit=await(await fetch(`${base}/api/changes?job=${job.id}`)).json();
+  expect(JSON.parse(audit.rows[0].detail).partial).toBe(true);
+ }finally{failMetadataWrite=false;}
 });

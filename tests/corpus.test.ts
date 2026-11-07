@@ -1273,3 +1273,19 @@ describe("zotero mirror", () => {
     expect(zoteroReport(c, zconfig).sync.error).toBeNull();
   });
 });
+
+it("keeps institutional names with and literal while flagging joined personal names",()=>{
+ for(const name of ["Research and Development","U.S. Department of Health and Human Services","Simon and Schuster"]){
+  const result=proposeCitekey({title:"A Book",authors:[name],authorSorts:["Development, Research and"],publisher:null,year:2024},"author-year-word");
+  expect(result.blockers,name).toEqual([]);
+  expect(calibreCsl({title:"A Book",authors:[name],authorSorts:["Development, Research and"],publisher:null,year:2024}).author).toEqual([{literal:name}]);
+ }
+ expect(proposeCitekey({title:"A Book",authors:["Neal Ford and Mark Richards"],authorSorts:[],publisher:null,year:2024},"author-year-word").blockers).toContain("merged_authors");
+});
+it("limits the actionable metadata review filter to the writable library",()=>{
+ scanLibraries(config,db);
+ const result=adminBooks(c,{metadata:"repair"},"main");
+ expect(result.rows.length).toBeGreaterThan(0);
+ expect(result.rows.every(b=>b.book_id.startsWith('main:'))).toBe(true);
+ expect(adminBooks(c,{metadata:"repair"}).rows.some(b=>b.book_id.startsWith('library:'))).toBe(true);
+});
