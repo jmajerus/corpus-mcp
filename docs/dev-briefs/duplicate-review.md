@@ -3,6 +3,15 @@
 The duplicate screen supports exact selected-file matches and candidate metadata
 matches. It never auto-deletes a candidate. Keep-both decisions are primary data in
 `data.db`'s `duplicate_decisions` table (schema 11), tied to each pair's fingerprint.
+Candidate generation buckets books by selected-file hash/format, normalized
+identifier, and normalized title/author keys. Only books sharing a key are paired;
+overlapping evidence is combined into one result per pair. Large actual duplicate
+groups still produce one result per matching pair. Unchanged mirrored catalogue
+metadata is cached by file identity/size/nanosecond modification and change times,
+including the WAL signature. Indexed records, decisions and grouped reference
+counts are read fresh on every request. Filed Zotero UUIDs are blockers even
+without an explicit link, including old items with active merged survivors.
+
 A change invalidates that decision; cross-library pairs are reviewable but cannot be
 merged or trashed by this workflow.
 

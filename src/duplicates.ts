@@ -9,52 +9,127 @@ const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLower
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export interface DuplicateSelection { keep: string; remove: string; fingerprint: string; discard_conflicts?: boolean }
 
+const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
+const emptyReferences = () => Object.fromEntries(REFERENCE_TABLES.map(table => [table, 0]));
+
 export function duplicateReferences(c: Corpus, uuid: string) {
-  return Object.fromEntries(["quotes", "anchors", "citekeys", "zotero_links", "tag_proposals"].map(table => [table,
+  // Include filed Zotero items even when trashed: an active merged survivor can
+  // still inherit the relationship through the old item's Calibre UUID.
+  return Object.fromEntries(REFERENCE_TABLES.map(table => [table,
     c.data.prepare(`SELECT count(*) FROM ${table} WHERE calibre_uuid=?`).pluck().get(uuid) as number]));
 }
 
-/** Supplement the selected extraction format with the mirrored catalogue's identifiers and format list. */
-function catalogue(c: Corpus) {
-  const result = new Map<string, { identifiers: Record<string, string>; formats: string[] }>();
-  for (const library of c.db.prepare("SELECT DISTINCT library FROM books").pluck().all() as string[]) {
-    const file = path.join(c.booksRoot, library, "metadata.db");
-    if (!fs.existsSync(file)) continue;
-    const db = new Database(fs.readFileSync(file), { readonly: true });
-    try {
-      for (const r of db.prepare("SELECT book,type,val FROM identifiers ORDER BY type,val").all() as {book:number;type:string;val:string}[]) {
-        const key = `${library}:${r.book}`, item = result.get(key) ?? { identifiers: {}, formats: [] };
-        item.identifiers[r.type] = r.val; result.set(key, item);
-      }
-      for (const r of db.prepare("SELECT book,format FROM data ORDER BY format").all() as {book:number;format:string}[]) {
-        const key = `${library}:${r.book}`, item = result.get(key) ?? { identifiers: {}, formats: [] };
-        item.formats.push(r.format); result.set(key, item);
-      }
-    } finally { db.close(); }
+function allReferences(c: Corpus) {
+  const result = new Map<string, Record<string, number>>();
+  for (const table of REFERENCE_TABLES) {
+    for (const row of c.data.prepare(`SELECT calibre_uuid, count(*) AS n FROM ${table} WHERE calibre_uuid IS NOT NULL GROUP BY calibre_uuid`).all() as {calibre_uuid:string;n:number}[]) {
+      const counts = result.get(row.calibre_uuid) ?? emptyReferences();
+      counts[table] = row.n;
+      result.set(row.calibre_uuid, counts);
+    }
   }
   return result;
 }
 
+type CatalogueMetadata = Map<string, { identifiers: Record<string, string>; formats: string[] }>;
+const catalogues = new WeakMap<Corpus, Map<string, { signature: string; metadata: CatalogueMetadata }>>();
+function signature(file: string) {
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** Re-read only catalogues changed by refresh (including atomic replacements).
+ * Reference counts, indexed books and review decisions are deliberately not cached.
+ */
+function catalogue(c: Corpus) {
+  const result: CatalogueMetadata = new Map();
+  const cache = catalogues.get(c) ?? new Map();
+  catalogues.set(c, cache);
+  const libraries = c.db.prepare("SELECT DISTINCT library FROM books").pluck().all() as string[];
+  for (const old of cache.keys()) if (!libraries.includes(old)) cache.delete(old);
+  for (const library of libraries) {
+    const file = path.join(c.booksRoot, library, "metadata.db");
+    const mainStamp = signature(file);
+    if (mainStamp === null) { cache.delete(library); continue; }
+    const stamp = mainStamp + "|" + (signature(file + "-wal") ?? "");
+    let entry = cache.get(library);
+    if (entry?.signature !== stamp) {
+      const metadata: CatalogueMetadata = new Map();
+      const db = new Database(file, { readonly: true, fileMustExist: true });
+      try {
+        db.transaction(() => {
+          for (const r of db.prepare("SELECT book,type,val FROM identifiers ORDER BY type,val").all() as {book:number;type:string;val:string}[]) {
+            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [] };
+            item.identifiers[r.type] = r.val; metadata.set(key, item);
+          }
+          for (const r of db.prepare("SELECT book,format FROM data ORDER BY format").all() as {book:number;format:string}[]) {
+            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [] };
+            item.formats.push(r.format); metadata.set(key, item);
+          }
+        })();
+      } finally { db.close(); }
+      entry = { signature: stamp, metadata };
+      cache.set(library, entry);
+    }
+    for (const [key, item] of entry.metadata) result.set(key, item);
+  }
+  return result;
+}
+
+interface DuplicateCandidate {
+  title: string; authors: string[]; format: string | null; sha256: string | null; identifiers: Record<string, string>;
+}
+const EVIDENCE = ["Identical selected file", "Matching identifier", "Matching title and authors"] as const;
+
+/** Normalize each book once; enumerate only pairs that share a candidate key.
+ * Large true-duplicate groups still need one result for each matching pair.
+ */
+export function duplicateCandidates(books: DuplicateCandidate[]) {
+  const buckets = new Map<string, { evidence: typeof EVIDENCE[number]; members: Set<number> }>();
+  const add = (key: unknown[], evidence: typeof EVIDENCE[number], index: number) => {
+    const encoded = JSON.stringify(key);
+    const bucket = buckets.get(encoded) ?? { evidence, members: new Set<number>() };
+    bucket.members.add(index);
+    buckets.set(encoded, bucket);
+  };
+  books.forEach((book, index) => {
+    if (book.sha256) add(["file", book.format, book.sha256], EVIDENCE[0], index);
+    for (const [type, value] of Object.entries(book.identifiers)) {
+      if (!["citekey", "calibre"].includes(type)) add(["identifier", type.includes("asin") ? "asin" : type.toLowerCase(), value.replace(/[\s-]/g, "").toLowerCase()], EVIDENCE[1], index);
+    }
+    const title = normal(book.title), authors = book.authors.map(normal).sort();
+    if (title && authors.join("|") && !authors.includes("unknown")) add(["title-authors", title, authors], EVIDENCE[2], index);
+  });
+  const matches = new Map<string, { i: number; j: number; evidence: Set<typeof EVIDENCE[number]> }>();
+  for (const { evidence, members } of buckets.values()) {
+    const indexes = [...members];
+    for (let a = 0; a < indexes.length; a++) for (let b = a + 1; b < indexes.length; b++) {
+      const i = indexes[a], j = indexes[b], key = `${i}:${j}`;
+      const match = matches.get(key) ?? { i, j, evidence: new Set<typeof EVIDENCE[number]>() };
+      match.evidence.add(evidence); matches.set(key, match);
+    }
+  }
+  return [...matches.values()].sort((a,b) => a.i - b.i || a.j - b.j).map(({i,j,evidence}) => ({i,j,evidence:EVIDENCE.filter(reason=>evidence.has(reason))}));
+}
+
 export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
-  const metadata = catalogue(c);
+  const metadata = catalogue(c), references = allReferences(c);
   const books = (c.db.prepare("SELECT * FROM books ORDER BY id").all() as BookRow[]).map(b => ({
     id: b.id, uuid: b.uuid, library: b.library, calibre_id: b.calibre_id, title: b.title,
     authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,
     error: b.error, sha256: b.sha256, file_size: b.file_size, identifiers: metadata.get(b.id)?.identifiers ?? {},
     formats: metadata.get(b.id)?.formats ?? (b.format ? [b.format.toUpperCase()] : []),
-    references: b.uuid ? duplicateReferences(c, b.uuid) : {},
+    references: b.uuid ? references.get(b.uuid) ?? emptyReferences() : {},
   }));
   const decisions = new Map((c.data.prepare("SELECT pair_key,fingerprint FROM duplicate_decisions").all() as {pair_key:string;fingerprint:string}[]).map(r => [r.pair_key,r.fingerprint]));
   const pairs = [];
-  for (let i = 0; i < books.length; i++) for (let j = i + 1; j < books.length; j++) {
-    const a = books[i], b = books[j], evidence: string[] = [];
-    if (a.sha256 && a.sha256 === b.sha256 && a.format === b.format) evidence.push("Identical selected file");
-    const identifiers = (x: typeof a) => Object.entries(x.identifiers).filter(([type]) => !["citekey", "calibre"].includes(type)).map(([type, value]) => `${type.includes("asin") ? "asin" : type.toLowerCase()}:${value.replace(/[\s-]/g, "").toLowerCase()}`);
-    const ai = identifiers(a), bi = identifiers(b);
-    if (ai.some(v => bi.includes(v))) evidence.push("Matching identifier");
-    const authors = (x: typeof a) => x.authors.map(normal).sort().join("|");
-    if (normal(a.title) && normal(a.title) === normal(b.title) && authors(a) && !a.authors.some(n => normal(n) === "unknown") && authors(a) === authors(b)) evidence.push("Matching title and authors");
-    if (!evidence.length) continue;
+  for (const {i,j,evidence} of duplicateCandidates(books)) {
+    const a = books[i], b = books[j];
     const key = JSON.stringify([a.id, b.id]), fingerprint = hash([a, b]);
     const dismissed = decisions.get(key) === fingerprint;
     if (dismissed && !includeDismissed) continue;

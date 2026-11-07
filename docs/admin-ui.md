@@ -331,8 +331,9 @@ the duplicate to Calibre's trash. The keeper's UUID and existing formats remain 
 The index refreshes after success or a partial failure. The change log records review
 choices, format/tag changes, resolutions, and interrupted resolutions.
 
-Records with corpus quotes, anchors, citekeys, Zotero links, or tag proposals are
-held for manual reference resolution. quote-mcp is also checked for unanchored quotes
+Records with corpus quotes, anchors, citekeys, Zotero links or filed item UUIDs
+(including merged records), or tag proposals are held for manual reference
+resolution. quote-mcp is also checked for unanchored quotes
 when configured; an unavailable quote service blocks resolution. Calibre annotations,
 Calibre-Web shelf/bookmark/reading links, differing identifiers or populated custom
 fields, conflicting supplementary files, and damaged surviving EPUBs also block

@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { beforeEach, afterEach, expect, it } from "vitest";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { loadConfig, type Config } from "../src/config.js";
 import { openDatabase } from "../src/db.js";
 import { openDataStore } from "../src/data.js";
 import { scanLibraries } from "../src/indexer.js";
-import { type Corpus } from "../src/tools.js";
+import { zoteroMatch } from "../src/zotero.js";
+import { type Corpus, getBook } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
-import { duplicatePairs, duplicatePlan, dismissDuplicate } from "../src/duplicates.js";
+import { duplicatePairs, duplicatePlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
 import { DUPLICATES_HTML } from "../src/web/duplicates.js";
 import { JOB_HTML } from "../src/web/jobs.js";
@@ -27,7 +28,7 @@ beforeEach(()=>{
  c={db:openDatabase(config.dbPath),data:openDataStore(config.dataDbPath),booksRoot:root,vocabulary:new Vocabulary(JSON.parse(fs.readFileSync(path.join(import.meta.dirname,"vocabulary.json"),"utf8")))};
  scanLibraries(config,c.db);
 });
-afterEach(()=>{c.db.close();c.data.close();fs.rmSync(root,{recursive:true,force:true});});
+afterEach(()=>{vi.restoreAllMocks();c.db.close();c.data.close();fs.rmSync(root,{recursive:true,force:true});});
 function pair(){return duplicatePairs(c,"main").pairs.find(p=>p.books[0].id==="main:1"&&p.books[1].id==="main:2")!;}
 function select(){return {keep:"main:1",remove:"main:2",fingerprint:pair().fingerprint};}
 it("reports exact selected files, metadata evidence, edition warnings and all available formats",()=>{
@@ -103,4 +104,68 @@ it("holds resolution when quote-mcp reports an unanchored quote or cannot verify
   status=503;await expect(assertNoBookQuotes(base,'uuid-2')).rejects.toThrow(/Could not verify/);
   status=200;body={quotes:[]};await expect(assertNoBookQuotes(base,'uuid-2')).resolves.toBeUndefined();
  }finally{await new Promise<void>(done=>server.close(()=>done()));}
+});
+
+
+it.each([false,true])("blocks a Zotero UUID without an explicit link, including a merged survivor (%s)",merged=>{
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,calibre_uuid,trashed,replaces,synced_at) VALUES('FILED',1,'book','Filed duplicate','uuid-2',?,'[]','now')").run(merged?1:0);
+ if(merged)c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,trashed,replaces,synced_at) VALUES('SURVIVOR',2,'book','Merged book',0,'[\"FILED\"]','now')").run();
+ expect(c.data.prepare("SELECT count(*) FROM zotero_links").pluck().get()).toBe(0);
+ expect(zoteroMatch(c,getBook(c,'main:2')).match).toMatchObject({key:merged?'SURVIVOR':'FILED',matched_by:'calibre_uuid'});
+ expect(duplicateReferences(c,'uuid-2').zotero_items).toBe(1);
+ expect(pair().books[1].references.zotero_items).toBe(1);
+ expect(()=>duplicatePlan(c,'main',select())).toThrow(/saved references/);
+});
+
+it("rechecks Zotero UUID references added after a successful source preview",async()=>{
+ const calls:string[]=[];
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!),reviewed:'source'},blockers:[]}})+'\n');
+ }});
+ const preview=await wait(r,r.start('duplicates','preview',{duplicate:select()}));
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,calibre_uuid,synced_at) VALUES('NEW',1,'book','uuid-2','now')").run();
+ expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/saved references/);
+ expect(calls).toEqual(['duplicates-preview']);
+});
+
+it("normalizes candidate keys once and coalesces overlapping evidence without transitive matches",()=>{
+ const candidates=[
+  {title:'Café: Theory',authors:['Ann Author','Bo Writer'],format:'pdf',sha256:'same',identifiers:{'mobi-asin':'B-0123',asin:'b0123'}},
+  {title:'Cafe Theory',authors:['Bo Writer','Ann Author'],format:'pdf',sha256:'same',identifiers:{asin:'B0123'}},
+  {title:'Other',authors:['Unknown'],format:'epub',sha256:'same',identifiers:{asin:'b0123'}},
+  {title:'Unrelated',authors:['Different'],format:'pdf',sha256:'other',identifiers:{citekey:'b0123'}},
+ ];
+ expect(duplicateCandidates(candidates)).toEqual([
+  {i:0,j:1,evidence:['Identical selected file','Matching identifier','Matching title and authors']},
+  {i:0,j:2,evidence:['Matching identifier']},{i:1,j:2,evidence:['Matching identifier']},
+ ]);
+});
+
+it("normalizes a large unrelated catalogue linearly rather than comparing every pair",()=>{
+ let titleReads=0;
+ const books=Array.from({length:10000},(_,i)=>({get title(){titleReads++;return 'Title '+i;},authors:['Author '+i],format:'pdf',sha256:'hash-'+i,identifiers:{asin:'ASIN'+i}}));
+ expect(duplicateCandidates(books)).toEqual([]);
+ expect(titleReads).toBe(books.length);
+});
+
+it("reuses unchanged catalogue scans, invalidates on WAL updates and atomic replacement, and keeps references fresh",()=>{
+ const spy=vi.spyOn(Database.prototype,'prepare');
+ const scans=()=>spy.mock.calls.filter(([sql])=>sql==='SELECT book,type,val FROM identifiers ORDER BY type,val').length;
+ const initial=pair().fingerprint;
+ expect(scans()).toBe(1);
+ duplicatePairs(c,'main');expect(scans()).toBe(1);
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,calibre_uuid,synced_at) VALUES('NEW',1,'book','uuid-2','now')").run();
+ expect(pair().fingerprint).not.toBe(initial);expect(pair().books[1].references.zotero_items).toBe(1);expect(scans()).toBe(1);
+ const file=path.join(root,'main/metadata.db');
+ const writer=new Database(file);writer.pragma('journal_mode=WAL');
+ try{
+  writer.prepare("INSERT INTO identifiers(book,type,val) VALUES(3,'asin','CACHED-ASIN')").run();
+  expect(duplicatePairs(c,'main').pairs.length).toBe(1);expect(scans()).toBe(2);
+  writer.prepare("INSERT INTO identifiers(book,type,val) VALUES(1,'asin','CACHED-ASIN')").run();
+  expect(duplicatePairs(c,'main').pairs.length).toBe(2);expect(scans()).toBe(3);
+ }finally{writer.close();}
+ const replacement=file+'.replacement';fs.copyFileSync(file,replacement);
+ const edited=new Database(replacement);edited.prepare("DELETE FROM identifiers WHERE type='asin'").run();edited.close();
+ fs.renameSync(replacement,file);
+ expect(duplicatePairs(c,'main').pairs.length).toBe(1);expect(scans()).toBe(4);
 });
