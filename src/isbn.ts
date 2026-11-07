@@ -103,7 +103,7 @@ function lineAround(text: string, start: number, end: number, width = 90): strin
  * runs that merely pass the checksum (one in eleven do) are ignored.
  */
 export function findPrintedIsbns(
-  pages: { page_index: number; label: string | null; text: string }[],
+  pages: { page_index: number; label: string | null; text: string; position?: "front" | "back" }[],
   pageCount = Number.POSITIVE_INFINITY,
   backPages = 5,
 ): IsbnCandidate[] {
@@ -125,7 +125,7 @@ export function findPrintedIsbns(
         isbn13: key,
         format: formatNear(page.text, start, end),
         page: page.page_index + 1,
-        position: page.page_index >= pageCount - backPages ? "back" : "front",
+        position: page.position ?? (page.page_index >= pageCount - backPages ? "back" : "front"),
         page_label: page.label,
         context: lineAround(page.text, start, end),
       });
