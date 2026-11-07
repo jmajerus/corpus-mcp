@@ -277,7 +277,13 @@ PDFs can render the first page when no Calibre cover image has been mirrored yet
 Compare the values with the book, edit them if needed, then choose **Apply to Calibre**.
 The single action checks the same reviewed plan on the source host, backs up
 `metadata.db` and the book’s files, changes title/authors/year and regenerates sort fields for changed titles or authors through Calibre’s metadata API, records the change,
-and refreshes the index. An unchanged-file move caused by Calibre renaming the
+and refreshes the index. Once that refresh confirms the reviewed title, authors,
+and year, the same job pins the derived citekey in corpus when it is complete and
+unique. No separate pin action is needed. Existing Calibre-assigned or pinned keys
+are preserved. Missing fields or collisions are reported for review in the job;
+a failed write, failed refresh, or metadata mismatch cannot pin a new key. The pin
+is attributed to the same actor and job in the change log.
+An unchanged-file move caused by Calibre renaming the
 book's folder preserves extracted text and saved anchors. Resolved citekey blockers
 then clear normally; other missing fields can still block a citekey.
 

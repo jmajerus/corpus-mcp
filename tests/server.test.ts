@@ -7,8 +7,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
+import { proposeCitekey } from "../src/citekey.js";
 import { openDatabase } from "../src/db.js";
-import { scanLibraries } from "../src/indexer.js";
+import { scanLibraries, refreshDerivedMetadata } from "../src/indexer.js";
 import { serveHttp } from "../src/server.js";
 import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
@@ -21,6 +22,7 @@ let mcpToken: string;
 const calibreCalls: { command: string; stdin?: string }[] = [];
 let refreshes = 0;
 let failMetadataWrite = false;
+let pendingMetadata: any = null;
 // A stand-in quote-mcp: its /api/corpus/quotes, holding what the reader saved.
 let quoteMcp: http.Server;
 const saves: Record<string, unknown>[] = [];
@@ -65,7 +67,17 @@ beforeAll(async () => {
     requestAccess: {teamDomain:team, lanHosts:["corpus-mcp", "corpus-mcp.localdomain"]},
     accessKeys: createLocalJWKSet({ keys: [jwk] }),
     jobCommands: {
-      async refresh(log) { refreshes++; log("refreshed\n"); },
+      async refresh(log) {
+        refreshes++;
+        if (pendingMetadata) {
+          const db = openDatabase(config.dbPath), value = pendingMetadata;
+          db.prepare("UPDATE books SET title=?,authors=?,author_sorts=?,year=? WHERE id='main:1'").run(value.title,JSON.stringify(value.authors),JSON.stringify(value.authors),value.year);
+          const proposal=proposeCitekey({title:value.title,authors:value.authors,authorSorts:value.authors,publisher:null,year:value.year},config.citekeyPreset);
+          db.prepare("UPDATE books SET proposed_citekey=?,citekey_blockers=? WHERE id='main:1'").run(proposal.key,JSON.stringify(proposal.blockers));
+          refreshDerivedMetadata(db,config.citekeyPreset);db.close();pendingMetadata=null;
+        }
+        log("refreshed\n");
+      },
       async calibre(command, stdin, log) {
         calibreCalls.push({ command, stdin });
         log(`ran ${command}\n`);
@@ -73,6 +85,7 @@ beforeAll(async () => {
         if (command === "metadata-apply") {
           const book = JSON.parse(stdin!).books[0];
           const actual=failMetadataWrite ? {...book.before,title:book.after.title} : book.after;
+          pendingMetadata=actual;
           log("@@change " + JSON.stringify({calibre_id:book.calibre_id,uuid:book.uuid,title:actual.title,metadata:{before:book.before,after:actual,...(failMetadataWrite ? {partial:true} : {})}}) + "\n");
           if(failMetadataWrite) throw new Error("Injected failure after a partial write");
           return;
@@ -379,7 +392,11 @@ it("applies reviewed metadata in one authenticated job using identical preview/a
   expect(refreshes).toBe(count+1);
   expect(job.items).toHaveLength(1);expect(job.items[0].metadata).toEqual({before:body.before,after:{title:body.title,authors:body.authors,year:body.year}});
   const audit=await(await fetch(`${base}/api/changes?job=${job.id}`)).json();
-  expect(audit.rows).toEqual([expect.objectContaining({kind:"metadata_corrected",actor:"me@example.com"})]);
+  expect(audit.rows.map((r:any)=>r.kind).sort()).toEqual(["citekey_pinned","metadata_corrected"]);
+  expect(audit.rows.every((r:any)=>r.actor==="me@example.com")).toBe(true);
+  const updated=await(await fetch(`${base}/api/books/main%3A1`)).json();
+  expect(updated.citekey).toMatchObject({state:"pinned",pinned:{citekey:updated.citekey.proposed}});
+  expect(job.log).toContain("Pinned derived citekey");
 });
 
 it("renders an actual PDF cover for metadata review", async () => {

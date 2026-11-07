@@ -595,8 +595,8 @@ export function citePassage(c: Corpus, args: CiteArgs) {
 
 export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
 
-/** Records a citekey assigned elsewhere (when the book was filed in a reference manager), against the book's Calibre UUID. */
-export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" | "zotero" = "agent") {
+/** Records a stable key against the Calibre UUID, from a reviewed correction or an external assignment. */
+export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" | "zotero" | "admin-job" = "agent", jobId?: number) {
   if (c.writesPaused) throw new ToolError(c.writesPaused);
   const book = getBook(c, args.book_id);
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so its citekey cannot be pinned.`);
@@ -638,7 +638,7 @@ export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: 
       title = excluded.title, pinned_at = excluded.pinned_at, pinned_by = excluded.pinned_by`)
     .run(book.uuid, citekey, book.id, book.title, pinnedAt, pinnedBy ?? null);
   recordChanges(c.data, [{
-    kind: "citekey_pinned", source, book_id: book.id, calibre_uuid: book.uuid, title: book.title,
+    kind: "citekey_pinned", source, job_id: jobId, book_id: book.id, calibre_uuid: book.uuid, title: book.title,
     detail: existing ? `${existing.citekey} → ${citekey}` : citekey, actor: pinnedBy ?? null,
   }]);
   return { status: existing ? "replaced" : "pinned", book_id: book.id, citekey, previous: existing?.citekey, pinned_at: pinnedAt, warnings };

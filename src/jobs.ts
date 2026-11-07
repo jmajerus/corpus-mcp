@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, recordChanges } from "./data.js";
-import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
+import { completeMetadataCitekey, metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicatePlan, assertDuplicateUnreferenced, type DuplicateSelection } from "./duplicates.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
@@ -231,7 +231,7 @@ export class JobRunner {
       }
     };
     try {
-      await this.perform(kind, mode, params, append, record);
+      await this.perform(kind, mode, params, append, record, id);
     } catch (error) {
       append(`\n${(error as Error).message}\n`);
       status = "failed";
@@ -261,7 +261,7 @@ export class JobRunner {
   }
 
   private async perform(kind: JobKind, mode: JobMode, params: Record<string, unknown>, log: (text: string) => void,
-    applied: () => void): Promise<void> {
+    applied: () => void, jobId: number): Promise<void> {
     const plan = params.plan as { books: unknown[] } | undefined;
     switch (kind) {
       case "refresh":
@@ -317,6 +317,11 @@ export class JobRunner {
       // Show the change in the index right away instead of at the next timer run.
       log("\nRefreshing the index…\n");
       await this.commands.refresh(log);
+      if (kind === "metadata") {
+        const actor = this.c.data.prepare("SELECT requested_by FROM jobs WHERE id=?").pluck().get(jobId) as string | null;
+        const metadata = params.plan as ReturnType<typeof metadataRepairPlan>;
+        log(completeMetadataCitekey(this.c, metadata.library, metadata.books[0], actor ?? undefined, jobId) + "\n");
+      }
     }
   }
 }

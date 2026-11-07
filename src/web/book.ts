@@ -104,7 +104,7 @@ function render() {
   const needsYear = y.calibre === null;
   const canCorrect = canWrite && b.metadata_writable;
   const repair = (needsAuthor || tp.title_is_file_name || needsYear) ? '<div class="editor"><h2>Correct title, authors, and year</h2>' +
-    '<div class="note">Review these values against the book. Apply saves them in Calibre and refreshes this book’s metadata.</div>' +
+    '<div class="note">Review these values against the book. Apply saves them in Calibre, refreshes this book, and pins its derived citekey when complete and unique. Existing assigned keys are kept.</div>' +
     '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
     '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canCorrect ? "" : " disabled") + '></label>' +
     '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canCorrect ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +
