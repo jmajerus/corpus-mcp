@@ -27,7 +27,7 @@ export const BOOK_HTML = page({
 <div id="book"><p class="note">Loading…</p></div>`,
   script: `
 const id = decodeURIComponent(location.pathname.split("/").pop());
-let book, canWrite = false, desired = [];
+let book, canWrite = false, desired = [], citekeyTimer, citekeyRequest = 0;
 
 function kv(pairs) { return '<dl class="kv">' + pairs.filter((p) => p[1] !== null && p[1] !== undefined && p[1] !== "").map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + v + "</dd>").join("") + "</dl>"; }
 
@@ -70,13 +70,14 @@ function citekeyCard() {
   const blockers = { unknown_author: "Calibre has no author", merged_authors: "an author record names several people", no_year: "Calibre has no year", malformed: "the proposed key is malformed" };
   const rows = [["State", badge("citekey", k.state)], ["Calibre identifier", k.calibre_identifier ? esc(k.calibre_identifier) : null],
     ["Pinned", k.pinned ? esc(k.pinned.citekey) + ' <span class="note">' + (k.pinned.pinned_by ? "by " + esc(k.pinned.pinned_by) + " · " : "") + esc(ago(k.pinned.pinned_at)) + "</span>" : null],
-    ["Proposed", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null],
+    ["Generated", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null],
     ["Zotero", zoteroRow()]];
-  const editor = '<div class="editor"><strong>Pin a citekey</strong><div class="note">The key the book was given when it was filed in a reference manager.</div><div class="row">' +
+  const editor = '<details class="editor"' + (k.pinned ? ' open' : '') + '><summary>Pin an established key (optional)</summary><div class="note">Pin the key assigned by your reference manager, or one already used in citations. A pin stays fixed even when it matches today’s generated key.</div><div class="row">' +
     '<input type="text" id="citekey" value="' + esc(k.pinned ? k.pinned.citekey : k.proposed || "") + '" aria-label="Citekey"' + (canWrite ? "" : " disabled") + ">" +
     '<button type="button" class="primary" id="pin"' + (canWrite ? "" : " disabled") + ">" + (k.pinned ? "Replace" : "Pin") + "</button>" +
-    (k.pinned ? '<button type="button" class="danger" id="unpin"' + (canWrite ? "" : " disabled") + ">Unpin</button>" : "") + "</div></div>";
-  return '<div class="card"><h2>Citekey</h2>' + kv(rows) + editor + "</div>";
+    (k.pinned ? '<button type="button" class="danger" id="unpin"' + (canWrite ? "" : " disabled") + ">Unpin</button>" : "") + "</div></details>";
+  const guidance = !k.blockers.length && k.proposed ? '<p class="note">The generated key is ready for citations and filing without pinning. It follows metadata changes unless a Calibre identifier or pinned key takes precedence.</p>' : '';
+  return '<div class="card"><h2>Citekey</h2>' + kv(rows) + guidance + editor + "</div>";
 }
 
 function render() {
@@ -104,7 +105,7 @@ function render() {
   const needsYear = y.calibre === null;
   const canCorrect = canWrite && b.metadata_writable;
   const repair = (needsAuthor || tp.title_is_file_name || needsYear) ? '<div class="editor"><h2>Correct title, authors, and year</h2>' +
-    '<div class="note">Review these values against the book. Apply saves them in Calibre and refreshes this book’s metadata.</div>' +
+    '<div class="note">Review these values against the book. Apply saves them in Calibre and regenerates the proposed citekey. Complete metadata makes the generated key available for citations and filing without pinning. Existing assigned keys are kept.</div>' +
     '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
     '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canCorrect ? "" : " disabled") + '></label>' +
     '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canCorrect ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +
@@ -112,6 +113,7 @@ function render() {
     (needsYear && y.printed ? '<p class="note">Year suggested from the book’s publication/copyright evidence above.</p>' : "") +
     '<p><a href="/admin/books/' + encodeURIComponent(id) + '/read?page=1">Read the opening pages</a></p>' +
     (!b.metadata_writable ? '<p class="note">This library is read-only.</p>' : "") +
+    '<p id="metadata-key-preview" role="status" aria-live="polite">Generated citekey preview…</p>' +
     '<button type="button" class="primary" id="apply-metadata"' + (canCorrect ? "" : " disabled") + '>Apply to Calibre</button></div>' : "";
   const titlePageCard = (tp.authors.length || tp.title || tp.title_is_file_name || needsYear || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
     (tp.title_is_file_name ? kv([["Printed title", tp.title ? esc(tp.title.title) + ' <span class="note">page ' + tp.title.page + ", for Calibre's file name of a title</span>" : '<span class="note">Not found</span>']]) : "") +
@@ -159,7 +161,26 @@ async function load() {
   try { book = await api("/api/books/" + encodeURIComponent(id)); } catch (e) { document.getElementById("book").innerHTML = '<p class="empty">' + esc(e.message) + "</p>"; return; }
   desired = (book.categories.approved || book.categories.calibre).map((t) => t.tag);
   render();
+  previewMetadataKey();
 }
+
+async function previewMetadataKey() {
+ const target = document.getElementById('metadata-key-preview');
+ if (!target || !canWrite || !book.metadata_writable) { if(target) target.textContent=canWrite?'This library is read-only.':'Sign in to preview corrections.'; return; }
+ const request=++citekeyRequest;
+ target.textContent='Generating citekey preview…';
+ try {
+  const draft={title:document.getElementById('metadata-title').value.trim(),authors:document.getElementById('metadata-authors').value.split(String.fromCharCode(10)).map(s=>s.trim()).filter(Boolean),year:document.getElementById('metadata-year').value.trim()?Number(document.getElementById('metadata-year').value):null,before:{title:book.title,authors:book.authors,year:book.publication_year.calibre}};
+  const result=await post('/api/books/'+encodeURIComponent(id)+'/metadata-preview',draft);
+  if(request!==citekeyRequest)return;
+  target.innerHTML='<strong>Generated citekey'+(result.provisional?' (provisional)':'')+':</strong> <code>'+esc(result.generated)+'</code>'+ (result.blockers.length?'<span class="note"> · Needs review: '+esc(result.blockers.map(b=>({unknown_author:'enter an author',merged_authors:'separate combined authors',no_year:'enter a year',malformed:'check the title and author spelling'}[b]||b)).join(', '))+'</span>':'') + (result.provisional?'<br><span class="note">New author names use estimated sorting. Apply confirms the final key using Calibre’s author sorting.</span>':'') + (result.assigned?'<br><span class="note">Existing assigned key remains '+esc(result.assigned)+'.</span>':'');
+ }catch(error){if(request===citekeyRequest)target.textContent=error.message;}
+}
+document.getElementById('book').addEventListener('input',e=>{
+ if(!['metadata-title','metadata-authors','metadata-year'].includes(e.target.id))return;
+ ++citekeyRequest;clearTimeout(citekeyTimer);const target=document.getElementById('metadata-key-preview');if(target)target.textContent='Updating preview…';
+ citekeyTimer=setTimeout(previewMetadataKey,250);
+});
 
 document.getElementById("book").addEventListener("click", async (e) => {
   const t = e.target;

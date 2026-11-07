@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
-import { type Change, backupDataStore, recordChanges } from "./data.js";
+import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicatePlan, assertDuplicateUnreferenced, type DuplicateSelection } from "./duplicates.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
-import { type Corpus, ToolError, tagCleanupPlan } from "./tools.js";
+import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
 
 /**
  * Admin jobs launched from /admin: one at a time, logged to data.db, and for anything that changes
@@ -317,6 +317,15 @@ export class JobRunner {
       // Show the change in the index right away instead of at the next timer run.
       log("\nRefreshing the index…\n");
       await this.commands.refresh(log);
+      if (kind === "metadata") {
+        const metadata = params.plan as ReturnType<typeof metadataRepairPlan>;
+        const reviewed = metadata.books[0], b = getBook(this.c, `${metadata.library}:${reviewed.calibre_id}`);
+        if (b.uuid !== reviewed.uuid || b.title !== reviewed.after.title || b.year !== reviewed.after.year || JSON.stringify((JSON.parse(b.authors) as string[]).map(n=>n.replaceAll("|",","))) !== JSON.stringify(reviewed.after.authors)) throw new ToolError("The refresh has not confirmed the saved correction. Reload the book before using its generated citekey.");
+        const blockers = JSON.parse(b.citekey_blockers) as string[];
+        log(blockers.length ? `Generated citekey needs review: ${blockers.join(", ")}.\n` : `Generated citekey: ${b.proposed_citekey} — available without pinning.\n`);
+        const assigned=b.calibre_citekey ?? pinnedByUuid(this.c.data,b.uuid)?.citekey;
+        if (assigned) log(`Existing assigned citekey remains in effect: ${assigned}.\n`);
+      }
     }
   }
 }

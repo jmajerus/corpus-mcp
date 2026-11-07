@@ -7,8 +7,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
+import { proposeCitekey } from "../src/citekey.js";
 import { openDatabase } from "../src/db.js";
-import { scanLibraries } from "../src/indexer.js";
+import { scanLibraries, refreshDerivedMetadata } from "../src/indexer.js";
 import { serveHttp } from "../src/server.js";
 import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
@@ -21,6 +22,7 @@ let mcpToken: string;
 const calibreCalls: { command: string; stdin?: string }[] = [];
 let refreshes = 0;
 let failMetadataWrite = false;
+let pendingMetadata: any = null;
 // A stand-in quote-mcp: its /api/corpus/quotes, holding what the reader saved.
 let quoteMcp: http.Server;
 const saves: Record<string, unknown>[] = [];
@@ -65,7 +67,17 @@ beforeAll(async () => {
     requestAccess: {teamDomain:team, lanHosts:["corpus-mcp", "corpus-mcp.localdomain"]},
     accessKeys: createLocalJWKSet({ keys: [jwk] }),
     jobCommands: {
-      async refresh(log) { refreshes++; log("refreshed\n"); },
+      async refresh(log) {
+        refreshes++;
+        if (pendingMetadata) {
+          const db = openDatabase(config.dbPath), value = pendingMetadata;
+          db.prepare("UPDATE books SET title=?,authors=?,author_sorts=?,year=? WHERE id='main:1'").run(value.title,JSON.stringify(value.authors),JSON.stringify(value.authors),value.year);
+          const proposal=proposeCitekey({title:value.title,authors:value.authors,authorSorts:value.authors,publisher:null,year:value.year},config.citekeyPreset);
+          db.prepare("UPDATE books SET proposed_citekey=?,citekey_blockers=? WHERE id='main:1'").run(proposal.key,JSON.stringify(proposal.blockers));
+          refreshDerivedMetadata(db,config.citekeyPreset);db.close();pendingMetadata=null;
+        }
+        log("refreshed\n");
+      },
       async calibre(command, stdin, log) {
         calibreCalls.push({ command, stdin });
         log(`ran ${command}\n`);
@@ -73,6 +85,7 @@ beforeAll(async () => {
         if (command === "metadata-apply") {
           const book = JSON.parse(stdin!).books[0];
           const actual=failMetadataWrite ? {...book.before,title:book.after.title} : book.after;
+          pendingMetadata=actual;
           log("@@change " + JSON.stringify({calibre_id:book.calibre_id,uuid:book.uuid,title:actual.title,metadata:{before:book.before,after:actual,...(failMetadataWrite ? {partial:true} : {})}}) + "\n");
           if(failMetadataWrite) throw new Error("Injected failure after a partial write");
           return;
@@ -380,6 +393,11 @@ it("applies reviewed metadata in one authenticated job using identical preview/a
   expect(job.items).toHaveLength(1);expect(job.items[0].metadata).toEqual({before:body.before,after:{title:body.title,authors:body.authors,year:body.year}});
   const audit=await(await fetch(`${base}/api/changes?job=${job.id}`)).json();
   expect(audit.rows).toEqual([expect.objectContaining({kind:"metadata_corrected",actor:"me@example.com"})]);
+  const updated=await(await fetch(`${base}/api/books/main%3A1`)).json();
+  expect(updated.citekey).toMatchObject({state:"ready",pinned:null,blockers:[]});
+  expect(updated.citekey.proposed).toBeTruthy();
+  expect(job.log).toContain("Generated citekey: "+updated.citekey.proposed);
+  expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });
 
 it("renders an actual PDF cover for metadata review", async () => {
@@ -397,6 +415,11 @@ it("accepts year-only corrections and rejects invalid or stale reviewed years", 
   const response=await send(body);expect(response.status).toBe(202);
   const job=await waitForJob((await response.json()).id);expect(job.status).toBe("succeeded");
   expect(job.params.plan.books[0]).toMatchObject({before:body.before,after:{title:book.title,authors:book.authors,year:2023}});
+  const updated=await(await fetch(`${base}/api/books/main%3A1`)).json();
+  expect(updated.citekey).toMatchObject({state:"ready",pinned:null,blockers:[]});
+  expect(updated.citekey.proposed).not.toBe(book.citekey.proposed);
+  expect(updated.citekey.proposed).toContain('2023');
+  expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });
 
 it("records and refreshes actual partial corrections while keeping the job failed",async()=>{
@@ -422,4 +445,23 @@ it("serves duplicate review and protects its write routes with Access identity",
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);
  }
+});
+
+
+it("previews edited citekeys without saving, accepting unchanged drafts and marking new author sorting provisional",async()=>{
+ const book=await(await fetch(`${base}/api/books/main%3A1`)).json();
+ const draft={title:book.title,authors:book.authors.map((a:string)=>a.replaceAll('|',',')),year:book.publication_year.calibre,before:{title:book.title,authors:book.authors,year:book.publication_year.calibre}};
+ const send=(value:any,headers:any={'cf-access-jwt-assertion':token})=>fetch(`${base}/api/books/main%3A1/metadata-preview`,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(value)});
+ expect((await send(draft,{})).status).toBe(401);
+ const jobs=await(await fetch(`${base}/api/admin/jobs`)).json();const changes=await(await fetch(`${base}/api/changes`)).json();
+ const exact=await send(draft);expect(exact.status).toBe(200);
+ expect(await exact.json()).toMatchObject({generated:book.citekey.proposed,provisional:false});
+ const changed=await send({...draft,title:'Visual Validation',authors:['Mohammed Jogie'],year:2026});
+ expect(await changed.json()).toMatchObject({generated:'jogie2026visual',provisional:true,blockers:[]});
+ const noYear=await send({...draft,year:null});expect((await noYear.json()).blockers).toContain('no_year');
+ expect((await send({...draft,before:{...draft.before,title:'stale'}})).status).toBe(400);
+ expect(await(await fetch(`${base}/api/admin/jobs`)).json()).toEqual(jobs);
+ expect(await(await fetch(`${base}/api/changes`)).json()).toEqual(changes);
+ expect((await(await fetch(`${base}/api/books/main%3A1`)).json()).title).toBe(book.title);
+ expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });

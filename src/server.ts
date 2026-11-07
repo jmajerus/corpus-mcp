@@ -12,6 +12,7 @@ import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
 import { duplicatePairs, dismissDuplicate } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
+import { metadataCitekeyPreview } from "./metadata-repair.js";
 import { adminMetrics } from "./admin.js";
 import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
 import { type Config, loadConfig } from "./config.js";
@@ -385,7 +386,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
-    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes|\/metadata|\/cover)?$/);
+    const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes|\/metadata|\/metadata-preview|\/cover)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
@@ -474,6 +475,11 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
       }, config.shelvesLibrary));
     } else if (req.method === "GET" && bookPath && !bookPath[2]) sendJson(res, 200, adminBook(c, config, decodeURIComponent(bookPath[1])));
+    else if (req.method === "POST" && bookPath?.[2] === "/metadata-preview") {
+      const by = await writer(); if (by === null) return;
+      const body = await readJson(req) as {title?:unknown;authors?:unknown;year?:unknown;before?:unknown};
+      sendJson(res,200,metadataCitekeyPreview(c,config.shelvesLibrary,{book_id:decodeURIComponent(bookPath[1]),title:body?.title,authors:body?.authors,year:body?.year,before:body?.before}));
+    }
     else if (req.method === "POST" && bookPath?.[2] === "/metadata") {
       const by = await writer();
       if (by === null) return;

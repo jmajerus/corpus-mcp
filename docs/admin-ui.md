@@ -120,8 +120,12 @@ proposal and its rationale, and an editor:
 
 **Citekey.** Shows the key's state, any key set in Calibre, the pinned key, the
 proposed key, and what blocks one (no author, no year, an author record naming
-several people). Under **Pin a citekey**, enter the key the book got in your
-reference manager and press **Pin** (or **Replace**). **Unpin** removes it.
+several people). A complete generated key can already be used for citations and
+filing; pinning is not a required metadata-correction step. Under **Pin an
+established key (optional)**, enter the key the book got in your reference manager
+or one already used in citations and press **Pin** (or **Replace**). Pinning freezes
+that key against later metadata changes even if it exactly matches today's rule.
+**Unpin** removes the pin.
 
 The **Zotero** row shows the matched Zotero item, and how it matched. When a
 Zotero item only *looks* like this book, press **This book** to link it (which pins
@@ -274,10 +278,22 @@ down they show as unknown or unreachable, and the rest of the page is current.
 Use **Books → Correct authors, title, or year** to list books needing review. The book's Title page card has an editable title, one author per line, and publication year, prefilled
 from its title page when available. It shows the cover beside the correction;
 PDFs can render the first page when no Calibre cover image has been mirrored yet.
-Compare the values with the book, edit them if needed, then choose **Apply to Calibre**.
+The correction form displays a generated citekey preview and updates it as the
+title, authors or year changes. Existing author sort values are reused; a new name
+uses estimated sorting and is explicitly marked provisional until Calibre confirms
+it. Missing fields are shown beside the preview, and an existing assigned key is
+shown separately so it is not mistaken for the draft key. Previewing does not save
+metadata, create a job, or pin a key.
+Compare the values with the book and key preview, then choose **Apply to Calibre**.
+The completed job displays the confirmed generated key after the refresh verifies
+the saved UUID, title, authors and year. Existing assigned keys are reported separately.
 The single action checks the same reviewed plan on the source host, backs up
 `metadata.db` and the book’s files, changes title/authors/year and regenerates sort fields for changed titles or authors through Calibre’s metadata API, records the change,
-and refreshes the index. An unchanged-file move caused by Calibre renaming the
+and refreshes the index. The refresh regenerates the proposed citekey from the
+corrected metadata; it is available for citation output and filing without a separate pin action. Generated
+keys continue to follow later metadata changes. Existing Calibre-assigned or pinned
+keys retain their precedence and remain stable.
+An unchanged-file move caused by Calibre renaming the
 book's folder preserves extracted text and saved anchors. Resolved citekey blockers
 then clear normally; other missing fields can still block a citekey.
 
