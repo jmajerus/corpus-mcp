@@ -70,13 +70,14 @@ function citekeyCard() {
   const blockers = { unknown_author: "Calibre has no author", merged_authors: "an author record names several people", no_year: "Calibre has no year", malformed: "the proposed key is malformed" };
   const rows = [["State", badge("citekey", k.state)], ["Calibre identifier", k.calibre_identifier ? esc(k.calibre_identifier) : null],
     ["Pinned", k.pinned ? esc(k.pinned.citekey) + ' <span class="note">' + (k.pinned.pinned_by ? "by " + esc(k.pinned.pinned_by) + " · " : "") + esc(ago(k.pinned.pinned_at)) + "</span>" : null],
-    ["Proposed", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null],
+    ["Generated", k.proposed ? esc(k.proposed) : null], ["Blocked by", k.blockers.length ? k.blockers.map((b) => esc(blockers[b] || b)).join("; ") : null],
     ["Zotero", zoteroRow()]];
-  const editor = '<div class="editor"><strong>Pin a citekey</strong><div class="note">The key the book was given when it was filed in a reference manager.</div><div class="row">' +
+  const editor = '<details class="editor"' + (k.pinned ? ' open' : '') + '><summary>Pin an established key (optional)</summary><div class="note">Pin the key assigned by your reference manager, or one already used in citations. A pin stays fixed even when it matches today’s generated key.</div><div class="row">' +
     '<input type="text" id="citekey" value="' + esc(k.pinned ? k.pinned.citekey : k.proposed || "") + '" aria-label="Citekey"' + (canWrite ? "" : " disabled") + ">" +
     '<button type="button" class="primary" id="pin"' + (canWrite ? "" : " disabled") + ">" + (k.pinned ? "Replace" : "Pin") + "</button>" +
-    (k.pinned ? '<button type="button" class="danger" id="unpin"' + (canWrite ? "" : " disabled") + ">Unpin</button>" : "") + "</div></div>";
-  return '<div class="card"><h2>Citekey</h2>' + kv(rows) + editor + "</div>";
+    (k.pinned ? '<button type="button" class="danger" id="unpin"' + (canWrite ? "" : " disabled") + ">Unpin</button>" : "") + "</div></details>";
+  const guidance = !k.blockers.length && k.proposed ? '<p class="note">The generated key is ready for citations and filing without pinning. It follows metadata changes unless a Calibre identifier or pinned key takes precedence.</p>' : '';
+  return '<div class="card"><h2>Citekey</h2>' + kv(rows) + guidance + editor + "</div>";
 }
 
 function render() {
@@ -104,7 +105,7 @@ function render() {
   const needsYear = y.calibre === null;
   const canCorrect = canWrite && b.metadata_writable;
   const repair = (needsAuthor || tp.title_is_file_name || needsYear) ? '<div class="editor"><h2>Correct title, authors, and year</h2>' +
-    '<div class="note">Review these values against the book. Apply saves them in Calibre, refreshes this book, and pins its derived citekey when complete and unique. Existing assigned keys are kept.</div>' +
+    '<div class="note">Review these values against the book. Apply saves them in Calibre and regenerates the proposed citekey. Complete metadata makes the generated key available for citations and filing without pinning. Existing assigned keys are kept.</div>' +
     '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
     '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canCorrect ? "" : " disabled") + '></label>' +
     '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canCorrect ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +

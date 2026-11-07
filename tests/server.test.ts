@@ -392,11 +392,11 @@ it("applies reviewed metadata in one authenticated job using identical preview/a
   expect(refreshes).toBe(count+1);
   expect(job.items).toHaveLength(1);expect(job.items[0].metadata).toEqual({before:body.before,after:{title:body.title,authors:body.authors,year:body.year}});
   const audit=await(await fetch(`${base}/api/changes?job=${job.id}`)).json();
-  expect(audit.rows.map((r:any)=>r.kind).sort()).toEqual(["citekey_pinned","metadata_corrected"]);
-  expect(audit.rows.every((r:any)=>r.actor==="me@example.com")).toBe(true);
+  expect(audit.rows).toEqual([expect.objectContaining({kind:"metadata_corrected",actor:"me@example.com"})]);
   const updated=await(await fetch(`${base}/api/books/main%3A1`)).json();
-  expect(updated.citekey).toMatchObject({state:"pinned",pinned:{citekey:updated.citekey.proposed}});
-  expect(job.log).toContain("Pinned derived citekey");
+  expect(updated.citekey).toMatchObject({state:"ready",pinned:null,blockers:[]});
+  expect(updated.citekey.proposed).toBeTruthy();
+  expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });
 
 it("renders an actual PDF cover for metadata review", async () => {
@@ -414,6 +414,11 @@ it("accepts year-only corrections and rejects invalid or stale reviewed years", 
   const response=await send(body);expect(response.status).toBe(202);
   const job=await waitForJob((await response.json()).id);expect(job.status).toBe("succeeded");
   expect(job.params.plan.books[0]).toMatchObject({before:body.before,after:{title:book.title,authors:book.authors,year:2023}});
+  const updated=await(await fetch(`${base}/api/books/main%3A1`)).json();
+  expect(updated.citekey).toMatchObject({state:"ready",pinned:null,blockers:[]});
+  expect(updated.citekey.proposed).not.toBe(book.citekey.proposed);
+  expect(updated.citekey.proposed).toContain('2023');
+  expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });
 
 it("records and refreshes actual partial corrections while keeping the job failed",async()=>{

@@ -120,8 +120,12 @@ proposal and its rationale, and an editor:
 
 **Citekey.** Shows the key's state, any key set in Calibre, the pinned key, the
 proposed key, and what blocks one (no author, no year, an author record naming
-several people). Under **Pin a citekey**, enter the key the book got in your
-reference manager and press **Pin** (or **Replace**). **Unpin** removes it.
+several people). A complete generated key can already be used for citations and
+filing; pinning is not a required metadata-correction step. Under **Pin an
+established key (optional)**, enter the key the book got in your reference manager
+or one already used in citations and press **Pin** (or **Replace**). Pinning freezes
+that key against later metadata changes even if it exactly matches today's rule.
+**Unpin** removes the pin.
 
 The **Zotero** row shows the matched Zotero item, and how it matched. When a
 Zotero item only *looks* like this book, press **This book** to link it (which pins
@@ -277,12 +281,10 @@ PDFs can render the first page when no Calibre cover image has been mirrored yet
 Compare the values with the book, edit them if needed, then choose **Apply to Calibre**.
 The single action checks the same reviewed plan on the source host, backs up
 `metadata.db` and the book’s files, changes title/authors/year and regenerates sort fields for changed titles or authors through Calibre’s metadata API, records the change,
-and refreshes the index. Once that refresh confirms the reviewed title, authors,
-and year, the same job pins the derived citekey in corpus when it is complete and
-unique. No separate pin action is needed. Existing Calibre-assigned or pinned keys
-are preserved. Missing fields or collisions are reported for review in the job;
-a failed write, failed refresh, or metadata mismatch cannot pin a new key. The pin
-is attributed to the same actor and job in the change log.
+and refreshes the index. The refresh regenerates the proposed citekey from the
+corrected metadata; it is available for citation output and filing without a separate pin action. Generated
+keys continue to follow later metadata changes. Existing Calibre-assigned or pinned
+keys retain their precedence and remain stable.
 An unchanged-file move caused by Calibre renaming the
 book's folder preserves extracted text and saved anchors. Resolved citekey blockers
 then clear normally; other missing fields can still block a citekey.

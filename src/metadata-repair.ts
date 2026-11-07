@@ -1,5 +1,4 @@
-import { pinnedByUuid } from "./data.js";
-import { getBook, pinCitekey, ToolError, type Corpus } from "./tools.js";
+import { getBook, ToolError, type Corpus } from "./tools.js";
 
 export interface MetadataValues { title: string; authors: string[]; year: number | null }
 export interface MetadataCorrection { book_id: string; title: unknown; authors: unknown; year: unknown; before: unknown }
@@ -19,24 +18,4 @@ export function metadataRepairPlan(c: Corpus, library: string, correction: Metad
   if (!correction.before || (correction.before as MetadataValues).year !== before.year || typeof correction.before !== "object" || (correction.before as MetadataValues).title !== before.title || JSON.stringify((correction.before as MetadataValues).authors) !== JSON.stringify(before.authors)) throw new ToolError("This book's metadata changed. Reload it and review the correction again.");
   if (JSON.stringify(before) === JSON.stringify(after)) throw new ToolError("The title, authors, and publication year are unchanged.");
   return { library, books: [{ calibre_id: b.calibre_id, uuid: b.uuid, title: b.title, before, after }] };
-}
-
-
-/** Complete the reviewed operation only after the refresh has confirmed Calibre's values. */
-export function completeMetadataCitekey(c: Corpus, library: string, reviewed: ReturnType<typeof metadataRepairPlan>["books"][number], actor?: string, jobId?: number) {
-  const b = getBook(c, `${library}:${reviewed.calibre_id}`);
-  const authors = (names: string[]) => names.map(name => name.replaceAll("|", ","));
-  if (b.uuid !== reviewed.uuid || b.title !== reviewed.after.title || b.year !== reviewed.after.year
-    || JSON.stringify(authors(JSON.parse(b.authors))) !== JSON.stringify(reviewed.after.authors)) {
-    throw new ToolError("The correction was saved, but the refresh did not confirm its metadata. No citekey was pinned; refresh and review the book.");
-  }
-  const assigned = b.calibre_citekey ?? pinnedByUuid(c.data, b.uuid)?.citekey;
-  if (assigned) return `Kept existing citekey ${assigned}.`;
-  if (!b.proposed_citekey || JSON.parse(b.citekey_blockers).length || reviewed.after.year === null) return "Citekey needs review: the corrected metadata still has a missing or unresolved field.";
-  const key = b.proposed_citekey;
-  const conflictingBook = c.db.prepare("SELECT id FROM books WHERE (uuid IS NULL OR uuid<>@uuid) AND (lower(calibre_citekey)=@key OR lower(proposed_citekey)=@key) LIMIT 1").get({uuid:b.uuid,key:key.toLowerCase()});
-  const conflictingPin = c.data.prepare("SELECT book_id FROM citekeys WHERE lower(citekey)=? AND calibre_uuid<>? LIMIT 1").get(key.toLowerCase(),b.uuid);
-  if (conflictingBook || conflictingPin) return `Citekey needs review: ${key} is also used or proposed for another book. No key was overwritten.`;
-  pinCitekey(c, {book_id:b.id,citekey:key}, actor, "admin-job", jobId);
-  return `Pinned derived citekey ${key}.`;
 }
