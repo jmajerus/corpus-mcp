@@ -396,6 +396,7 @@ it("applies reviewed metadata in one authenticated job using identical preview/a
   const updated=await(await fetch(`${base}/api/books/main%3A1`)).json();
   expect(updated.citekey).toMatchObject({state:"ready",pinned:null,blockers:[]});
   expect(updated.citekey.proposed).toBeTruthy();
+  expect(job.log).toContain("Generated citekey: "+updated.citekey.proposed);
   expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });
 
@@ -444,4 +445,23 @@ it("serves duplicate review and protects its write routes with Access identity",
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);
  }
+});
+
+
+it("previews edited citekeys without saving, accepting unchanged drafts and marking new author sorting provisional",async()=>{
+ const book=await(await fetch(`${base}/api/books/main%3A1`)).json();
+ const draft={title:book.title,authors:book.authors.map((a:string)=>a.replaceAll('|',',')),year:book.publication_year.calibre,before:{title:book.title,authors:book.authors,year:book.publication_year.calibre}};
+ const send=(value:any,headers:any={'cf-access-jwt-assertion':token})=>fetch(`${base}/api/books/main%3A1/metadata-preview`,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(value)});
+ expect((await send(draft,{})).status).toBe(401);
+ const jobs=await(await fetch(`${base}/api/admin/jobs`)).json();const changes=await(await fetch(`${base}/api/changes`)).json();
+ const exact=await send(draft);expect(exact.status).toBe(200);
+ expect(await exact.json()).toMatchObject({generated:book.citekey.proposed,provisional:false});
+ const changed=await send({...draft,title:'Visual Validation',authors:['Mohammed Jogie'],year:2026});
+ expect(await changed.json()).toMatchObject({generated:'jogie2026visual',provisional:true,blockers:[]});
+ const noYear=await send({...draft,year:null});expect((await noYear.json()).blockers).toContain('no_year');
+ expect((await send({...draft,before:{...draft.before,title:'stale'}})).status).toBe(400);
+ expect(await(await fetch(`${base}/api/admin/jobs`)).json()).toEqual(jobs);
+ expect(await(await fetch(`${base}/api/changes`)).json()).toEqual(changes);
+ expect((await(await fetch(`${base}/api/books/main%3A1`)).json()).title).toBe(book.title);
+ expect(await(await fetch(`${base}/api/citekeys`)).json()).toEqual({pinned:[]});
 });
