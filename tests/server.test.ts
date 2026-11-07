@@ -414,3 +414,12 @@ it("records and refreshes actual partial corrections while keeping the job faile
   expect(JSON.parse(audit.rows[0].detail).partial).toBe(true);
  }finally{failMetadataWrite=false;}
 });
+
+it("serves duplicate review and protects its write routes with Access identity",async()=>{
+ expect((await fetch(`${base}/admin/duplicates`)).status).toBe(200);
+ expect(await(await fetch(`${base}/api/duplicates`)).json()).toEqual({pairs:[],total:0});
+ for(const route of ["preview","review"]){
+  expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
+  expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);
+ }
+});

@@ -59,6 +59,7 @@ td.when { white-space: nowrap; color: var(--muted); font-variant-numeric: tabula
 `,
   script: `
 const KINDS = {
+  duplicate_reviewed: ["Duplicate reviewed", "✓", ""], duplicate_resolved: ["Duplicate resolved", "✓", "good"], duplicate_resolution_failed: ["Duplicate resolution interrupted", "!", "bad"],
   tag_added: ["Tag added", "+", "good"], tag_removed: ["Tag removed", "−", "bad"], format_added: ["EPUB added", "+", "good"],
   book_added: ["New book", "+", "good"], book_reextracted: ["Re-indexed", "↻", ""], book_removed: ["Book removed", "−", "bad"],
   extraction_failed: ["Extraction failed", "!", "bad"], tag_proposed: ["Tag proposed", "?", ""], proposal_approved: ["Proposal approved", "✓", "good"],

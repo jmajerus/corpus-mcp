@@ -6,10 +6,13 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 10;
+export const DATA_SCHEMA_VERSION = 11;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS duplicate_decisions (
+  pair_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, reviewed_at TEXT NOT NULL, reviewed_by TEXT
+);
 
 -- A citekey assigned elsewhere (the reference manager the book was filed in). Keyed by Calibre UUID,
 -- which survives renumbering and re-indexing; book_id and title record what it was pinned to.
@@ -238,7 +241,7 @@ export async function backupDataStore(data: DataStore, dir: string, keep = 14): 
 export const CHANGE_KINDS = [
   "tag_added", "tag_removed", "format_added", "book_added", "book_reextracted", "book_removed", "extraction_failed",
   "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "citekey_pinned",
-  "metadata_corrected", "categories_edited", "citekey_unpinned",
+  "duplicate_resolution_failed", "duplicate_reviewed", "duplicate_resolved", "metadata_corrected", "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
   "zotero_linked",
 ] as const;

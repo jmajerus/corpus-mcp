@@ -18,11 +18,12 @@ printf %s "$CORPUS_SOURCE_SCRIPT" | base64 -d \
   > /usr/local/bin/corpus-source
 printf %s "${CORPUS_TAGS_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-tags.sh
 printf %s "${CORPUS_CONVERT_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-convert.sh
+printf %s "${CORPUS_DUPLICATES_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-duplicates.py
 printf %s "${CORPUS_METADATA_RECOVER_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-metadata-recover.py
 printf %s "${CORPUS_METADATA_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-metadata.py
 # For the library owner's bulk imports by hand; the forced command never runs it.
 printf %s "${CORPUS_IMPORT_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-import.sh
-chmod 0755 /usr/local/bin/calibre-metadata-recover.py /usr/local/bin/calibre-metadata.py /usr/local/bin/corpus-source /usr/local/bin/calibre-tags.sh /usr/local/bin/calibre-convert.sh /usr/local/bin/calibre-import.sh
+chmod 0755 /usr/local/bin/calibre-duplicates.py /usr/local/bin/calibre-metadata-recover.py /usr/local/bin/calibre-metadata.py /usr/local/bin/corpus-source /usr/local/bin/calibre-tags.sh /usr/local/bin/calibre-convert.sh /usr/local/bin/calibre-import.sh
 # /admin's Calibre commands write the library, so corpus-sync needs the library owner's group.
 if getent group "$(stat -c %G /mnt/Calibre/main)" >/dev/null; then usermod -aG "$(stat -c %G /mnt/Calibre/main)" corpus-sync; fi
 echo "restrict,command=\"/usr/local/bin/corpus-source\" $CORPUS_PUBKEY" > /home/corpus-sync/.ssh/authorized_keys

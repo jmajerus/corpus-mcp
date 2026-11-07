@@ -3,6 +3,8 @@ import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
+import { duplicatePlan, assertDuplicateUnreferenced, type DuplicateSelection } from "./duplicates.js";
+import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
 import { type Corpus, ToolError, tagCleanupPlan } from "./tools.js";
 
@@ -13,12 +15,13 @@ import { type Corpus, ToolError, tagCleanupPlan } from "./tools.js";
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
+  duplicates: { title: "Resolve reviewed duplicate books", calibre: true, previewable: true },
   metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
   backup: { title: "Back up data.db", calibre: false, previewable: false },
@@ -41,6 +44,9 @@ export interface JobRow {
 export interface JobItem {
   calibre_id: number; uuid?: string; title: string;
   metadata?: { before: MetadataValues; after: MetadataValues; partial?: boolean };
+  duplicate_review?: { plan: { keep: {id:number;uuid:string}; remove: {id:number;uuid:string}; discard_conflicts:boolean; reviewed:string }; blockers:string[]; [key:string]: unknown };
+  duplicate_partial?: {backup:string;message:string};
+  duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string;
 }
 
@@ -137,7 +143,8 @@ export class JobRunner {
   }
 
   /** Starts a job and returns its id at once; the job runs in the background. */
-  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection } = {}, requestedBy?: string): number {
+  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection; duplicate?: DuplicateSelection } = {}, requestedBy?: string): number {
+    if (mode !== "preview" && mode !== "apply") throw new ToolError("Choose preview or apply.");
     const spec = JOB_KINDS[kind];
     if (!spec) throw new ToolError(`Unknown job "${kind}".`);
     if (mode === "preview" && !spec.previewable) throw new ToolError(`"${kind}" has no preview.`);
@@ -156,6 +163,15 @@ export class JobRunner {
       }
       if (Date.now() - Date.parse(preview.created_at) > 3600 * 1000) throw new ToolError("That preview is over an hour old; preview again.");
       params = preview.params;
+      if (kind === "duplicates") {
+        const review = preview.items[0]?.duplicate_review;
+        if (!review || review.blockers.length) throw new ToolError("Resolve the blockers and preview again.");
+        assertDuplicateUnreferenced(this.c, review.plan.remove.uuid);
+        params = { plan: review.plan };
+      }
+    } else if (kind === "duplicates" && mode === "preview") {
+      if (!opts.duplicate) throw new ToolError("Choose a keeper on the duplicate review screen.");
+      params = { plan: duplicatePlan(this.c, this.config.shelvesLibrary, opts.duplicate) };
     } else if (mode === "preview" && (kind === "tags" || kind === "cleanup")) {
       const library = this.config.shelvesLibrary;
       // A book page previews just that book (`books`); the dashboard previews every approved book.
@@ -167,8 +183,10 @@ export class JobRunner {
       VALUES (?, ?, ?, 'running', ?, ?, ?, '')`)
       .run(kind, mode, JSON.stringify(params), requestedBy ?? null, opts.previewOf ?? null, new Date().toISOString()).lastInsertRowid);
     this.running = id;
+    if (kind === "duplicates" && mode === "apply") this.c.writesPaused = "Duplicate resolution is running. Try again after its refresh finishes.";
     void this.execute(id, kind, mode, params).finally(() => {
       this.running = null;
+      this.c.writesPaused = undefined;
     });
     return id;
   }
@@ -234,6 +252,8 @@ export class JobRunner {
       const base = { source: "admin-job" as const, job_id: jobId, book_id: `${library}:${item.calibre_id}`, calibre_uuid: item.uuid ?? null, title: item.title, actor };
       for (const tag of item.added ?? []) changes.push({ ...base, kind: "tag_added", detail: tag });
       for (const tag of item.removed ?? []) changes.push({ ...base, kind: "tag_removed", detail: tag });
+      if (item.duplicate_partial) changes.push({ ...base, kind: "duplicate_resolution_failed", detail: JSON.stringify(item.duplicate_partial) });
+      if (item.duplicate_resolved) changes.push({ ...base, kind: "duplicate_resolved", detail: JSON.stringify(item.duplicate_resolved) });
       if (item.metadata) changes.push({ ...base, kind: "metadata_corrected", detail: JSON.stringify(item.metadata) });
       if (item.added_format) changes.push({ ...base, kind: "format_added", detail: `${item.source_format} → ${item.added_format}` });
     }
@@ -252,6 +272,20 @@ export class JobRunner {
       case "backup":
         log(`Backed up to ${await backupDataStore(this.c.data, this.config.backupDir)}\n`);
         return;
+      case "duplicates": {
+        const p = params.plan as {remove:{uuid:string}};
+        assertDuplicateUnreferenced(this.c, p.remove.uuid);
+        if (this.config.admin?.quoteMcpUrl) await assertNoBookQuotes(this.config.admin.quoteMcpUrl, p.remove.uuid);
+        try { await this.commands.calibre(mode === "apply" ? "duplicates-apply" : "duplicates-preview", JSON.stringify(params.plan), log); }
+        catch (error) {
+          if (mode === "apply") {
+            applied();
+            try { await this.commands.refresh(log); } catch (refreshError) { log(`Refresh also failed: ${String(refreshError)}\n`); }
+          }
+          throw error;
+        }
+        break;
+      }
       case "metadata":
         if (!plan?.books.length) throw new ToolError("No metadata correction to apply.");
         // The editable form is the user's review. Check and apply the same immutable plan in one job.

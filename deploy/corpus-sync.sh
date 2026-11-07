@@ -26,7 +26,7 @@ for library in $(echo "$CORPUS_LIBRARIES" | tr ',' ' '); do
   remote=$(echo "$CORPUS_REMOTE_PATH" | sed "s|{library}|$library|g")
   rsync -rt --delete --prune-empty-dirs --timeout=600 \
     -e "ssh -i $CORPUS_SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=yes" \
-    --exclude='metadata.db.before-metadata-*' --include='*/' --include='/metadata.db' \
+    --exclude='/.caltrash/' --exclude='metadata.db.before-*' --include='*/' --include='/metadata.db' \
     --include='cover.jpg' --include='*.pdf' --include='*.epub' --include='*.mobi' --include='*.azw3' \
     --exclude='*' \
     "$CORPUS_SOURCE:$remote" "$CORPUS_BOOKS_ROOT/$library/" && results="$results\"$library\":\"ok\"," || {

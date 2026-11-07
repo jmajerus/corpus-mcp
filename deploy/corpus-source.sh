@@ -39,6 +39,12 @@ EOF
     fi
     exec bash "$TOOLS_DIR/calibre-tags.sh" "$LIBRARY"
     ;;
+  duplicates-preview|duplicates-apply)
+    if [ "$SSH_ORIGINAL_COMMAND" = duplicates-apply ]; then
+      exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-duplicates.py" -- "$LIBRARY" "$APP_DB" --apply
+    fi
+    exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-duplicates.py" -- "$LIBRARY" "$APP_DB"
+    ;;
   metadata-preview)
     exec python3 "$TOOLS_DIR/calibre-metadata.py" "$LIBRARY"
     ;;
@@ -52,7 +58,7 @@ EOF
     exec bash "$TOOLS_DIR/calibre-convert.sh" --apply "$LIBRARY"
     ;;
   *)
-    echo "corpus-source: only read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview and metadata-apply" >&2
+    echo "corpus-source: only read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview and duplicates-apply" >&2
     exit 1
     ;;
 esac

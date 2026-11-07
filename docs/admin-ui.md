@@ -305,3 +305,46 @@ alongside the writer, previews and restores that book through Calibre's API.
 See [operator validation and recovery](dev-briefs/metadata-operator-validation.md)
 for the tested procedure and its limits. File snapshots are excluded from corpus
 mirrors; they are retained on the source host until an operator removes them.
+
+### Reviewing duplicates
+
+**Duplicates** (`/admin/duplicates`, also linked from the dashboard) lists pairs
+with identical selected-file hashes, matching identifiers, or matching normalized
+titles and authors. It shows covers, formats, file sizes, index health, identifiers,
+years, and saved corpus references. Different publication years are highlighted as
+possible editions. Matching metadata is a review candidate, not proof of identical
+content; the hash evidence covers the format selected for indexing.
+
+Choose **Keep both / different editions** to dismiss a pair. Include reviewed pairs
+to reopen it. A changed fingerprint (including metadata, indexed-file hash, available
+formats, or reference counts) makes the pair appear again automatically.
+
+To resolve a pair, select the keeper, explicitly choose whether its versions should
+win for conflicting formats, and select **Preview resolution**. The source preview
+compares all book files and metadata. On the resulting job, review the format changes,
+metadata comparison and blockers, then **Apply this preview**. Source metadata and
+file hashes must still match the reviewed plan, and previews expire after an hour.
+
+Resolution copies unique formats and supplementary files, unions tags, fills missing
+identifiers/descriptive fields and a missing cover, verifies file hashes, then moves
+the duplicate to Calibre's trash. The keeper's UUID and existing formats remain stable.
+The index refreshes after success or a partial failure. The change log records review
+choices, format/tag changes, resolutions, and interrupted resolutions.
+
+Records with corpus quotes, anchors, citekeys, Zotero links, or tag proposals are
+held for manual reference resolution. quote-mcp is also checked for unanchored quotes
+when configured; an unavailable quote service blocks resolution. Calibre annotations,
+Calibre-Web shelf/bookmark/reading links, differing identifiers or populated custom
+fields, conflicting supplementary files, and damaged surviving EPUBs also block
+resolution. References are not automatically reassigned to different file offsets or
+editions. Browser writes and MCP proposal/citekey writes pause while an apply runs.
+
+The source helper is `tools/calibre-duplicates.py`, invoked by `duplicates-preview`
+and `duplicates-apply`. After deploying this feature, update source helpers with:
+
+```sh
+npm run deploy -- --source-setup-user-key
+```
+
+See [duplicate-resolution operations](dev-briefs/duplicate-review.md) for backups,
+recovery limits and the native validation evidence.
