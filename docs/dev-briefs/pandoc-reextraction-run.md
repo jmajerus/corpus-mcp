@@ -22,10 +22,11 @@ checks the indexed SHA-256 before accepting extraction.
 - Progress and per-book outcomes are checkpointed to JSON. A candidate-index quick check runs when
   the batch finishes. CPU, memory, swap, and total-run limits apply to the independent service.
 
-The first check found eight staged books and three refused, with the active index still on profile
-1 and all saved anchors identical to the captured snapshot. This is an initial checkpoint, not a
-final run result. Two focused worker/staging tests, a real controller/worker smoke check, typecheck,
-and build passed. No full software suite or additional survey was run.
+The run finished on 2026-11-07 at 03:38 UTC: 239 books staged and 62 refused, with all 301 queued
+books accounted for. The active index remains on profile 1. The candidate retains the 62 refused
+books and four anchored EPUBs on profile 1. See [candidate validation](pandoc-reextraction-validation.md)
+for the completed checks, the metadata correction, and outstanding activation gates. No full software
+suite or additional survey was run.
 
 ## Server locations
 

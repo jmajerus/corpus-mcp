@@ -12,6 +12,7 @@ import type { Config } from "./config.js";
 import { type DB, setMeta } from "./db.js";
 import { type BookFormat, EXTRACTOR_VERSION, FORMAT_PREFERENCE, extractBook, sectionPaths } from "./extract.js";
 import { PANDOC_ADAPTER_VERSION, PANDOC_EXTRACTOR_VERSION } from "./pandoc.js";
+import { metadataPages, PANDOC_METADATA_WINDOW_VERSION } from "./metadata-window.js";
 
 export interface ScanSummary {
   scanned: number;
@@ -248,60 +249,54 @@ function loadShelves(config: Config, db: DB): number | string {
   return data.shelves.length;
 }
 
-/** Copyright pages sit in the front matter, or at the back of some ebooks. */
-const FRONT_PAGES = 20;
-const BACK_PAGES = 5;
-
 /**
  * Columns computed from the stored page text, filled for books extracted since the last scan or
  * computed by older rules, so the server never scans page text to answer a status request.
  */
 function fillDerivedColumns(db: DB, preset: PresetName): void {
+  // Window changes invalidate only Pandoc-derived metadata; PDFs and legacy EPUBs keep their caches.
+  if (db.prepare("SELECT value FROM meta WHERE key = 'pandoc_metadata_window_version'").pluck().get() !== PANDOC_METADATA_WINDOW_VERSION) {
+    db.prepare(`UPDATE books SET printed_isbns_version = NULL, printed_years_version = NULL,
+      title_page_version = NULL WHERE extractor_version = ?`).run(PANDOC_EXTRACTOR_VERSION);
+  }
   db.prepare(`
     UPDATE books SET text_chars = (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM pages p WHERE p.book_id = books.id)
     WHERE status = 'indexed' AND text_chars IS NULL`).run();
   const books = db.prepare(`
-    SELECT id, page_count FROM books
+    SELECT id, page_count, extractor_version FROM books
     WHERE status = 'indexed' AND (printed_isbns_version IS NULL OR printed_isbns_version != ?)`)
-    .all(ISBN_SCAN_VERSION) as { id: string; page_count: number }[];
-  const pages = db.prepare(`
-    SELECT page_index, label, text FROM pages
-    WHERE book_id = ? AND (page_index < ? OR page_index >= ?) ORDER BY page_index`);
+    .all(ISBN_SCAN_VERSION) as { id: string; page_count: number; extractor_version: number | null }[];
   const update = db.prepare("UPDATE books SET printed_isbns = ?, printed_isbns_version = ? WHERE id = ?");
   db.transaction(() => {
     for (const book of books) {
-      const text = pages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; label: string | null; text: string }[];
-      update.run(JSON.stringify(findPrintedIsbns(text, book.page_count, BACK_PAGES)), ISBN_SCAN_VERSION, book.id);
+      update.run(JSON.stringify(findPrintedIsbns(metadataPages(db, book))), ISBN_SCAN_VERSION, book.id);
     }
   })();
 
   // The year the copyright page prints, scanned the same way.
   const unscanned = db.prepare(`
-    SELECT id, page_count FROM books
+    SELECT id, page_count, extractor_version FROM books
     WHERE status = 'indexed' AND (printed_years_version IS NULL OR printed_years_version != ?)`)
-    .all(YEAR_SCAN_VERSION) as { id: string; page_count: number }[];
+    .all(YEAR_SCAN_VERSION) as { id: string; page_count: number; extractor_version: number | null }[];
   const updateYears = db.prepare("UPDATE books SET printed_years = ?, printed_year = ?, printed_years_version = ? WHERE id = ?");
   db.transaction(() => {
     for (const book of unscanned) {
-      const text = pages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; label: string | null; text: string }[];
-      const years = findPrintedYears(text, book.page_count, BACK_PAGES);
-      updateYears.run(JSON.stringify(years), printedYear(years)?.year ?? null, YEAR_SCAN_VERSION, book.id);
+      const text = metadataPages(db, book);
+      const years = findPrintedYears(text);
+      updateYears.run(JSON.stringify(years), printedYear(years, book.extractor_version === PANDOC_EXTRACTOR_VERSION ? text : undefined)?.year ?? null, YEAR_SCAN_VERSION, book.id);
     }
   })();
 
   // Author and title candidates, from the front matter, the last pages, and any "About the author(s)"
   // section wherever the outline puts it (O'Reilly's are at the back).
   const unread = db.prepare(`
-    SELECT id, title, page_count FROM books
+    SELECT id, title, page_count, extractor_version FROM books
     WHERE status = 'indexed' AND (title_page_version IS NULL OR title_page_version != ? OR json_extract(title_page, '$.for_title') IS NOT title)`)
-    .all(TITLE_PAGE_SCAN_VERSION) as { id: string; title: string; page_count: number }[];
-  const titlePages = db.prepare(`
-    SELECT page_index, section_path, text FROM pages
-    WHERE book_id = ? AND (page_index < ? OR page_index >= ? OR lower(section_path) LIKE '%about the author%') ORDER BY page_index`);
+    .all(TITLE_PAGE_SCAN_VERSION) as { id: string; title: string; page_count: number; extractor_version: number | null }[];
   const updateTitlePage = db.prepare("UPDATE books SET title_page = ?, title_page_version = ? WHERE id = ?");
   db.transaction(() => {
     for (const book of unread) {
-      const text = titlePages.all(book.id, FRONT_PAGES, book.page_count - BACK_PAGES) as { page_index: number; section_path: string | null; text: string }[];
+      const text = metadataPages(db, book, true);
       updateTitlePage.run(JSON.stringify({ ...scanTitlePage(text, book.title), for_title: book.title }), TITLE_PAGE_SCAN_VERSION, book.id);
     }
   })();
@@ -320,7 +315,11 @@ function fillDerivedColumns(db: DB, preset: PresetName): void {
       updateProposal.run(proposal.key, JSON.stringify(proposal.blockers), b.id);
     }
   })();
+  setMeta(db, "pandoc_metadata_window_version", PANDOC_METADATA_WINDOW_VERSION);
 }
+
+/** Refresh text-derived catalogue fields without reading library files or re-extracting books. */
+export { fillDerivedColumns as refreshDerivedMetadata };
 
 function clearContent(db: DB, id: string): void {
   db.prepare("DELETE FROM passages WHERE book_id = ?").run(id);

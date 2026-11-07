@@ -76,7 +76,7 @@ function lineAround(line: string, start: number, end: number, width = 90): strin
  * year with no marker before it on its line is ignored: it's a date in the text, not a publication year.
  */
 export function findPrintedYears(
-  pages: { page_index: number; label: string | null; text: string }[],
+  pages: { page_index: number; label: string | null; text: string; position?: "front" | "back" }[],
   pageCount = Number.POSITIVE_INFINITY,
   backPages = 5,
   latest = new Date().getFullYear() + 1,
@@ -96,7 +96,7 @@ export function findPrintedYears(
         if (seen.has(key)) continue;
         seen.add(key);
         found.push({
-          year, kind: near.kind, page: page.page_index + 1, position: page.page_index >= pageCount - backPages ? "back" : "front",
+          year, kind: near.kind, page: page.page_index + 1, position: page.position ?? (page.page_index >= pageCount - backPages ? "back" : "front"),
           page_label: page.label, context: lineAround(line, start, start + 4),
         });
       }
@@ -116,11 +116,33 @@ export function findPrintedYears(
  * page continues): the first page printing a copyright or edition year. Later pages can be the first
  * chapters, where a code example's "Copyright 2006" is no publication year.
  */
-export function printedYear(candidates: YearCandidate[]): YearCandidate | null {
+export function printedYear(
+  candidates: YearCandidate[],
+  locations?: { page_index: number; text: string; section_path: string | null }[],
+): YearCandidate | null {
   for (const position of ["front", "back"] as const) {
     const all = candidates.filter((c) => c.position === position && c.kind !== "reprint");
     const anchor = (all.find((c) => c.kind === "copyright" || c.kind === "edition") ?? all[0])?.page;
-    const here = all.filter((c) => c.page <= anchor + 1);
+    // Logical locations split a single copyright page into many paragraphs. Follow a named
+    // copyright section in full; otherwise use bounded adjacent text within the same section.
+    // The default retains the legacy physical-page rule.
+    let end = anchor + 1;
+    if (locations) {
+      const first = locations.findIndex((p) => p.page_index + 1 === anchor);
+      end = anchor;
+      if (first >= 0) {
+        const section = locations[first].section_path;
+        const named = /\b(?:copyright|colophon|imprint|publication information)\b/i.test(section ?? "");
+        let chars = locations[first].text.length;
+        for (let i = first + 1; i < locations.length; i++) {
+          const p = locations[i];
+          if (p.page_index !== locations[i - 1].page_index + 1 || p.section_path !== section || (!named && chars >= 6_000)) break;
+          end = p.page_index + 1;
+          chars += p.text.length;
+        }
+      }
+    }
+    const here = all.filter((c) => c.page <= end);
     const edition = here.filter((c) => c.kind !== "first_published");
     const pool = edition.length ? edition : here;
     if (pool.length) return pool.reduce((best, c) => (c.year > best.year ? c : best));
