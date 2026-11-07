@@ -37,15 +37,32 @@ def main():
     files = args.backup.with_name(args.backup.name + '.files')
     manifest = json.loads((files / 'manifest.json').read_text())
     snapshot = files / 'book'
-    for name, expected in manifest['files'].items():
-        if digest(inside(snapshot, name)) != expected:
-            raise ValueError('Backup file checksum failed: ' + name)
     with sqlite3.connect(f'file:{args.backup}?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
         saved = dict(db.execute('SELECT * FROM books WHERE id=?', (manifest['book_id'],)).fetchone())
+        formats = [tuple(row) for row in db.execute('SELECT format,name FROM data WHERE book=? ORDER BY format', (saved['id'],))]
         names = [r[0].replace('|', ',') for r in db.execute('SELECT a.name FROM books_authors_link l JOIN authors a ON a.id=l.author WHERE l.book=? ORDER BY l.id', (saved['id'],))]
     if saved['uuid'] != manifest['uuid']:
         raise ValueError('Backup identity does not match its manifest.')
+
+    if saved['path'] != manifest['folder']:
+        raise ValueError('Backup folder does not match its manifest.')
+    if sorted(formats) != sorted(tuple(row) for row in manifest['formats']):
+        raise ValueError('Backup formats do not match its manifest.')
+    format_files = {f'{name}.{fmt.lower()}': fmt for fmt, name in formats}
+    snapshot_files = set()
+    for file in snapshot.rglob('*'):
+        if file.is_symlink():
+            raise ValueError('Backup contains a symlink.')
+        if file.is_file():
+            snapshot_files.add(str(file.relative_to(snapshot)))
+    if snapshot_files != set(manifest['files']):
+        raise ValueError('Backup snapshot files do not match its manifest.')
+    if not set(format_files).issubset(snapshot_files):
+        raise ValueError('An indexed format is missing from the backup snapshot.')
+    for name, expected in manifest['files'].items():
+        if digest(inside(snapshot, name)) != expected:
+            raise ValueError('Backup file checksum failed: ' + name)
 
     from calibre.db.legacy import LibraryDatabase
     from calibre.utils.date import UNDEFINED_DATE
@@ -58,7 +75,6 @@ def main():
             if current.uuid != saved['uuid']:
                 raise ValueError('That id belongs to a different book; recovery refused.')
             folder = inside(args.library, api.field_for('path', book_id))
-            format_files = {f'{name}.{fmt.lower()}': fmt for fmt, name in manifest['formats']}
             # The writer only renames content. A changed existing file may be a later user edit.
             for name, expected in manifest['files'].items():
                 if name == 'metadata.opf':
@@ -80,6 +96,9 @@ def main():
             api.set_field('pubdate', {book_id: date})
             api.set_field('sort', {book_id: saved['sort']})
             api.set_field('author_sort', {book_id: saved['author_sort']})
+            restored_path = api.field_for('path', book_id)
+            if restored_path != saved['path']:
+                raise ValueError(f"Calibre restored a different folder: {restored_path!r}; expected {saved['path']!r}. Metadata may already have changed; no backup files were restored.")
             for name, fmt in format_files.items():
                 current_path = api.format_abspath(book_id, fmt)
                 if not current_path or not pathlib.Path(current_path).exists():

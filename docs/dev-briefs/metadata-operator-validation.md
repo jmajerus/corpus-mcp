@@ -8,10 +8,10 @@ partial-failure reporting and refresh. It does not make a multi-field write atom
 
 ## Source-host exercise, 2026-11-07
 
-The final run started at 09:56:56 UTC on `calibre-web.localdomain`, using the
+The final run started at 18:43:26 UTC on `calibre-web.localdomain`, using the
 production library owner `authoring` (UID 1000), `/usr/bin/calibre-debug` 8.5, and
 the same ext4 filesystem as `/mnt/Calibre/main`. The isolated library was
-`/mnt/Calibre/.corpus-metadata-operator-6xYDRh9p/library`, outside the live library.
+`/mnt/Calibre/.corpus-metadata-operator-ORynkvnv/library`, outside the live library.
 Its private parent retains `report.json`, `operator.log`, scripts, and fixtures.
 A separate SQLite backup of the live catalogue also opened successfully with the
 native runtime; its book count and a book UUID matched SQLite's read-only values.
@@ -32,6 +32,13 @@ The exercise passed these checks:
   index refresh is attempted while the job remains failed.
 - Restoring only `metadata.db` in a disposable copy demonstrably broke format
   paths after the rename.
+- Seven incomplete/inconsistent inventory cases were rejected before metadata
+  writes: omitted format or supplementary checksum entries, mismatched format
+  rows or folder, missing or unlisted snapshot files, and an indexed format
+  missing from both the snapshot and checksum map.
+- An injected mismatch between Calibre's restored folder and the saved folder
+  stopped recovery before restoring a deliberately missing PDF or reporting
+  success. Metadata setters had already run; this failure is not rolled back.
 - A corrupt snapshot was rejected before recovery writes. After repairing the
   fixture snapshot, recovery restored a deliberately deleted PDF and the partial
   correction. A later comment edit on another book survived.
@@ -47,8 +54,8 @@ The tested script SHA-256 values were:
 | Script | SHA-256 |
 | --- | --- |
 | `tools/calibre-metadata.py` | `a4d6efcf0c33f174e0ba3f667936efc9e4ef33d05d4509693129826f9ac9479e` |
-| `tools/calibre-metadata-recover.py` | `2a57b1abbc3db065796382fe8beaf322edf24f53fe34860aee93061faba8389f` |
-| `tools/validate-calibre-metadata.py` | `f9f356595eb4444215841cb552ef1cb99583a5b2122ed48ba2b34a3cfd720019` |
+| `tools/calibre-metadata-recover.py` | `7a52956b6652bd295330c445e252f29fd40ce7831a6ae373eba345ab64703183` |
+| `tools/validate-calibre-metadata.py` | `6e0bb7d8ad60b116fe1f64c7e556f14664114b727ce3e14f9e164289022ce102` |
 
 ## Repeating the exercise
 
@@ -90,9 +97,12 @@ calibre-debug -e ~/.local/bin/calibre-metadata-recover.py -- \
   /mnt/Calibre/main /mnt/Calibre/main/metadata.db.before-metadata-TIMESTAMP --apply
 ```
 
-Recovery verifies the UUID and snapshot checksums, refuses changed existing book
+Recovery verifies the UUID, database format rows, complete snapshot inventory and
+checksums before writes. It refuses changed existing book
 content, and uses the current Calibre API to restore the selected metadata and
-reverse folder renames. It restores missing formats, cover, and supplementary
+reverse folder renames. It verifies the resulting folder equals the saved path
+before restoring files; a mismatch stops with an explicit warning that metadata
+may already have changed. It restores missing formats, cover, and supplementary
 files, regenerates metadata.opf, and preserves unrelated catalogue edits. Recovery
 restores the saved correction fields; later edits to those same fields would be
 overwritten, so review them first. It does not overwrite the live database or

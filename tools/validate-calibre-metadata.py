@@ -144,6 +144,30 @@ runpy.run_path(script,run_name='__main__')
 
     manifest_path = backup.with_name(backup.name + '.files') / 'manifest.json'
     manifest = json.loads(manifest_path.read_text())
+    # Every malformed inventory must fail before any metadata or content writes.
+    for kind in ['omitted-format', 'omitted-extra', 'wrong-formats', 'wrong-folder', 'missing-snapshot-file', 'unlisted-snapshot-file', 'missing-indexed-format']:
+        altered = copy.deepcopy(manifest)
+        pdf = next(name for name in manifest['files'] if name.endswith('.pdf'))
+        extra = manifest_path.parent / 'book/supplement.txt'
+        pdf_file = manifest_path.parent / 'book' / pdf
+        unexpected = manifest_path.parent / 'book/unlisted.txt'
+        if kind == 'omitted-format': del altered['files'][pdf]
+        if kind == 'omitted-extra': del altered['files']['supplement.txt']
+        if kind == 'wrong-formats': altered['formats'] = []
+        if kind == 'wrong-folder': altered['folder'] = 'wrong-folder'
+        if kind == 'missing-snapshot-file': extra.rename(manifest_path.parent / 'held-extra')
+        if kind == 'unlisted-snapshot-file': unexpected.write_text('unexpected')
+        if kind == 'missing-indexed-format':
+            del altered['files'][pdf]
+            pdf_file.rename(manifest_path.parent / 'held-pdf')
+        manifest_path.write_text(json.dumps(altered))
+        rejected = run(['/usr/bin/calibre-debug', '-e', str(recover), '--', str(library), str(backup), '--apply'], expected=None)
+        assert rejected.returncode != 0 and state(target) == partial, kind
+        manifest_path.write_text(json.dumps(manifest))
+        if kind == 'missing-snapshot-file': (manifest_path.parent / 'held-extra').rename(extra)
+        if kind == 'unlisted-snapshot-file': unexpected.unlink()
+        if kind == 'missing-indexed-format': (manifest_path.parent / 'held-pdf').rename(pdf_file)
+    report['checks']['incompleteInventoriesRefusedBeforeWrites'] = True
     first = next(name for name in manifest['files'] if name.endswith('.pdf'))
     saved_file = manifest_path.parent / 'book' / first
     original_bytes = saved_file.read_bytes()
@@ -156,6 +180,32 @@ runpy.run_path(script,run_name='__main__')
     later_other = state(other_id)
     assert later_other['comments'] != other['comments']
     pathlib.Path(partial['formats']['PDF']['path']).unlink()
+    # Simulate a runtime returning a different folder after the last metadata setter.
+    # A missing PDF proves the guard runs before backup formats are restored.
+    (root / 'wrong-path.py').write_text('''import sys,runpy,functools
+from calibre.db.cache import Cache
+original_set=Cache.set_field
+original_get=Cache.field_for
+changed=False
+@functools.wraps(original_set)
+def setter(self,name,*args,**kwargs):
+ global changed
+ result=original_set(self,name,*args,**kwargs)
+ if name=='author_sort':changed=True
+ return result
+@functools.wraps(original_get)
+def getter(self,name,*args,**kwargs):
+ if changed and name=='path':return 'unexpected-folder'
+ return original_get(self,name,*args,**kwargs)
+Cache.set_field=setter;Cache.field_for=getter
+script=sys.argv[1];sys.argv=sys.argv[1:];runpy.run_path(script,run_name='__main__')
+''')
+    rejected = run(['/usr/bin/calibre-debug', '-e', str(root / 'wrong-path.py'), '--', str(recover), str(library), str(backup), '--apply'], expected=None)
+    assert rejected.returncode != 0 and 'Calibre restored a different folder' in rejected.stderr
+    assert '"recovered": true' not in rejected.stdout
+    restored_pdf = library / initial['book']['path'] / pathlib.Path(initial['formats']['PDF']['path']).name
+    assert not restored_pdf.exists()
+    report['checks']['wrongRestoredPathRefusedBeforeFileRestoration'] = True
     run(['/usr/bin/calibre-debug', '-e', str(recover), '--', str(library), str(backup), '--apply'])
     assert state(target) == initial
     assert state(other_id) == later_other
