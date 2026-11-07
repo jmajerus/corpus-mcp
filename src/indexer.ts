@@ -136,9 +136,9 @@ export function scanLibraries(config: Config, db: DB, {
 
       const data = fs.readFileSync(choice.file);
       const hash = sha256(data);
-      if (!force && sameVersion && existing.file_path === relFile && existing.sha256 === hash) {
+      if (!force && sameVersion && existing.format === choice.format && existing.sha256 === hash) {
         updateMetadata(db, config.citekeyPreset, id, metadata, relFolder);
-        db.prepare("UPDATE books SET file_size = ?, file_mtime = ? WHERE id = ?").run(stat.size, mtime, id);
+        db.prepare("UPDATE books SET file_path = ?, file_size = ?, file_mtime = ? WHERE id = ?").run(relFile, stat.size, mtime, id);
         summary.unchanged++;
         continue;
       }

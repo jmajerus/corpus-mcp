@@ -16,6 +16,7 @@ td.state { min-width: 170px; }
   <select name="library" aria-label="Library"><option value="">Any library</option></select>
   <select name="shelf" aria-label="Shelf"><option value="">Any shelf</option></select>
   <input type="search" name="tag" placeholder="Category or tag" aria-label="Category or tag" list="vocab">
+  <select name="metadata" aria-label="Metadata review"><option value="">All metadata</option><option value="repair">Correct authors, title, or year</option></select>
   <select name="sort" aria-label="Sort"><option value="title">Title</option><option value="year">Newest first</option><option value="id">Calibre id</option></select>
   <button type="button" id="clear">Clear</button>
 </form>
@@ -26,7 +27,7 @@ td.state { min-width: 170px; }
   script: `
 const form = document.getElementById("filters");
 const FACETS = [["category", "Categories"], ["citekey", "Citekey"], ["isbn", "ISBN"], ["year", "Year"], ["author", "Author"], ["problem", "Problems"], ["format", "Format"], ["status", "Status"]];
-const TEXT = ["q", "library", "shelf", "tag", "sort"];
+const TEXT = ["q", "library", "shelf", "tag", "sort", "metadata"];
 let picked = {}, offset = 0;
 
 function readUrl() {

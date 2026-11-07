@@ -27,7 +27,7 @@ for library in $(echo "$CORPUS_LIBRARIES" | tr ',' ' '); do
   rsync -rt --delete --prune-empty-dirs --timeout=600 \
     -e "ssh -i $CORPUS_SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=yes" \
     --include='*/' --include='/metadata.db' \
-    --include='*.pdf' --include='*.epub' --include='*.mobi' --include='*.azw3' \
+    --include='cover.jpg' --include='*.pdf' --include='*.epub' --include='*.mobi' --include='*.azw3' \
     --exclude='*' \
     "$CORPUS_SOURCE:$remote" "$CORPUS_BOOKS_ROOT/$library/" && results="$results\"$library\":\"ok\"," || {
       echo "sync of $library failed" >&2

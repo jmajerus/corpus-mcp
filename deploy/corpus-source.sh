@@ -6,7 +6,8 @@
 #     read-only, so the corpus LXC never copies app.db (which also holds password hashes)
 #   - "tags-preview" / "tags-apply": calibre-tags.sh with a plan on stdin (/admin's tag jobs)
 #   - "convert-preview" / "convert-apply": calibre-convert.sh (/admin's EPUB job)
-# The two scripts back up metadata.db before every apply. Installed by tools/deploy.mjs
+# Metadata corrections use metadata-preview / metadata-apply with JSON on stdin.
+# The write scripts back up metadata.db before every apply. Installed by tools/deploy.mjs
 # (--source-setup or --source-setup-user-key), which sets the paths below.
 RSYNC_ROOT="/mnt/Calibre/main"
 LIBRARY="/mnt/Calibre/main"
@@ -38,6 +39,12 @@ EOF
     fi
     exec bash "$TOOLS_DIR/calibre-tags.sh" "$LIBRARY"
     ;;
+  metadata-preview)
+    exec python3 "$TOOLS_DIR/calibre-metadata.py" "$LIBRARY"
+    ;;
+  metadata-apply)
+    exec python3 "$TOOLS_DIR/calibre-metadata.py" --apply "$LIBRARY"
+    ;;
   convert-preview)
     exec bash "$TOOLS_DIR/calibre-convert.sh" "$LIBRARY"
     ;;
@@ -45,7 +52,7 @@ EOF
     exec bash "$TOOLS_DIR/calibre-convert.sh" --apply "$LIBRARY"
     ;;
   *)
-    echo "corpus-source: only read-only rsync, 'shelves', and the tags-/convert- commands are allowed" >&2
+    echo "corpus-source: only read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview and metadata-apply" >&2
     exit 1
     ;;
 esac

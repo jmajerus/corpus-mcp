@@ -2,21 +2,24 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, recordChanges } from "./data.js";
+import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { tagPlan } from "./tagging.js";
 import { type Corpus, ToolError, tagCleanupPlan } from "./tools.js";
 
 /**
  * Admin jobs launched from /admin: one at a time, logged to data.db, and for anything that changes
- * Calibre, a preview first whose plan the apply reuses verbatim. Calibre changes run on the Calibre-Web
+ * Calibre, a preview first whose plan the apply reuses verbatim. Metadata corrections
+ * are reviewed in their editable form and run that preview and apply within one job. Calibre changes run on the Calibre-Web
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
+  metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
   backup: { title: "Back up data.db", calibre: false, previewable: false },
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
@@ -37,6 +40,7 @@ export interface JobRow {
  */
 export interface JobItem {
   calibre_id: number; uuid?: string; title: string;
+  metadata?: { before: MetadataValues; after: MetadataValues };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string;
 }
 
@@ -133,14 +137,17 @@ export class JobRunner {
   }
 
   /** Starts a job and returns its id at once; the job runs in the background. */
-  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[] } = {}, requestedBy?: string): number {
+  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection } = {}, requestedBy?: string): number {
     const spec = JOB_KINDS[kind];
     if (!spec) throw new ToolError(`Unknown job "${kind}".`);
     if (mode === "preview" && !spec.previewable) throw new ToolError(`"${kind}" has no preview.`);
     if (this.running !== null) throw new ToolError(`Job ${this.running} is still running.`);
 
     let params: Record<string, unknown> = {};
-    if (spec.calibre && mode === "apply") {
+    if (kind === "metadata") {
+      if (mode !== "apply" || !opts.metadata) throw new ToolError("Review the title, authors, and year on the book page first.");
+      params = { plan: metadataRepairPlan(this.c, this.config.shelvesLibrary, opts.metadata) };
+    } else if (spec.calibre && mode === "apply") {
       // An apply runs exactly what its preview listed, and only a recent, successful preview.
       if (!opts.previewOf) throw new ToolError("Preview first, then apply that preview.");
       const preview = this.get(opts.previewOf);
@@ -227,6 +234,7 @@ export class JobRunner {
       const base = { source: "admin-job" as const, job_id: jobId, book_id: `${library}:${item.calibre_id}`, calibre_uuid: item.uuid ?? null, title: item.title, actor };
       for (const tag of item.added ?? []) changes.push({ ...base, kind: "tag_added", detail: tag });
       for (const tag of item.removed ?? []) changes.push({ ...base, kind: "tag_removed", detail: tag });
+      if (item.metadata) changes.push({ ...base, kind: "metadata_corrected", detail: JSON.stringify(item.metadata) });
       if (item.added_format) changes.push({ ...base, kind: "format_added", detail: `${item.source_format} → ${item.added_format}` });
     }
     recordChanges(this.c.data, changes);
@@ -244,6 +252,12 @@ export class JobRunner {
       case "backup":
         log(`Backed up to ${await backupDataStore(this.c.data, this.config.backupDir)}\n`);
         return;
+      case "metadata":
+        if (!plan?.books.length) throw new ToolError("No metadata correction to apply.");
+        // The editable form is the user's review. Check and apply the same immutable plan in one job.
+        await this.commands.calibre("metadata-preview", JSON.stringify(plan), log);
+        await this.commands.calibre("metadata-apply", JSON.stringify(plan), log);
+        break;
       case "tags":
       case "cleanup":
         if (!plan?.books.length) {

@@ -759,7 +759,7 @@ function printedYearReport(c: Corpus) {
     return { book_id: b.id, title: b.title, year: b.printed_year, kind: from.kind, page: from.page, position: from.position, context: from.context };
   });
   return {
-    note: "Calibre has no publication year for these books, but their text prints one, which citations and proposed citekeys use. Confirm it and add it in Calibre.",
+    note: "These books use a printed year for citations and proposed citekeys. Review the suggested publication year on the book page and use Apply to Calibre to save it.",
     books_without_year: books.length,
     books_printing_year: found.length,
     books: found.slice(0, 100),
@@ -789,13 +789,13 @@ function titlePageReport(c: Corpus) {
     const title = mangled ? scan.title : null;
     if (authors.length || title) {
       found.push({
-        book_id: b.id, title: b.title, calibre_authors: JSON.parse(b.authors) as string[],
+        book_id: b.id, review_path: `/admin/books/${encodeURIComponent(b.id)}`, title: b.title, calibre_authors: JSON.parse(b.authors) as string[],
         authors: authors.map((a) => ({ name: a.name, from: a.sources, page: a.page })), printed_title: title?.title ?? null,
       });
     }
   }
   return {
-    note: "Authors and titles printed in these books, where Calibre has no author, several people in one author record, or a file name for a title. Candidates only: confirm them and fix Calibre.",
+    note: "Authors and titles printed in these books, where Calibre has no author, several people in one author record, or a file name for a title. Review the prefilled title and authors on each book page, then use Apply to Calibre.",
     ...counts,
     books: found.slice(0, 100),
     ...(found.length > 100 ? { books_truncated: found.length - 100 } : {}),
