@@ -135,6 +135,11 @@ describe("chunking", () => {
   });
 });
 
+it("keeps a confirmed suffix-bearing Calibre author usable for citation keys", () => {
+ const value = proposeCitekey({title:"The Elements of Style",authors:["William Strunk| Jr."],authorSorts:["Strunk, William, Jr."],publisher:null,year:1918},"author-year-word");
+ expect(value.blockers).toEqual([]);
+});
+
 describe("indexer", () => {
   it("indexes allowlisted libraries, prefers PDF, and skips unchanged files", () => {
     const first = scanLibraries(config, db);

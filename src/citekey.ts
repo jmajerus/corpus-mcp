@@ -49,7 +49,9 @@ export function calibreCsl(m: Pick<BookMetadata, "title" | "authors" | "authorSo
  * person in the same shape, so these are flagged for a fix in Calibre rather than guessed at.
  */
 export function mergedAuthorName(name: string): boolean {
-  return /\||;|\s(?:and|&)\s/i.test(name);
+  // A native Calibre comma before a standard suffix still belongs to one person.
+  const person = name.replace(/\|\s*(?:Jr\.?|Sr\.?|II|III|IV)$/i, "");
+  return /\||;|\s(?:and|&)\s/i.test(person);
 }
 
 export type CitekeyBlocker = "unknown_author" | "merged_authors" | "no_year" | "malformed";
