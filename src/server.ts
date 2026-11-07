@@ -442,7 +442,11 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       }, by));
     }
     else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);
-    else if (req.method === "GET" && path === "/api/duplicates") sendJson(res, 200, duplicatePairs(c, config.shelvesLibrary, url.searchParams.get("dismissed") === "1"));
+    else if (req.method === "GET" && path === "/api/duplicates") sendJson(res, 200, {
+      ...duplicatePairs(c, config.shelvesLibrary, url.searchParams.get("dismissed") === "1"),
+      last_scan: c.db.prepare("SELECT value FROM meta WHERE key='last_scan'").pluck().get() ?? null,
+      calibre_web_url: admin.calibreWebUrl ?? null, writable_library: config.shelvesLibrary,
+    });
     else if (req.method === "POST" && path === "/api/duplicates/review") {
       const by = await writer(); if (by === null) return;
       const body = await readJson(req) as {ids?:unknown;fingerprint?:unknown;reopen?:unknown};

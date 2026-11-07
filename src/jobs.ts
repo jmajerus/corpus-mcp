@@ -139,7 +139,7 @@ export class JobRunner {
   get(id: number) {
     const row = this.c.data.prepare<[number], JobRow>("SELECT * FROM jobs WHERE id = ?").get(id);
     if (!row) throw new ToolError(`No job ${id}.`);
-    return { ...row, params: JSON.parse(row.params) as Record<string, unknown>, items: row.items ? (JSON.parse(row.items) as JobItem[]) : [] };
+    return { ...row, calibre_web_url: this.config.admin?.calibreWebUrl ?? null, params: JSON.parse(row.params) as Record<string, unknown>, items: row.items ? (JSON.parse(row.items) as JobItem[]) : [] };
   }
 
   /** Starts a job and returns its id at once; the job runs in the background. */

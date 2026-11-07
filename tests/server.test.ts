@@ -45,7 +45,7 @@ beforeAll(async () => {
     dataDbPath: path.join(root, "data.db"), backupDir: path.join(root, "backups"),
     shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
     citekeyPreset: "author-year-word", vocabularyPath: path.join(import.meta.dirname, "vocabulary.json"),
-    admin: { access: { teamDomain: team }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
+    admin: { calibreWebUrl:"http://calibre-web.localdomain:8083", access: { teamDomain: team }, neighbors: [], source: "x", sshKey: "x", refreshUnit: "x",
       refreshLog: path.join(root, "refresh.log"), syncStatus: path.join(root, "sync-status.json"),
       quoteMcpUrl: `http://127.0.0.1:${(quoteMcp.address() as AddressInfo).port}` } };
   const db = openDatabase(config.dbPath);
@@ -263,7 +263,7 @@ it("lists books with derived states and facets, and shows one book", async () =>
   expect((await (await fetch(`${base}/api/books?format=epub`)).json()).total).toBe(0);
   expect((await fetch(`${base}/api/books?category=bogus`)).status).toBe(400);
   const book = await (await fetch(`${base}/api/books/main%3A1`)).json();
-  expect(book).toMatchObject({ book_id: "main:1", title: "Networks", file: { format: "pdf", pages: 1 }, calibre_web_url: null });
+  expect(book).toMatchObject({ book_id: "main:1", title: "Networks", file: { format: "pdf", pages: 1 }, calibre_web_url: "http://calibre-web.localdomain:8083/book/1" });
 });
 
 it("lets a signed-in person set a book's categories and citekey; LAN requests cannot", async () => {
@@ -417,7 +417,7 @@ it("records and refreshes actual partial corrections while keeping the job faile
 
 it("serves duplicate review and protects its write routes with Access identity",async()=>{
  expect((await fetch(`${base}/admin/duplicates`)).status).toBe(200);
- expect(await(await fetch(`${base}/api/duplicates`)).json()).toEqual({pairs:[],total:0});
+ expect(await(await fetch(`${base}/api/duplicates`)).json()).toMatchObject({pairs:[],total:0,last_scan:expect.any(String),calibre_web_url:"http://calibre-web.localdomain:8083",writable_library:"main"});
  for(const route of ["preview","review"]){
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);

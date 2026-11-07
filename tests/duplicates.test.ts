@@ -180,3 +180,34 @@ it("keeps a blocked source preview reviewable and refuses to apply it",async()=>
  expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/Resolve the blockers/);
  expect(calls).toEqual(['duplicates-preview']);
 });
+
+it("drops deleted catalogue records after indexing even when metadata remains cached",()=>{
+ expect(pair()).toBeDefined();
+ const catalogue=new Database(path.join(root,'main/metadata.db'));
+ catalogue.prepare('DELETE FROM books WHERE id=2').run();catalogue.close();
+ scanLibraries(config,c.db);
+ expect(c.db.prepare("SELECT id FROM books WHERE id='main:2'").get()).toBeUndefined();
+ expect(duplicatePairs(c,'main').pairs.some(p=>p.books.some(b=>b.id==='main:2'))).toBe(false);
+});
+
+it.each(['succeeded','failed'])("the source refresh action waits for %s and reloads candidates",async terminal=>{
+ const elements=new Map<string,any>();
+ const element=(id:string)=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:true,innerHTML:'',textContent:'',listeners:{},addEventListener(name:string,fn:any){this.listeners[name]=fn;}});return elements.get(id);};
+ const document={getElementById:element,addEventListener(){},hidden:false};
+ let completed=false,polls=0,loads=0;const posts:any[]=[];
+ const api=async(url:string)=>{
+  if(url.startsWith('/api/duplicates')){loads++;return {pairs:completed?[]:[pair()],last_scan:'2026-11-07T20:00:00Z',calibre_web_url:'http://calibre.test/',writable_library:'main'};}
+  polls++;if(polls===1)return {status:'running'};completed=terminal==='succeeded';return {status:terminal};
+ };
+ const post=async(url:string,body:any)=>{posts.push({url,body});return {id:42};};
+ const script=[...DUPLICATES_HTML.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].at(-1)![1];
+ new Function('document','window','ME','api','post','esc','bookLink','when','setTimeout','toast',script)(document,{addEventListener(){}},Promise.resolve({can_write:true}),api,post,String,(_id:string,title:string)=>title,String,(fn:()=>void)=>fn(),()=>{});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ expect(element('pairs').innerHTML).toContain('http://calibre.test/book/1');
+ expect(element('freshness').textContent).toContain('Reloading this page does not pull');
+ await element('refresh-source').listeners.click();
+ expect(posts).toEqual([{url:'/api/admin/jobs',body:{kind:'refresh',mode:'apply'}}]);
+ expect(polls).toBe(2);expect(loads).toBe(2);expect(element('refresh-source').disabled).toBe(false);
+ expect(element('refresh-status').innerHTML).toContain(terminal==='succeeded'?'Catalogue updated':'Refresh did not complete');
+ expect(element('pairs').innerHTML.includes('The Same Book')).toBe(terminal!=='succeeded');
+});
