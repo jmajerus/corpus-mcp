@@ -40,7 +40,7 @@ export interface JobRow {
  */
 export interface JobItem {
   calibre_id: number; uuid?: string; title: string;
-  metadata?: { before: MetadataValues; after: MetadataValues };
+  metadata?: { before: MetadataValues; after: MetadataValues; partial?: boolean };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string;
 }
 
@@ -256,7 +256,15 @@ export class JobRunner {
         if (!plan?.books.length) throw new ToolError("No metadata correction to apply.");
         // The editable form is the user's review. Check and apply the same immutable plan in one job.
         await this.commands.calibre("metadata-preview", JSON.stringify(plan), log);
-        await this.commands.calibre("metadata-apply", JSON.stringify(plan), log);
+        try {
+          await this.commands.calibre("metadata-apply", JSON.stringify(plan), log);
+        } catch (error) {
+          applied(); // The source reports actual partial changes before its non-zero exit.
+          log("\nChecking the index after the failed metadata write…\n");
+          try { await this.commands.refresh(log); }
+          catch (refreshError) { log(`Refresh also failed: ${(refreshError as Error).message}\n`); }
+          throw error;
+        }
         break;
       case "tags":
       case "cleanup":

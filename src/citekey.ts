@@ -3,6 +3,7 @@
  * (packages/citekey) under the configured preset, plus what in the metadata blocks a usable key.
  */
 import { type CslItem, type CslName, type PresetName, citekeyWellFormed, presets, proposeCitekey as ruleKey } from "@jmajerus/citekey";
+import { personName } from "./titlepage.js";
 import type { BookMetadata } from "./calibre.js";
 
 export type { PresetName };
@@ -20,6 +21,7 @@ export function isPreset(name: string): name is PresetName {
  */
 export function calibreName(name: string, sort: string | undefined): CslName | null {
   if (!name || name === "Unknown") return null;
+  if (/\sand\s/i.test(name) && !mergedAuthorName(name)) return { literal: name };
   if (sort?.includes(",")) {
     const [family, ...rest] = sort.split(",");
     const given = rest.join(",").trim();
@@ -51,7 +53,9 @@ export function calibreCsl(m: Pick<BookMetadata, "title" | "authors" | "authorSo
 export function mergedAuthorName(name: string): boolean {
   // A native Calibre comma before a standard suffix still belongs to one person.
   const person = name.replace(/\|\s*(?:Jr\.?|Sr\.?|II|III|IV)$/i, "");
-  return /\||;|\s(?:and|&)\s/i.test(person);
+  if (/\||;|\s&\s/.test(person)) return true;
+  const joined = person.split(/\s+and\s+/i);
+  return joined.length > 1 && joined.every(part => personName(part) !== null);
 }
 
 export type CitekeyBlocker = "unknown_author" | "merged_authors" | "no_year" | "malformed";
