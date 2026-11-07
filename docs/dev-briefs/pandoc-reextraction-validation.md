@@ -90,3 +90,16 @@ The four anchored EPUBs (`main:53`, `main:133`, `main:581`, `main:570`) still re
 anchor/quote migration. This includes the book that originally exposed the paragraph problem. The 62
 refused books retain their original extraction; they do not require rerunning the 239 successful ones.
 All reports keep `promotionReady: false`.
+
+## PR #21 review: unset extractor versions
+
+Copilot identified that the controller's `extractor_version <> 3` predicate excluded SQL NULLs.
+The queue now explicitly includes unset versions. The controller regression test covers an unset
+unanchored version alongside profiles 1/2, holds unset-version books with saved anchors or quotes,
+and excludes profile 3, PDFs, and failed books. Outcomes and batch totals account for all eligible
+books, and saved data stays unchanged. Both focused worker/controller tests and the controller's
+syntax check pass.
+
+A read-only census of the run snapshot, candidate, and live index finds 305 indexed EPUBs and zero
+unset extractor versions in each. This defect did not omit books from the completed run; its counts
+and validation remain valid, and no re-extraction is needed for this correction.

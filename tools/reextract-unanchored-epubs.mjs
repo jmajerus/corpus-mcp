@@ -24,7 +24,8 @@ if (values.worker) {
   try {
     if (db.prepare("SELECT value FROM meta WHERE key='epub_source_preview'").pluck().get() !== "inspection-only") throw new Error("Not an inspection candidate.");
     const saved = new Set([...data.prepare("SELECT calibre_uuid FROM anchors").pluck().all(), ...data.prepare("SELECT calibre_uuid FROM quotes").pluck().all()]);
-    const all = db.prepare("SELECT id,uuid FROM books WHERE format='epub' AND status='indexed' AND extractor_version<>3 ORDER BY file_size,id").all();
+    const all = db.prepare(`SELECT id,uuid FROM books WHERE format='epub' AND status='indexed'
+      AND (extractor_version IS NULL OR extractor_version<>3) ORDER BY file_size,id`).all();
     books = all.filter((b) => !saved.has(b.uuid)); held = all.filter((b) => saved.has(b.uuid)).map((b) => b.id);
   } finally { db.close(); data.close(); }
   const progress = path.join(values.candidate, "progress.json"), records = path.join(values.candidate, "books.jsonl");
