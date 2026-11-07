@@ -15,6 +15,14 @@ without an explicit link, including old items with active merged survivors.
 A change invalidates that decision; cross-library pairs are reviewable but cannot be
 merged or trashed by this workflow.
 
+Browser reloads do not trigger source synchronization. The duplicate API includes
+`last_scan`, the configured Calibre-Web URL and writable library. The screen can
+start the existing authorized refresh job, wait for completion and reload candidates;
+it also reloads index data when returning from another tab or browser history.
+Calibre-Web's installed `delete_whole_book` cleans its shelf/read/download links.
+Direct deletion there does not require pre-removing shelf memberships. Corpus's
+Calibre-native trash call remains separate and retains the reference guard.
+
 ## Apply and recovery
 
 The admin uses its existing Access authorization and single-job runner. Apply
@@ -63,7 +71,7 @@ The committed `tools/validate-calibre-duplicates.py` ran as `authoring` (UID 100
 on calibre-web.localdomain using Calibre 8.5 and a new disposable library on the
 same ext4 filesystem as production. Evidence is retained privately in:
 
-`/mnt/Calibre/.corpus-duplicate-operator-Kfu5rHXq`
+`/mnt/Calibre/.corpus-duplicate-operator-z3QMuEg4`
 
 It passed:
 
@@ -82,7 +90,7 @@ It passed:
 - Retention of both pre-mutation snapshots from the interrupted attempt and retry.
 
 The source helper SHA-256 was:
-`f2eafa0a164e765fd50c6c063a89ccfbfef07154aebf823a1c6d5911cad9f85a`.
+`8569fbd3b623593e65292248b34ec052c9357e4b5bab204abb2081d2a41891b9`.
 Read-only fingerprints of production books/authors/author links/formats matched
 before and after the exercise. No production helper was installed, no real book
 was merged or deleted, and no production service was restarted.

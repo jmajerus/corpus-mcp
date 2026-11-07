@@ -27,7 +27,8 @@ it('names public shelves and gives the correct keeper-specific action while hidi
  const blockers=inspect();
  expect(blockers).toHaveLength(2);
  expect(blockers[0]).toContain('shelf “Main”');expect(blockers[0]).toContain('Keeper 116 already belongs');
- expect(blockers[0]).toContain('Remove only duplicate 127');
+ expect(blockers[0]).toContain('clean up its shelf links automatically');
+ expect(blockers[0]).not.toContain('Remove only duplicate 127 from that shelf');
  expect(blockers[1]).toContain('private shelf');expect(blockers[1]).toContain('Add keeper 116');
  expect(JSON.stringify(blockers)).not.toContain('Private subject');
  expect(fs.readFileSync(path.join(root,'web.db'))).toEqual(before);

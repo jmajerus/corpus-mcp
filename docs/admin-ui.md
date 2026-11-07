@@ -315,6 +315,17 @@ years, and saved corpus references. Different publication years are highlighted 
 possible editions. Matching metadata is a review candidate, not proof of identical
 content; the hash evidence covers the format selected for indexing.
 
+Each writable-library record has a direct **Open this record in Calibre-Web** link,
+so identical titles can be distinguished by the exact record URL. Preview jobs also
+link both the keeper and duplicate.
+
+Browser reloads read the existing corpus index; they do not pull changes from
+Calibre. The screen shows the last catalogue refresh time. After deleting books in
+Calibre-Web, choose **Refresh from Calibre**: the existing authenticated refresh job
+pulls and indexes the library, then the screen reloads its pairs. A failed job is
+reported with a link to its log. The normal timer also refreshes automatically
+(10 minutes after the previous run finishes in the supplied deployment).
+
 Choose **Keep both / different editions** to dismiss a pair. Include reviewed pairs
 to reopen it. A changed fingerprint (including metadata, indexed-file hash, available
 formats, or reference counts) makes the pair appear again automatically.
@@ -325,9 +336,11 @@ compares all book files and metadata. On the resulting job, review the format ch
 metadata comparison and blockers, then **Apply this preview**. Shelf and other
 reference blockers are shown together in the preview; Apply stays unavailable while
 any remain. Public shelf names are shown, while private shelf names stay hidden.
-If the keeper already belongs to a blocking shelf, remove only the duplicate's
-membership in Calibre-Web. Otherwise add the keeper first, then remove the duplicate's
-membership. Preview again after resolving the references. Source metadata and
+You can instead delete an unwanted record directly in Calibre-Web: its delete
+operation cleans up shelf memberships automatically. Preserve unique formats or
+saved data first, and ensure the keeper belongs to any shelf you want to retain.
+The separate corpus-native trash operation still blocks on Calibre-Web references,
+because Calibre's API does not clean Calibre-Web's separate database. Source metadata and
 file hashes must still match the reviewed plan, and previews expire after an hour.
 
 Resolution copies unique formats and supplementary files, unions tags, fills missing

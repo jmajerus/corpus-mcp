@@ -47,7 +47,7 @@ def reference_blockers(library, app_db, keep_id, remove_id):
                             keeper_present = web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone() is not None
                             label = f'shelf “{name}”' if public else 'a private shelf'
                             action = f'Keeper {keep_id} already belongs to this shelf.' if keeper_present else f'Add keeper {keep_id} to this shelf first.'
-                            blockers.append(f'Calibre-Web {label} contains duplicate {remove_id}. {action} Remove only duplicate {remove_id} from that shelf in Calibre-Web, then preview again.')
+                            blockers.append(f'Calibre-Web {label} contains duplicate {remove_id}. {action} Calibre-Web can delete the duplicate and clean up its shelf links automatically. Preserve any unique files or saved data first, then refresh corpus. Corpus’s direct trash action requires these links to be resolved.')
                         # Broken links must still block even when the shelf row is missing.
                         if web.execute('SELECT 1 FROM book_shelf_link l LEFT JOIN shelf s ON s.id=l.shelf WHERE l.book_id=? AND s.id IS NULL LIMIT 1', (remove_id,)).fetchone():
                             blockers.append('Calibre-Web has an orphaned shelf membership for the duplicate. Repair it before resolving this pair.')
