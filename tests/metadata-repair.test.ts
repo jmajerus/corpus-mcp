@@ -9,9 +9,9 @@ let root: string, library: string, plan: any;
 beforeEach(() => {
  root=tempDir();library=path.join(root,"main");fs.mkdirSync(library);
  const db=new Database(path.join(library,"metadata.db"));
- db.exec(`CREATE TABLE books(id INTEGER PRIMARY KEY,uuid TEXT,title TEXT,comment TEXT);CREATE TABLE authors(id INTEGER PRIMARY KEY,name TEXT);CREATE TABLE books_authors_link(id INTEGER PRIMARY KEY,book INTEGER,author INTEGER);
- INSERT INTO books VALUES(1,'uuid-1','awscloudprojects','keep this comment');INSERT INTO authors VALUES(1,'Unknown');INSERT INTO books_authors_link VALUES(1,1,1);`);db.close();
- plan={library:"main",books:[{calibre_id:1,uuid:"uuid-1",title:"awscloudprojects",before:{title:"awscloudprojects",authors:["Unknown"]},after:{title:"AWS Cloud Projects",authors:["Ivo Pinto","Pedro Santos"]}}]};
+ db.exec(`CREATE TABLE books(id INTEGER PRIMARY KEY,uuid TEXT,title TEXT,comment TEXT,pubdate TEXT);CREATE TABLE authors(id INTEGER PRIMARY KEY,name TEXT);CREATE TABLE books_authors_link(id INTEGER PRIMARY KEY,book INTEGER,author INTEGER);
+ INSERT INTO books VALUES(1,'uuid-1','awscloudprojects','keep this comment',NULL);INSERT INTO authors VALUES(1,'Unknown');INSERT INTO books_authors_link VALUES(1,1,1);`);db.close();
+ plan={library:"main",books:[{calibre_id:1,uuid:"uuid-1",title:"awscloudprojects",before:{title:"awscloudprojects",authors:["Unknown"],year:null},after:{title:"AWS Cloud Projects",authors:["Ivo Pinto","Pedro Santos"],year:2024}}]};
  fs.writeFileSync(path.join(root,"calibre-debug"),`#!/usr/bin/env python3
 import sys,sqlite3,json,pathlib
 args=sys.argv[1:]
@@ -21,6 +21,8 @@ lib=args[-1]
 book=plan['books'][0]
 db=sqlite3.connect(lib+'/metadata.db')
 db.execute('UPDATE books SET title=? WHERE id=1',(book['after']['title'],))
+if book['after']['year'] != book['before']['year']:
+ db.execute('UPDATE books SET pubdate=? WHERE id=1',(str(book['after']['year'])+'-01-01T12:00:00+00:00' if book['after']['year'] is not None else None,))
 db.execute('DELETE FROM books_authors_link WHERE book=1')
 for name in book['after']['authors']:
  cur=db.execute('INSERT INTO authors(name) VALUES(?)',(name.replace(',','|'),))
@@ -44,7 +46,7 @@ it('refuses changed metadata or a reused Calibre id before any write',()=>{
  plan.books[0].before.title='awscloudprojects';plan.books[0].uuid='wrong';expect(run(true).status).toBe(1);expect(fs.readdirSync(library)).toEqual(['metadata.db']);
 });
 it('passes literal titles safely and preserves separate authors and comma-containing names',()=>{
- plan.books[0].after={title:'A title: $(touch SHOULD_NOT_EXIST)',authors:['Research and Development','William Strunk, Jr.']};
+ plan.books[0].after={title:'A title: $(touch SHOULD_NOT_EXIST)',authors:['Research and Development','William Strunk, Jr.'],year:2024};
  const result=run(true);expect(result.status,result.stderr).toBe(0);
  const actual=JSON.parse(fs.readFileSync(path.join(root,'calls.json'),'utf8'));
  expect(actual.books[0].after).toEqual(plan.books[0].after);
@@ -54,4 +56,18 @@ it('passes literal titles safely and preserves separate authors and comma-contai
 it('rejects the reserved Calibre author separator before any write',()=>{
  plan.books[0].after.authors=['Research & Development'];
  const result=run(true);expect(result.status).toBe(1);expect(result.stderr).toContain('reserved & separator');expect(fs.existsSync(path.join(root,'calls.json'))).toBe(false);
+});
+
+it('applies a year-only correction and rejects stale or invalid year values',()=>{
+ plan.books[0].after={...plan.books[0].before,year:2023};
+ const result=run(true);expect(result.status,result.stderr).toBe(0);
+ const db=new Database(path.join(library,'metadata.db'));expect(db.prepare('SELECT pubdate FROM books').pluck().get()).toBe('2023-01-01T12:00:00+00:00');db.close();
+ plan.books[0].after.year=2022;expect(run(true).status).toBe(1);
+ plan.books[0].before.year=2023;plan.books[0].after.year=2022.5;expect(run(true).status).toBe(1);
+});
+it('keeps an existing complete publication date when its year is unchanged',()=>{
+ const db=new Database(path.join(library,'metadata.db'));db.prepare('UPDATE books SET pubdate=?').run('2019-05-17T12:34:56+00:00');db.close();
+ plan.books[0].before.year=2019;plan.books[0].after.year=2019;
+ expect(run(true).status).toBe(0);
+ const after=new Database(path.join(library,'metadata.db'));expect(after.prepare('SELECT pubdate FROM books').pluck().get()).toBe('2019-05-17T12:34:56+00:00');after.close();
 });

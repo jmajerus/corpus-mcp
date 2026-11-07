@@ -93,8 +93,8 @@ matched to the printed line it was squashed from. Unlike a printed year, these
 are only candidates: a wrong author does more harm than a missing one, so they
 never go into a citation or a citekey. `corpus_status` lists them under
 `title_pages`, and the admin book page and the dashboard's Authors card show
-an editable correction beside the cover. Apply to Calibre saves the reviewed title
-and individual authors, then refreshes citation and citekey metadata. Books whose
+an editable correction beside the cover. Apply to Calibre saves the reviewed title,
+individual authors, and publication year, then refreshes citation and citekey metadata. Books whose
 text yields no candidates can be corrected in the same form while viewing the cover.
 
 ## Zotero

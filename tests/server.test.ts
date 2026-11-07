@@ -362,7 +362,7 @@ it("verifies and anchors quote-mcp's quotes on the LAN only", async () => {
 
 it("applies reviewed metadata in one authenticated job using identical preview/apply plans", async () => {
   const book = await (await fetch(`${base}/api/books/main%3A1`)).json();
-  const body = { title: "Networks, revised", authors: ["Ann Author", "Bob Writer"], before: { title: book.title, authors: book.authors } };
+  const body = { title: "Networks, revised", authors: ["Ann Author", "Bob Writer"], year:2024, before: { title: book.title, authors: book.authors, year:book.publication_year.calibre } };
   const send = (headers: Record<string,string>, value = body) => fetch(`${base}/api/books/main%3A1/metadata`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(value) });
   expect((await send({})).status).toBe(401);
   expect((await send({"cf-access-jwt-assertion":token},{...body,before:{title:"stale",authors:[]}})).status).toBe(400);
@@ -372,9 +372,9 @@ it("applies reviewed metadata in one authenticated job using identical preview/a
   expect(job.status).toBe("succeeded");
   expect(calibreCalls.slice(-2).map(c=>c.command)).toEqual(["metadata-preview","metadata-apply"]);
   expect(calibreCalls.at(-2)?.stdin).toBe(calibreCalls.at(-1)?.stdin);
-  expect(JSON.parse(calibreCalls.at(-1)!.stdin!).books[0]).toMatchObject({calibre_id:1,uuid:book.uuid,before:body.before,after:{title:body.title,authors:body.authors}});
+  expect(JSON.parse(calibreCalls.at(-1)!.stdin!).books[0]).toMatchObject({calibre_id:1,uuid:book.uuid,before:body.before,after:{title:body.title,authors:body.authors,year:body.year}});
   expect(refreshes).toBe(count+1);
-  expect(job.items).toHaveLength(1);expect(job.items[0].metadata).toEqual({before:body.before,after:{title:body.title,authors:body.authors}});
+  expect(job.items).toHaveLength(1);expect(job.items[0].metadata).toEqual({before:body.before,after:{title:body.title,authors:body.authors,year:body.year}});
   const audit=await(await fetch(`${base}/api/changes?job=${job.id}`)).json();
   expect(audit.rows).toEqual([expect.objectContaining({kind:"metadata_corrected",actor:"me@example.com"})]);
 });
@@ -383,4 +383,15 @@ it("renders an actual PDF cover for metadata review", async () => {
   const response = await fetch(`${base}/api/books/main%3A1/cover`);
   expect(response.status).toBe(200);expect(response.headers.get("content-type")).toBe("image/png");
   expect(Buffer.from(await response.arrayBuffer()).subarray(1,4).toString()).toBe("PNG");
+});
+
+it("accepts year-only corrections and rejects invalid or stale reviewed years", async () => {
+  const book=await(await fetch(`${base}/api/books/main%3A1`)).json();
+  const body={title:book.title,authors:book.authors,year:2023,before:{title:book.title,authors:book.authors,year:book.publication_year.calibre}};
+  const send=(value:unknown)=>fetch(`${base}/api/books/main%3A1/metadata`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:JSON.stringify(value)});
+  expect((await send({...body,year:2023.5})).status).toBe(400);
+  expect((await send({...body,before:{...body.before,year:1900}})).status).toBe(400);
+  const response=await send(body);expect(response.status).toBe(202);
+  const job=await waitForJob((await response.json()).id);expect(job.status).toBe("succeeded");
+  expect(job.params.plan.books[0]).toMatchObject({before:body.before,after:{title:book.title,authors:book.authors,year:2023}});
 });

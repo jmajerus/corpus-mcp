@@ -271,12 +271,12 @@ down they show as unknown or unreachable, and the rest of the page is current.
 
 ### Correcting missing authors and filename titles
 
-Use **Books → Correct authors or title** to list books needing review. The book's Title page card has an editable title and one author per line, prefilled
+Use **Books → Correct authors, title, or year** to list books needing review. The book's Title page card has an editable title, one author per line, and publication year, prefilled
 from its title page when available. It shows the cover beside the correction;
 PDFs can render the first page when no Calibre cover image has been mirrored yet.
 Compare the values with the book, edit them if needed, then choose **Apply to Calibre**.
 The single action checks the same reviewed plan on the source host, backs up
-`metadata.db`, changes title/authors and regenerates their sort fields through Calibre’s metadata API, records the change,
+`metadata.db`, changes title/authors/year and regenerates sort fields for changed titles or authors through Calibre’s metadata API, records the change,
 and refreshes the index. An unchanged-file move caused by Calibre renaming the
 book's folder preserves extracted text and saved anchors. Resolved citekey blockers
 then clear normally; other missing fields can still block a citekey.
@@ -288,3 +288,10 @@ commands (`deploy --source-setup` or `--source-setup-user-key`). These commands 
 `tools/calibre-metadata.py`; the existing tag and conversion commands are unchanged.
 
 The source writer uses `calibre-debug` from the same Calibre installation as the existing source tools. The metadata API accepts ordered author lists directly, preserving author order and comma-containing names, and recomputes title/author sort values. See the [Calibre database API](https://manual.calibre-ebook.com/db_api.html).
+
+Publication year defaults to Calibre's current year, falling back to the extracted
+publication/copyright year when Calibre has none. It can be edited or left unknown.
+The review filter includes books missing only a Calibre year. Saving a new year
+writes a year-only publication date (January 1 at noon UTC); an unchanged year
+preserves the full existing date. The refresh recomputes the proposed citekey,
+while pinned or Calibre-assigned citekeys retain their usual precedence.

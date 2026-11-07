@@ -19,7 +19,7 @@ export type JobMode = "preview" | "apply";
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
-  metadata: { title: "Correct title and authors in Calibre", calibre: true, previewable: false },
+  metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
   backup: { title: "Back up data.db", calibre: false, previewable: false },
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
@@ -145,7 +145,7 @@ export class JobRunner {
 
     let params: Record<string, unknown> = {};
     if (kind === "metadata") {
-      if (mode !== "apply" || !opts.metadata) throw new ToolError("Review the title and authors on the book page first.");
+      if (mode !== "apply" || !opts.metadata) throw new ToolError("Review the title, authors, and year on the book page first.");
       params = { plan: metadataRepairPlan(this.c, this.config.shelvesLibrary, opts.metadata) };
     } else if (spec.calibre && mode === "apply") {
       // An apply runs exactly what its preview listed, and only a recent, successful preview.

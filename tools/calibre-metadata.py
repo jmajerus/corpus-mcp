@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview/apply the reviewed title and author fields through the Calibre metadata API, never direct SQL writes."""
+"""Preview/apply the reviewed title, author, and publication-year fields through the Calibre metadata API, never direct SQL writes."""
 import argparse
 import datetime
 import json
@@ -27,12 +27,14 @@ def main():
         raise ValueError('Invalid book identity.')
     for key in ['before', 'after']:
         value = book.get(key)
-        if not isinstance(value, dict) or set(value) != {'title', 'authors'}:
-            raise ValueError('Only title and authors may be changed.')
+        if not isinstance(value, dict) or set(value) != {'title', 'authors', 'year'}:
+            raise ValueError('Only title, authors, and publication year may be changed.')
         if not isinstance(value['title'], str) or (key == 'after' and not value['title'].strip()) or len(value['title']) > 1000:
             raise ValueError('Enter a title.')
         if not isinstance(value['authors'], list) or (key == 'after' and not value['authors']) or len(value['authors']) > 100:
             raise ValueError('Enter the authors.')
+        if value['year'] is not None and (type(value['year']) is not int or not 1001 <= value['year'] <= 9999):
+            raise ValueError('Enter a publication year from 1001 to 9999, or leave it blank.')
         if any(not isinstance(a, str) or not a.strip() or len(a) > 300 for a in value['authors']):
             raise ValueError('Invalid author.')
         if any(ord(c) < 32 for t in [value['title'], *value['authors']] for c in t):
@@ -43,20 +45,27 @@ def main():
     if any('|' in a for a in after['authors']) or len({a.lower() for a in after['authors']}) != len(after['authors']):
         raise ValueError('Enter each author separately.')
 
+    def year_of(value):
+        try:
+            year = value.year if hasattr(value, 'year') else int(str(value)[:4])
+            return year if year > 1000 else None
+        except (ValueError, TypeError):
+            return None
+
     def read():
         with sqlite3.connect(f'file:{library / "metadata.db"}?mode=ro', uri=True) as db:
-            row = db.execute('SELECT uuid,title FROM books WHERE id=?', (book_id,)).fetchone()
+            row = db.execute('SELECT uuid,title,pubdate FROM books WHERE id=?', (book_id,)).fetchone()
             if not row or row[0] != book['uuid']:
                 raise ValueError('That Calibre id no longer belongs to this book. Refresh and review again.')
             authors = [r[0] for r in db.execute('SELECT a.name FROM books_authors_link l JOIN authors a ON a.id=l.author WHERE l.book=? ORDER BY l.id', (book_id,))]
-            return {'title': row[1], 'authors': authors}
+            return {'title': row[1], 'authors': authors, 'year': year_of(row[2])}
 
     current = read()
-    if current['title'] == after['title'] and [a.replace('|', ',') for a in current['authors']] == after['authors']:
+    if current['year'] == after['year'] and current['title'] == after['title'] and [a.replace('|', ',') for a in current['authors']] == after['authors']:
         print('The reviewed metadata is already applied.')
         return
     if current != book['before']:
-        raise ValueError('Title or authors changed since this form was loaded. Refresh and review again.')
+        raise ValueError('Title, authors, or publication year changed since this form was loaded. Refresh and review again.')
     if args.calibre_write:
         # Run by calibre-debug so the same API as Calibre's CLI owns all metadata/filesystem writes.
         from calibre.db.legacy import LibraryDatabase
@@ -65,14 +74,20 @@ def main():
             api = db.new_api
             with api.write_lock:
                 mi = api.get_metadata(book_id)
-                expected = {'title': book['before']['title'], 'authors': [a.replace('|', ',') for a in book['before']['authors']]}
-                if mi.uuid != book['uuid'] or {'title': mi.title, 'authors': mi.authors} != expected:
+                expected = {'title': book['before']['title'], 'authors': [a.replace('|', ',') for a in book['before']['authors']], 'year': book['before']['year']}
+                if mi.uuid != book['uuid'] or {'title': mi.title, 'authors': mi.authors, 'year': year_of(mi.pubdate)} != expected:
                     raise ValueError('Metadata changed before the write. Refresh and review again.')
                 from calibre.ebooks.metadata import title_sort
-                api.set_field('title', {book_id: after['title']})
-                api.set_field('authors', {book_id: after['authors']})
-                api.set_field('sort', {book_id: title_sort(after['title'], lang=(mi.languages or [None])[0])})
-                api.set_field('author_sort', {book_id: api.author_sort_from_authors(after['authors'])})
+                from calibre.utils.date import UNDEFINED_DATE
+                if after['year'] != current['year']:
+                    date = UNDEFINED_DATE if after['year'] is None else datetime.datetime(after['year'], 1, 1, 12, tzinfo=datetime.timezone.utc)
+                    api.set_field('pubdate', {book_id: date})
+                if after['title'] != current['title']:
+                    api.set_field('title', {book_id: after['title']})
+                    api.set_field('sort', {book_id: title_sort(after['title'], lang=(mi.languages or [None])[0])})
+                if after['authors'] != [a.replace('|', ',') for a in current['authors']]:
+                    api.set_field('authors', {book_id: after['authors']})
+                    api.set_field('author_sort', {book_id: api.author_sort_from_authors(after['authors'])})
         finally:
             db.close()
         return
@@ -91,7 +106,7 @@ def main():
     command = [str(binary), '-e', str(pathlib.Path(__file__).resolve()), '--', '--calibre-write', str(library)]
     subprocess.run(command, input=json.dumps(plan), text=True, check=True)
     actual = read()
-    if actual['title'] != after['title'] or [a.replace('|', ',') for a in actual['authors']] != after['authors']:
+    if actual['year'] != after['year'] or actual['title'] != after['title'] or [a.replace('|', ',') for a in actual['authors']] != after['authors']:
         raise ValueError('Calibre did not store the reviewed values; inspect the job and its backup.')
     print('@@change ' + json.dumps({'calibre_id': book_id, 'uuid': book['uuid'], 'title': after['title'], 'metadata': {'before': current, 'after': after}}, ensure_ascii=False))
 

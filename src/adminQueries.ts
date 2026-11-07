@@ -89,7 +89,7 @@ export function adminBooks(c: Corpus, query: AdminBookQuery) {
     for (const p of s.problems) facets.problem[p] = (facets.problem[p] ?? 0) + 1;
   }
   const filtered = all.filter(({ b, s }) =>
-    (!query.metadata || s.author !== "calibre" || mangledTitle(b.title)) && (!query.category || s.category === query.category) && (!query.citekey || s.citekey === query.citekey)
+    (!query.metadata || s.author !== "calibre" || mangledTitle(b.title) || b.year === null) && (!query.category || s.category === query.category) && (!query.citekey || s.citekey === query.citekey)
     && (!query.isbn || s.isbn === query.isbn) && (!query.year || s.year === query.year) && (!query.author || s.author === query.author) && (!query.problem || s.problems.includes(query.problem)));
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
   const offset = Math.max(query.offset ?? 0, 0);

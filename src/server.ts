@@ -457,8 +457,8 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     else if (req.method === "POST" && bookPath?.[2] === "/metadata") {
       const by = await writer();
       if (by === null) return;
-      const body = await readJson(req) as { title?: unknown; authors?: unknown; before?: unknown };
-      const id = runner.start("metadata", "apply", { metadata: { book_id: decodeURIComponent(bookPath[1]), title: body?.title, authors: body?.authors, before: body?.before } }, by);
+      const body = await readJson(req) as { title?: unknown; authors?: unknown; year?: unknown; before?: unknown };
+      const id = runner.start("metadata", "apply", { metadata: { book_id: decodeURIComponent(bookPath[1]), title: body?.title, authors: body?.authors, year: body?.year, before: body?.before } }, by);
       sendJson(res, 202, { id });
     }
     else if (req.method === "POST" && bookPath?.[2] === "/categories") {

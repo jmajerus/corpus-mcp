@@ -759,7 +759,7 @@ function printedYearReport(c: Corpus) {
     return { book_id: b.id, title: b.title, year: b.printed_year, kind: from.kind, page: from.page, position: from.position, context: from.context };
   });
   return {
-    note: "Calibre has no publication year for these books, but their text prints one, which citations and proposed citekeys use. Confirm it and add it in Calibre.",
+    note: "These books use a printed year for citations and proposed citekeys. Review the suggested publication year on the book page and use Apply to Calibre to save it.",
     books_without_year: books.length,
     books_printing_year: found.length,
     books: found.slice(0, 100),

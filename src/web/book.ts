@@ -9,7 +9,7 @@ export const BOOK_HTML = page({
 .head .links { font-size: 0.9rem; }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-top: 14px; }
 .metadata-review { display:grid; grid-template-columns:minmax(0,1fr) 120px; gap:12px; align-items:start; }
-.metadata-review .cover { grid-column:2; grid-row:1 / span 2; }
+.metadata-review .cover { grid-column:2; grid-row:1 / span 3; }
 .metadata-review label { grid-column:1; }
 .card h2 { margin: 0 0 8px; font-size: 1rem; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 0.88rem; }
@@ -89,7 +89,7 @@ function render() {
   const yearKinds = { copyright: "copyright", edition: "this edition", first_published: "first published", published: "published", reprint: "reprint (not used)" };
   const yearCard = '<div class="card"><h2>Publication year</h2>' + kv([
     ["In Calibre", y.calibre ? String(y.calibre) : '<span class="note">None</span>'],
-    ["Cited as", y.year ? y.year + (y.year_source === "printed" ? ' <span class="note">from the text; add it in Calibre</span>' : "") : null]]) +
+    ["Cited as", y.year ? y.year + (y.year_source === "printed" ? ' <span class="note">from the book</span>' : "") : null]]) +
     (y.candidates.length ? '<table style="margin-top:8px"><thead><tr><th>Printed</th><th>As</th><th>Where</th><th>Line</th></tr></thead><tbody>' +
       y.candidates.map((p) => "<tr><td>" + p.year + "</td><td>" + esc(yearKinds[p.kind] || p.kind) + "</td><td>" + (p.position === "back" ? "back page " : "page ") + p.page +
         '</td><td class="note">' + esc(p.context) + "</td></tr>").join("") + "</tbody></table>" : "") + "</div>";
@@ -101,14 +101,17 @@ function render() {
   const candidates = corroborated.length ? corroborated : tp.authors.filter(a => a.sources.includes("about") || a.sources.includes("by"));
   const needsAuthor = tp.author_state !== "calibre";
   const authorValues = needsAuthor && candidates.length ? candidates.map(a => a.name) : tp.author_state === "none" ? [] : b.authors.map(a => a.replaceAll("|", ","));
-  const repair = (needsAuthor || tp.title_is_file_name) ? '<div class="editor"><h2>Correct title and authors</h2>' +
+  const needsYear = y.calibre === null;
+  const repair = (needsAuthor || tp.title_is_file_name || needsYear) ? '<div class="editor"><h2>Correct title, authors, and year</h2>' +
     '<div class="note">Review these values against the book. Apply saves them in Calibre and refreshes this book’s metadata.</div>' +
     '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
     '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canWrite ? "" : " disabled") + '></label>' +
-    '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canWrite ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label></div>' +
+    '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canWrite ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +
+    '<label>Publication year<input id="metadata-year" type="number" min="1001" max="9999" step="1" placeholder="Unknown" style="display:block;width:100%;box-sizing:border-box" value="' + esc(y.calibre ?? y.printed ?? "") + '"' + (canWrite ? "" : " disabled") + '></label></div>' +
+    (needsYear && y.printed ? '<p class="note">Year suggested from the book’s publication/copyright evidence above.</p>' : "") +
     '<p><a href="/admin/books/' + encodeURIComponent(id) + '/read?page=1">Read the opening pages</a></p>' +
     '<button type="button" class="primary" id="apply-metadata"' + (canWrite ? "" : " disabled") + '>Apply to Calibre</button></div>' : "";
-  const titlePageCard = (tp.authors.length || tp.title || tp.title_is_file_name || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
+  const titlePageCard = (tp.authors.length || tp.title || tp.title_is_file_name || needsYear || tp.author_state !== "calibre") ? '<div class="card"><h2>Title page</h2>' +
     (tp.title_is_file_name ? kv([["Printed title", tp.title ? esc(tp.title.title) + ' <span class="note">page ' + tp.title.page + ", for Calibre's file name of a title</span>" : '<span class="note">Not found</span>']]) : "") +
     (tp.authors.length ? '<table style="margin-top:8px"><thead><tr><th>Author</th><th>From</th><th>Where</th><th>Line</th></tr></thead><tbody>' +
       tp.authors.map((a) => "<tr><td>" + esc(a.name) + "</td><td>" + esc(a.sources.map((x) => fromLabels[x] || x).join(", ")) + "</td><td>page " + a.page +
@@ -161,11 +164,14 @@ document.getElementById("book").addEventListener("click", async (e) => {
   if (t.dataset.remove) { desired = desired.filter((x) => x !== t.dataset.remove); renderDesired(); return; }
   try {
     if (t.id === "apply-metadata") {
+      const yearInput = document.getElementById("metadata-year");
+      if (!yearInput.checkValidity()) { yearInput.reportValidity(); return; }
       t.disabled = true;
       try {
         const out = await post("/api/books/" + encodeURIComponent(id) + "/metadata", {
           title: document.getElementById("metadata-title").value,
-          before: { title: book.title, authors: book.authors },
+          year: yearInput.value.trim() ? Number(yearInput.value) : null,
+          before: { title: book.title, authors: book.authors, year: book.publication_year.calibre },
           authors: document.getElementById("metadata-authors").value.split("\\n").map(a => a.trim()).filter(Boolean)
         });
         location.href = "/admin/jobs/" + out.id;
