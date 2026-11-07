@@ -78,3 +78,10 @@ export async function saveReaderQuote(base: string, book: BookRow, save: ReaderS
   if (r.status === 502) throw new QuoteMcpError("quote-mcp couldn't check the passage against this book.");
   throw new QuoteMcpError(`quote-mcp answered ${r.status}${typeof b.error === "string" ? ` (${b.error})` : ""}.`);
 }
+
+/** Includes unanchored quotes too: deletion must not rely only on visible reader highlights. */
+export async function assertNoBookQuotes(base: string, uuid: string): Promise<void> {
+  const r = await call(base, "GET", `/api/corpus/quotes?book=${encodeURIComponent(uuid)}`);
+  if (r.status !== 200 || !Array.isArray(r.body.quotes)) throw new QuoteMcpError("Could not verify quote-mcp references. Try again before trashing a duplicate.");
+  if (r.body.quotes.length) throw new QuoteMcpError("The duplicate has quotes in quote-mcp, including possible unanchored quotes. Resolve those references first.");
+}

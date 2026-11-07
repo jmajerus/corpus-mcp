@@ -26,6 +26,7 @@ export class ToolError extends Error {}
 
 /** The read-only index, the read-write primary data, the mirrored book files, and the tag vocabulary. */
 export interface Corpus {
+  writesPaused?: string;
   db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary;
   /** Where the vocabulary comes from, when it is a file (the server); tests pass a Vocabulary alone. */
   vocabularySource?: VocabularySource;
@@ -596,6 +597,7 @@ export interface PinArgs { book_id: string; citekey: string; replace?: boolean }
 
 /** Records a citekey assigned elsewhere (when the book was filed in a reference manager), against the book's Calibre UUID. */
 export function pinCitekey(c: Corpus, args: PinArgs, pinnedBy?: string, source: "agent" | "admin" | "zotero" = "agent") {
+  if (c.writesPaused) throw new ToolError(c.writesPaused);
   const book = getBook(c, args.book_id);
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so its citekey cannot be pinned.`);
   // Kept as given: another project's keys may use capitals (Better BibTeX's nyeFuturePower2011). Lookups ignore case.

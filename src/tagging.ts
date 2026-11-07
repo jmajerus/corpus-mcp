@@ -126,6 +126,7 @@ export function taggingWorklist(c: Corpus, args: WorklistArgs = {}) {
 export interface ProposeArgs { book_id: string; tags: string[]; rationale: string }
 
 export function proposeTags(c: Corpus, args: ProposeArgs, proposedBy?: string) {
+  if (c.writesPaused) throw new ToolError(c.writesPaused);
   const book = getBook(c, args.book_id);
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID, so it cannot be tagged.`);
   const tags = canonicalTags(c, args.tags, MAX_TAGS);

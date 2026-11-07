@@ -10,6 +10,8 @@ import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
+import { duplicatePairs, dismissDuplicate } from "./duplicates.js";
+import { DUPLICATES_HTML } from "./web/duplicates.js";
 import { adminMetrics } from "./admin.js";
 import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
 import { type Config, loadConfig } from "./config.js";
@@ -376,9 +378,10 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
   };
   const html = (body: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(body);
   try {
+    if (req.method !== "GET" && c.writesPaused) throw new ToolError(c.writesPaused);
     const path = url.pathname;
     const pages: Record<string, string> = {
-      "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
+      "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
@@ -439,6 +442,19 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       }, by));
     }
     else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);
+    else if (req.method === "GET" && path === "/api/duplicates") sendJson(res, 200, duplicatePairs(c, config.shelvesLibrary, url.searchParams.get("dismissed") === "1"));
+    else if (req.method === "POST" && path === "/api/duplicates/review") {
+      const by = await writer(); if (by === null) return;
+      const body = await readJson(req) as {ids?:unknown;fingerprint?:unknown;reopen?:unknown};
+      if (!Array.isArray(body.ids) || body.ids.length !== 2 || !body.ids.every(x=>typeof x === "string") || typeof body.fingerprint !== "string") throw new ToolError("Review a duplicate pair first.");
+      sendJson(res, 200, dismissDuplicate(c, config.shelvesLibrary, body.ids, body.fingerprint, body.reopen === true, by));
+    }
+    else if (req.method === "POST" && path === "/api/duplicates/preview") {
+      const by = await writer(); if (by === null) return;
+      const body = await readJson(req) as {keep:string;remove:string;fingerprint:string;discard_conflicts?:boolean};
+      if (!body || typeof body.keep !== "string" || typeof body.remove !== "string" || typeof body.fingerprint !== "string") throw new ToolError("Choose a keeper and review the pair first.");
+      sendJson(res,202,{id:runner.start("duplicates","preview",{duplicate:body},by)});
+    }
     else if (req.method === "GET" && path === "/api/books") {
       const p = url.searchParams;
       const text = (name: string) => p.get(name)?.trim() || undefined;
