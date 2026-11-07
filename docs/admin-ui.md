@@ -276,7 +276,7 @@ from its title page when available. It shows the cover beside the correction;
 PDFs can render the first page when no Calibre cover image has been mirrored yet.
 Compare the values with the book, edit them if needed, then choose **Apply to Calibre**.
 The single action checks the same reviewed plan on the source host, backs up
-`metadata.db`, changes title/authors/year and regenerates sort fields for changed titles or authors through Calibre’s metadata API, records the change,
+`metadata.db` and the book’s files, changes title/authors/year and regenerates sort fields for changed titles or authors through Calibre’s metadata API, records the change,
 and refreshes the index. An unchanged-file move caused by Calibre renaming the
 book's folder preserves extracted text and saved anchors. Resolved citekey blockers
 then clear normally; other missing fields can still block a citekey.
@@ -295,3 +295,13 @@ The review filter includes books missing only a Calibre year. Saving a new year
 writes a year-only publication date (January 1 at noon UTC); an unchanged year
 preserves the full existing date. The refresh recomputes the proposed citekey,
 while pinned or Calibre-assigned citekeys retain their usual precedence.
+
+
+If an Apply fails after some fields were written, the job records the actual partial
+change and attempts a refresh before reporting failure. Keep both the database
+backup and its matching `.files` directory. Restoring only the database cannot undo
+Calibre's folder renames. The operator-only `calibre-metadata-recover.py`, installed
+alongside the writer, previews and restores that book through Calibre's API.
+See [operator validation and recovery](dev-briefs/metadata-operator-validation.md)
+for the tested procedure and its limits. File snapshots are excluded from corpus
+mirrors; they are retained on the source host until an operator removes them.

@@ -452,7 +452,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         problem: oneOf(p.get("problem"), ["failed", "no_file", "no_text", "no_outline"] as const),
         sort: oneOf(p.get("sort"), ["title", "year", "id"] as const),
         limit: p.has("limit") ? Number(p.get("limit")) : undefined, offset: p.has("offset") ? Number(p.get("offset")) : undefined,
-      }));
+      }, config.shelvesLibrary));
     } else if (req.method === "GET" && bookPath && !bookPath[2]) sendJson(res, 200, adminBook(c, config, decodeURIComponent(bookPath[1])));
     else if (req.method === "POST" && bookPath?.[2] === "/metadata") {
       const by = await writer();

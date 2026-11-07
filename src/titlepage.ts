@@ -33,7 +33,7 @@ export interface TitlePageScan {
 }
 
 /** Bump when scanTitlePage changes, so the indexer recomputes stored candidates (no re-extraction). */
-export const TITLE_PAGE_SCAN_VERSION = 3;
+export const TITLE_PAGE_SCAN_VERSION = 4;
 
 export interface ScanPage { page_index: number; section_path: string | null; text: string }
 
@@ -210,8 +210,8 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
   // Pandoc may put the title and each author in separate blocks. Use the initial title
   // run, stopping before copyright/front-matter boundaries, rather than a later multiline code block.
   const titleStart = pages.findIndex(p => p.page_index < 20 && titles.some(t => squash(p.text).includes(t)));
-  if (titleStart >= 0 && (!titlePage || titlePage.page_index > pages[titleStart].page_index + 10)) titlePage = pages[titleStart];
-  if (titlePage && titlePage.text.split("\n").filter(l => l.trim()).length < 2) {
+  if (titleStart >= 0 && (!titlePage || (titlePageRank(titlePage) === 0 && titlePage.page_index > pages[titleStart].page_index + 10))) titlePage = pages[titleStart];
+  if (titlePage && titlePage.text.split("\n").filter(l => l.trim()).length <= 2 && !/copyright|all rights reserved|table of contents|about the author/i.test(titlePage.text)) {
     const start = pages.indexOf(titlePage), parts = [titlePage.text];
     let size = titlePage.text.length;
     for (let i = start + 1; i < pages.length && i <= start + 20; i++) {

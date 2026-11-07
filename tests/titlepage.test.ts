@@ -107,3 +107,19 @@ it("recovers the full title with its leading article rather than a later partial
 it("keeps leading articles when the filename contains them", () => {
   expect(scanTitlePage([page(1,"The Kubernetes Bible\nSecond Edition")],"thekubernetesbible").title?.title).toBe("The Kubernetes Bible");
 });
+
+it("keeps an explicitly marked title page over an earlier matching fallback", () => {
+ const result=scanTitlePage([
+  page(0,"A Formal Title\nEarly Noise"),
+  page(40,"A Formal Title\nActual Writer","Title Page"),
+ ],"A Formal Title");
+ expect(names(result)).toEqual(["Actual Writer"]);
+});
+it("collects separate authors after a two-line initial title block", () => {
+ const result=scanTitlePage([
+  page(0,"A Formal Title\nA subtitle about reliable systems"),
+  page(1,"Ada Lovelace"),page(2,"Grace Hopper"),
+  page(3,"Copyright 2024 Packt Publishing","Copyright"),
+ ],"A Formal Title");
+ expect(names(result)).toEqual(["Ada Lovelace","Grace Hopper"]);
+});
