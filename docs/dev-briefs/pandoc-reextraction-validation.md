@@ -74,22 +74,21 @@ used by the private candidate; production has not received it yet.
 
 ## Activation gates
 
-The deployed quote-mcp revision is `5af3fb262dca7eb15e0c437a9c9e72bfa21b8d8a`. Its corpus API and
-citation queries still apply guessed `reflow` to canonical text. All five existing feed samples happen
-to have `prose === text`, but that does not prove preservation for new captures: the deployed function
-changes synthetic verse, code, and a heading followed by a paragraph. The quote-mcp working tree has
-other edits and was not modified or deployed during validation. Coordinate its canonical-text change
-and consumer validation before activating these EPUBs.
+During the initial validation, quote-mcp revision `5af3fb262dca7eb15e0c437a9c9e72bfa21b8d8a` still
+applied guessed `reflow` to canonical text. The existing five feeds happened to have `prose === text`,
+but synthetic verse, code, and heading/paragraph examples changed. The subsequent consumer deployment
+and rehearsal below supersede that deployment finding. The baseline commit alone does not identify
+the currently deployed consumer patch.
 
 Deploy the corpus metadata correction before cutover. Reconcile current library/index state and
 anchor ownership at cutover, and retain rollback. The observed catalogue drift during the structural
 check was `indexed_at` alone in `main:127`, `main:47`, and `main:51`; live primary-data drift was in
 `meta`. Do not replace current primary data with the older candidate snapshot.
 
-The four anchored EPUBs (`main:53`, `main:133`, `main:581`, `main:570`) still require separately reviewed
-anchor/quote migration. This includes the book that originally exposed the paragraph problem. The 62
-refused books retain their original extraction; they do not require rerunning the 239 successful ones.
-All reports keep `promotionReady: false`.
+The four anchored EPUBs (`main:53`, `main:133`, `main:581`, `main:570`) remain unchanged in production.
+The subsequent rehearsal below accepts two and defers two, including the book that originally exposed
+the paragraph problem. The 62 refused unanchored books retain their original extraction; they do not
+require rerunning the 239 successful ones. All reports keep `promotionReady: false`.
 
 ## PR #21 review: unset extractor versions
 
@@ -103,3 +102,51 @@ syntax check pass.
 A read-only census of the run snapshot, candidate, and live index finds 305 indexed EPUBs and zero
 unset extractor versions in each. This defect did not omit books from the completed run; its counts
 and validation remain valid, and no re-extraction is needed for this correction.
+
+## Consumer handoff verified, 2026-11-07 UTC
+
+The quote-mcp handoff at `/home/john/Workspace/quote-mcp/docs/dev-briefs/pandoc-quote-text.md` records
+the canonical-text deployment and a separate anchored-book rehearsal. This session checked the server
+evidence and current deployments read-only; it did not deploy either application or modify quote-mcp.
+
+Quote-mcp's current release is `/opt/quote-mcp/releases/20261107-055331`: production baseline
+`5af3fb262dca7eb15e0c437a9c9e72bfa21b8d8a` plus the scoped canonical-text patch. Its four changed
+module hashes match the recorded tested build. The deployment record explicitly identifies the dirty
+patch and excludes the capture-page and Home Assistant work. Stored text now survives citation and
+reader output, with the compatibility `prose` field equal to `text`.
+
+The quote server's `/var/lib/quote-mcp/validation/canonical-text-20261107.json` records 363 isolated
+baseline tests, 40 deployed-module assertions, five preserved live feeds, and five preserved live MCP
+citations. These counts and preservation flags were checked, and all four current module hashes were
+independently matched to that evidence. This closes the earlier canonical-text deployment gate.
+
+The separate corpus inspection pair is at
+`/var/lib/corpus-mcp/reextraction/20261106-pandoc-v3/anchored-review-20261107/`.
+Its staging report and `consumer-review.json` confirm:
+
+| Book | Quote | Rehearsal outcome |
+| --- | --- | --- |
+| `main:53` | 831 | Staged with Pandoc 3.1.11.1/adapter 3; 231 old locations become 2,674; anchor starts at index 756 instead of 154. |
+| `main:581` | 829 | Staged with the same pins; 75 old locations become 534; anchor starts at index 126 instead of 21. |
+| `main:133` | 830 | Deferred: a navigation target is outside the linear XHTML spine. |
+| `main:570` | 832 | Deferred: a Pandoc invocation reached its two-minute timeout. |
+
+For the two staged books, stored quote text equals both the old and new anchor text. Only anchor
+metadata must migrate; no `quotes.text` rewrite is necessary. The quote server's
+`/var/lib/quote-mcp/validation/anchored-consumer-rehearsal-20261107.json` confirms that metadata
+migrates while text stays intact, and the rollback log reset replays old locations. The corpus report
+records no errors and exercises suppression of stale reader highlights and restoration after replay.
+The orphan/found rehearsal preserves quote 832's editorial text as well.
+
+These are implementation/API rehearsals, not a browser visual test. Known-page verification passes;
+the initial unhinted saved-passage probes failed. Unhinted whole-book discovery has not been validated
+by this rehearsal and must not be represented as passing.
+
+The possible rollout is now **241 accepted books** (239 unanchored plus these two), retaining 64 on
+their existing extraction (62 unanchored refusals plus two anchored deferrals). The accepted anchored
+pair is separate from the 239-book candidate. Assemble the cutover from fresh live state and explicitly
+select accepted book content and anchor changes; neither older data snapshot may replace current
+primary data. Recheck current files and saved-anchor ownership for every selected book, deploy the
+corpus metadata correction, and perform live consumer-feed and rollback checks at cutover. New live
+changes may alter that selection. Corpus still serves all 305 indexed EPUBs on profile 1; no activation
+or live quote/anchor migration was performed by this handoff review.

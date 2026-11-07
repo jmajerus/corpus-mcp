@@ -43,9 +43,11 @@ Background unit: `corpus-pandoc-reextraction-20261106.service`.
 ## Activation remains separate
 
 No candidate is automatically promoted. The live service remains available on its current index.
-The production quote-mcp build still needs its canonical paragraph/anchor handling verified; local
-quote-mcp source edits alone do not establish deployed compatibility. The four anchored EPUBs need
-that consumer/migration validation before their locations change.
+The quote-mcp canonical-text patch is now deployed and verified. A separate anchored-book rehearsal
+accepts two of the four held EPUBs and defers two, without changing production. See the updated
+[validation brief](pandoc-reextraction-validation.md#consumer-handoff-verified-2026-11-07-utc) for the
+release evidence, migration boundary, and remaining cutover checks. The corpus metadata correction
+still needs deployment before activation.
 
 The live service and normal refresh may create newer metadata, books, or anchors after capture.
 Before activation, reconcile those changes and recheck file hashes, saved-anchor ownership, search,
