@@ -113,6 +113,7 @@ script=sys.argv[1];sys.argv=sys.argv[1:];runpy.run_path(script,run_name='__main_
 ''')
     failed = run(['/usr/bin/calibre-debug','-e',str(fault),'--',str(helper),str(library),str(web),'--apply'],preview['plan'],expected=None)
     assert failed.returncode != 0 and 'duplicate_partial' in failed.stdout
+    assert 'Traceback' in failed.stderr and 'OSError: Injected failure after format copy' in failed.stderr
     with sqlite3.connect(library / 'metadata.db') as db:
         assert db.execute('SELECT count(*) FROM books').fetchone()[0] == 2
     report['checks']['partialCopyFailureAuditedWithoutTrash'] = True

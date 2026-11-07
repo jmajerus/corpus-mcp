@@ -44,3 +44,21 @@ it('clears blockers only when all removed-book references are resolved',()=>{
  web.exec('DELETE FROM book_shelf_link WHERE book_id=127;');expect(inspect()).toEqual([]);
  web.exec('INSERT INTO bookmark VALUES(127);');expect(inspect()[0]).toContain('bookmarks');
 });
+
+it.each(['{}','null','{"discard_conflicts":true}', '{"discard_conflicts":true,"keep":null}', 'not JSON'])('reports an invalid review plan concisely: %s',input=>{
+ const result=spawnSync('python3',['-B',path.resolve('tools/calibre-duplicates.py'),root,path.join(root,'web.db')],{input,encoding:'utf8'});
+ expect(result.status).toBe(1);expect(result.stderr.trim()).toMatch(/Review conflicting formats|Invalid book identity|valid JSON/);
+ expect(result.stderr).not.toContain('Traceback');
+});
+
+it.each(['KeyError','TypeError','OSError','ValueError','sqlite3.OperationalError'])('preserves the traceback for an unexpected %s',type=>{
+ const script=`import json,runpy,sys,sqlite3
+original=sys.argv[1]
+def fault(*args,**kwargs):raise ${type}('injected unexpected failure')
+json.load=fault
+sys.argv=[original,sys.argv[2],sys.argv[3]]
+runpy.run_path(original,run_name='__main__')`;
+ const result=spawnSync('python3',['-B','-c',script,path.resolve('tools/calibre-duplicates.py'),root,path.join(root,'web.db')],{encoding:'utf8'});
+ expect(result.status).not.toBe(0);expect(result.stderr).toContain('Traceback');
+ expect(result.stderr).toContain(type+':');expect(result.stderr).toContain('injected unexpected failure');
+});

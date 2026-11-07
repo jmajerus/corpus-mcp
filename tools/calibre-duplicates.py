@@ -11,6 +11,10 @@ import sys
 import zipfile
 
 
+class DuplicateReviewError(Exception):
+    """An expected validation failure that an operator can resolve."""
+
+
 def digest(file):
     h = hashlib.sha256()
     with file.open('rb') as stream:
@@ -22,7 +26,7 @@ def digest(file):
 def inside(root, relative):
     p = root / relative
     if p.is_symlink() or not p.resolve().is_relative_to(root.resolve()):
-        raise ValueError('Book path escapes the library or contains a symlink.')
+        raise DuplicateReviewError('Book path escapes the library or contains a symlink.')
     return p
 
 
@@ -70,15 +74,18 @@ def main():
     parser.add_argument('app_db', type=pathlib.Path)
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
-    plan = json.load(sys.stdin)
-    if type(plan.get('discard_conflicts')) is not bool:
-        raise ValueError('Review conflicting formats explicitly.')
+    try:
+        plan = json.load(sys.stdin)
+    except json.JSONDecodeError as error:
+        raise DuplicateReviewError('Send a valid JSON duplicate review plan.') from error
+    if not isinstance(plan, dict) or type(plan.get('discard_conflicts')) is not bool:
+        raise DuplicateReviewError('Review conflicting formats explicitly.')
     for key in ['keep', 'remove']:
-        ref = plan[key]
-        if type(ref['id']) is not int or ref['id'] < 1 or not isinstance(ref['uuid'], str):
-            raise ValueError('Invalid book identity.')
+        ref = plan.get(key)
+        if not isinstance(ref, dict) or type(ref.get('id')) is not int or ref['id'] < 1 or not isinstance(ref.get('uuid'), str):
+            raise DuplicateReviewError('Invalid book identity.')
     if plan['keep']['id'] == plan['remove']['id'] or plan['keep']['uuid'] == plan['remove']['uuid']:
-        raise ValueError('Choose two different books.')
+        raise DuplicateReviewError('Choose two different books.')
     from calibre.db.legacy import LibraryDatabase
     db = LibraryDatabase(str(args.library))
     try:
@@ -87,13 +94,13 @@ def main():
             def state(ref):
                 mi = api.get_metadata(ref['id'])
                 if mi.uuid != ref['uuid']:
-                    raise ValueError('A Calibre id belongs to a different book. Review again.')
+                    raise DuplicateReviewError('A Calibre id belongs to a different book. Review again.')
                 folder = api.field_for('path', ref['id'])
                 root = inside(args.library, folder)
                 files = {}
                 for file in sorted(root.rglob('*')):
                     if file.is_symlink():
-                        raise ValueError('Book contains a symlink.')
+                        raise DuplicateReviewError('Book contains a symlink.')
                     if file.is_file() and file.name != 'metadata.opf':
                         files[str(file.relative_to(root))] = digest(inside(root, file.relative_to(root)))
                 formats = {}
@@ -101,7 +108,7 @@ def main():
                     file = pathlib.Path(api.format_abspath(ref['id'], fmt))
                     rel = str(file.relative_to(root))
                     if rel not in files:
-                        raise ValueError('A declared book format is missing.')
+                        raise DuplicateReviewError('A declared book format is missing.')
                     formats[fmt] = {'file': rel, 'sha256': files[rel]}
                 values = {k: mi.get(k) for k in ['title', 'authors', 'pubdate', 'identifiers', 'tags', 'publisher', 'comments', 'series', 'series_index', 'languages', 'rating']}
                 values['custom'] = mi.get_all_user_metadata(make_copy=True)
@@ -141,9 +148,9 @@ def main():
                 print('@@change ' + json.dumps({'calibre_id': keep['id'], 'uuid': keep['uuid'], 'title': km.title, 'duplicate_review': summary}, default=str))
                 return
             if plan.get('reviewed') != fingerprint:
-                raise ValueError('Source metadata or file bytes changed since preview. Review again.')
+                raise DuplicateReviewError('Source metadata or file bytes changed since preview. Review again.')
             if blockers:
-                raise ValueError('; '.join(blockers))
+                raise DuplicateReviewError('; '.join(blockers))
             stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
             backup = args.library / ('metadata.db.before-duplicates-' + stamp)
             with sqlite3.connect(f'file:{args.library}/metadata.db?mode=ro', uri=True) as src, sqlite3.connect(backup) as dst:
@@ -155,7 +162,7 @@ def main():
                 for name, expected in item['files'].items():
                     file = inside(saved / str(item['id']), name)
                     if digest(file) != expected:
-                        raise ValueError('Book changed during backup; no mutation was made.')
+                        raise DuplicateReviewError('Book changed during backup; no mutation was made.')
             (saved / 'review.json').write_text(json.dumps(summary, indent=2, default=str))
             print(f'Backed up both records to {backup} and {saved}', flush=True)
             def event(**fields):
@@ -164,9 +171,9 @@ def main():
                 for fmt in summary['copy_formats']:
                     source = inside(saved / str(remove['id']), remove['formats'][fmt]['file'])
                     if not api.add_format(keep['id'], fmt, str(source), replace=False, run_hooks=False):
-                        raise ValueError('Could not add unique format: ' + fmt)
+                        raise DuplicateReviewError('Could not add unique format: ' + fmt)
                     if digest(pathlib.Path(api.format_abspath(keep['id'], fmt))) != remove['formats'][fmt]['sha256']:
-                        raise ValueError('Copied format checksum failed: ' + fmt)
+                        raise DuplicateReviewError('Copied format checksum failed: ' + fmt)
                     event(added_format=fmt, source_format='duplicate')
                 tags = list(dict.fromkeys((km.tags or []) + (rm.tags or [])))
                 if tags != km.tags:
@@ -185,17 +192,17 @@ def main():
                         file.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(inside(saved / str(remove['id']), name), file)
                     if digest(file) != expected:
-                        raise ValueError('Supplementary-file checksum failed.')
+                        raise DuplicateReviewError('Supplementary-file checksum failed.')
                 if not api.field_for('cover', keep['id']) and 'cover.jpg' in remove['files']:
                     api.set_cover({keep['id']: inside(saved / str(remove['id']), 'cover.jpg').read_bytes()})
                 api.dump_metadata([keep['id']])
                 # Verify every original keeper format and every unique copied format before deletion.
                 for fmt, info in {**remove['formats'], **keep['formats']}.items():
                     if digest(pathlib.Path(api.format_abspath(keep['id'], fmt))) != info['sha256']:
-                        raise ValueError('Keeper format verification failed; duplicate was not trashed.')
+                        raise DuplicateReviewError('Keeper format verification failed; duplicate was not trashed.')
                 new_blockers = reference_blockers(args.library, args.app_db, keep['id'], remove['id'])
                 if new_blockers:
-                    raise ValueError('; '.join(new_blockers))
+                    raise DuplicateReviewError('; '.join(new_blockers))
                 api.remove_books([remove['id']], permanent=False)
                 event(duplicate_resolved={'removed_id': remove['id'], 'removed_uuid': remove['uuid'], 'backup': str(backup), 'trash': True})
             except Exception:
@@ -210,6 +217,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, KeyError, TypeError, OSError, sqlite3.Error) as error:
+    except DuplicateReviewError as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
