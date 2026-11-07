@@ -26,6 +26,44 @@ def inside(root, relative):
     return p
 
 
+def reference_blockers(library, app_db, keep_id, remove_id):
+    """Read references without editing Calibre-Web or exposing private shelf names."""
+    blockers = []
+    if not app_db.is_file():
+        blockers.append('Calibre-Web reference database is unavailable. Restore access before resolving this pair.')
+    else:
+        try:
+            with sqlite3.connect(f'file:{app_db}?mode=ro', uri=True) as web:
+                tables = {row[0] for row in web.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                for table in sorted(tables):
+                    safe = table.replace('"', '""')
+                    cols = {r[1] for r in web.execute(f'PRAGMA table_info("{safe}")')}
+                    if table == 'book_shelf_link' and {'book_id', 'shelf'}.issubset(cols) and 'shelf' in tables:
+                        for shelf_id, name, public in web.execute('SELECT DISTINCT s.id,s.name,s.is_public FROM shelf s JOIN book_shelf_link l ON l.shelf=s.id WHERE l.book_id=? ORDER BY s.id', (remove_id,)):
+                            keeper_present = web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone() is not None
+                            label = f'shelf “{name}”' if public else 'a private shelf'
+                            action = f'Keeper {keep_id} already belongs to this shelf.' if keeper_present else f'Add keeper {keep_id} to this shelf first.'
+                            blockers.append(f'Calibre-Web {label} contains duplicate {remove_id}. {action} Remove only duplicate {remove_id} from that shelf in Calibre-Web, then preview again.')
+                        # Broken links must still block even when the shelf row is missing.
+                        if web.execute('SELECT 1 FROM book_shelf_link l LEFT JOIN shelf s ON s.id=l.shelf WHERE l.book_id=? AND s.id IS NULL LIMIT 1', (remove_id,)).fetchone():
+                            blockers.append('Calibre-Web has an orphaned shelf membership for the duplicate. Repair it before resolving this pair.')
+                        continue
+                    for column in ['book_id', 'book']:
+                        if column in cols and web.execute(f'SELECT 1 FROM "{safe}" WHERE "{column}"=? LIMIT 1', (remove_id,)).fetchone():
+                            label = {'book_shelf_link': 'shelf memberships', 'bookmark': 'bookmarks', 'book_read_link': 'reading status', 'archived_book': 'archived-book links', 'downloads': 'download history'}.get(table, 'book or reading links')
+                            blockers.append(f'Calibre-Web has {label} for duplicate {remove_id}. Preserve or resolve those links in Calibre-Web, then preview again.')
+        except sqlite3.Error:
+            blockers.append('Could not inspect Calibre-Web references. Restore database access before resolving this pair.')
+    try:
+        with sqlite3.connect(f'file:{library}/metadata.db?mode=ro', uri=True) as sql:
+            if sql.execute("SELECT 1 FROM sqlite_master WHERE name='annotations'").fetchone():
+                if sql.execute('SELECT 1 FROM annotations WHERE book=? LIMIT 1', (remove_id,)).fetchone():
+                    blockers.append('The duplicate has Calibre annotations. Preserve those before resolving this pair.')
+    except sqlite3.Error:
+        blockers.append('Could not inspect Calibre annotations. Restore database access before resolving this pair.')
+    return blockers
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('library', type=pathlib.Path)
@@ -70,24 +108,7 @@ def main():
                 return {'id': ref['id'], 'uuid': mi.uuid, 'folder': folder, 'values': values, 'files': files, 'formats': formats}, mi
             keep, km = state(plan['keep'])
             remove, rm = state(plan['remove'])
-            def check_references():
-                # Calibre-Web owns shelves, bookmarks and reading state in a separate DB.
-                # Fail closed if it cannot be inspected; the normal helper has no access to edit it.
-                if not args.app_db.is_file():
-                    raise ValueError('Calibre-Web reference database is unavailable; cannot safely trash a record.')
-                with sqlite3.connect(f'file:{args.app_db}?mode=ro', uri=True) as web:
-                    for (table,) in web.execute("SELECT name FROM sqlite_master WHERE type='table'"):
-                        safe = table.replace('"', '""')
-                        cols = [r[1] for r in web.execute(f'PRAGMA table_info("{safe}")')]
-                        for column in ['book_id', 'book']:
-                            if column in cols and web.execute(f'SELECT 1 FROM "{safe}" WHERE "{column}"=? LIMIT 1', (remove['id'],)).fetchone():
-                                raise ValueError('The duplicate has Calibre-Web shelf, bookmark, or reading references. Resolve those first (' + table + ').')
-                with sqlite3.connect(f'file:{args.library}/metadata.db?mode=ro', uri=True) as sql:
-                    if sql.execute("SELECT 1 FROM sqlite_master WHERE name='annotations'").fetchone():
-                        if sql.execute('SELECT 1 FROM annotations WHERE book=? LIMIT 1', (remove['id'],)).fetchone():
-                            raise ValueError('The duplicate has Calibre annotations. Preserve those before trashing it.')
-            check_references()
-            blockers = []
+            blockers = reference_blockers(args.library, args.app_db, keep['id'], remove['id'])
             for key, value in rm.get_all_user_metadata(make_copy=True).items():
                 if value.get('#value#') not in (None, '', []) and value.get('#value#') != km.get(key):
                     blockers.append('Custom field needs manual merge: ' + key)
@@ -172,7 +193,9 @@ def main():
                 for fmt, info in {**remove['formats'], **keep['formats']}.items():
                     if digest(pathlib.Path(api.format_abspath(keep['id'], fmt))) != info['sha256']:
                         raise ValueError('Keeper format verification failed; duplicate was not trashed.')
-                check_references()
+                new_blockers = reference_blockers(args.library, args.app_db, keep['id'], remove['id'])
+                if new_blockers:
+                    raise ValueError('; '.join(new_blockers))
                 api.remove_books([remove['id']], permanent=False)
                 event(duplicate_resolved={'removed_id': remove['id'], 'removed_uuid': remove['uuid'], 'backup': str(backup), 'trash': True})
             except Exception:
@@ -185,4 +208,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except (ValueError, KeyError, TypeError, OSError, sqlite3.Error) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

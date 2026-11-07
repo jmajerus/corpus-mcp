@@ -47,7 +47,9 @@ def review(plan, apply=False, expected=0):
 try:
     report['runtime'] = run(['/usr/bin/calibre-debug', '--version']).stdout.strip()
     with sqlite3.connect(web) as db:
-        db.execute('CREATE TABLE book_shelf_link(book_id INTEGER)')
+        db.execute('CREATE TABLE shelf(id INTEGER PRIMARY KEY,name TEXT,is_public INTEGER)')
+        db.execute("INSERT INTO shelf VALUES(1,'Main',1)")
+        db.execute('CREATE TABLE book_shelf_link(shelf INTEGER,book_id INTEGER)')
     for title in ['Keeper', 'Duplicate']:
         run(['/usr/bin/calibredb', 'add', '--duplicates', '--with-library', str(library), '--title', title, '--authors', 'Test Writer', *(['--cover', str(root / 'seeds/cover.png')] if title == 'Duplicate' else []), str(root / 'seeds/operator.pdf')])
     run(['/usr/bin/calibredb', 'add_format', '--with-library', str(library), '2', str(root / 'seeds/operator.epub')])
@@ -72,11 +74,16 @@ print(json.dumps([{'id':i,'uuid':api.get_metadata(i).uuid} for i in [1,2]]));db.
     plan['discard_conflicts'] = True
     preview = review(plan)
     with sqlite3.connect(web) as db:
-        db.execute('INSERT INTO book_shelf_link VALUES(2)')
+        db.execute('INSERT INTO book_shelf_link VALUES(1,1),(1,2)')
+    blocked = review({**plan, 'discard_conflicts': False})
+    assert any('shelf “Main”' in item and 'Keeper 1 already belongs' in item for item in blocked['blockers'])
+    assert any('conflicting formats' in item for item in blocked['blockers'])
+    report['checks']['previewShowsShelfAndFormatBlockersTogether'] = True
     failed = review(preview['plan'], True, expected=None)
     assert failed.returncode != 0 and 'Calibre-Web' in failed.stderr
+    assert 'Traceback' not in failed.stderr
     with sqlite3.connect(web) as db:
-        db.execute('DELETE FROM book_shelf_link')
+        db.execute('DELETE FROM book_shelf_link WHERE book_id=2')
     report['checks']['newShelfReferencePreventsApply'] = True
     native("import sys\nfrom calibre.db.legacy import LibraryDatabase\ndb=LibraryDatabase(sys.argv[1]);db.new_api.set_field('rating',{2:8});db.close()\n")
     failed = review(preview['plan'], True, expected=None)

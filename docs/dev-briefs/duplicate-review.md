@@ -59,12 +59,15 @@ The committed `tools/validate-calibre-duplicates.py` ran as `authoring` (UID 100
 on calibre-web.localdomain using Calibre 8.5 and a new disposable library on the
 same ext4 filesystem as production. Evidence is retained privately in:
 
-`/mnt/Calibre/.corpus-duplicate-operator-ZDexbxik`
+`/mnt/Calibre/.corpus-duplicate-operator-qijyuzXy`
 
 It passed:
 
 - Explicit review of different PDF bytes and preservation of a unique EPUB.
-- Refusal after a new Calibre-Web shelf link appeared following preview.
+- A successful, reviewable preview showing public-shelf membership and conflicting
+  formats together. It explains when the keeper already belongs to that shelf.
+- Refusal after a new Calibre-Web shelf link appeared following preview, without
+  an expected-reference-error traceback.
 - Refusal after source metadata changed following preview.
 - Preview blockers for a damaged EPUB that would survive the resolution.
 - An injected native failure immediately after copying a format: both records
@@ -74,7 +77,7 @@ It passed:
 - Retention of both pre-mutation snapshots from the interrupted attempt and retry.
 
 The source helper SHA-256 was:
-`731da14e29a4ed6b732d8e66eaf328e9b67e8611ac6fb1a30041fd6ded0b6486`.
+`7270e3a83cb63b6bdfa13fe09ac9d0f23bf8a351456614342659e13f03cdb593`.
 Read-only fingerprints of production books/authors/author links/formats matched
 before and after the exercise. No production helper was installed, no real book
 was merged or deleted, and no production service was restarted.
