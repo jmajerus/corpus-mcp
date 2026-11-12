@@ -413,9 +413,19 @@ describe("the replica in D1", () => {
   }
 
   it("is created with the snapshot's schema", () => {
-    // Tables, their columns in order, and indexes, as the migrations leave them and as the snapshot creates them.
-    const shape = (db: Database.Database) => (db.prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'books_fts_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { type: string; name: string }[])
-      .map(({ type, name }) => [type, name, type === "table" ? (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string; type: string; notnull: number; pk: number }[]).map((c) => [c.name, c.type, c.notnull, c.pk]) : null]);
+    // Tables with their columns in order (type, NOT NULL, default, key), and indexes with their table, uniqueness, and
+    // columns in order with direction, as the migrations leave them and as the snapshot creates them.
+    const shape = (db: Database.Database) => (db.prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE name NOT LIKE 'books_fts_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { type: string; name: string; tbl_name: string }[])
+      .map(({ type, name, tbl_name }) => {
+        if (type === "table") {
+          const columns = db.prepare(`PRAGMA table_info(${name})`).all() as { name: string; type: string; notnull: number; dflt_value: unknown; pk: number }[];
+          return [type, name, columns.map((c) => [c.name, c.type, c.notnull, c.dflt_value, c.pk])];
+        }
+        const unique = (db.prepare(`PRAGMA index_list(${tbl_name})`).all() as { name: string; unique: number }[]).find((i) => i.name === name)?.unique;
+        const columns = (db.prepare(`PRAGMA index_xinfo(${name})`).all() as { name: string | null; desc: number; coll: string; key: number }[])
+          .filter((c) => c.key).map((c) => [c.name, c.desc, c.coll]);
+        return [type, name, tbl_name, unique, columns];
+      });
     const migrated = new Database(":memory:");
     migrate(migrated);
     const fresh = new Database(":memory:");
