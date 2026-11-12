@@ -8,7 +8,7 @@ import type { PublicStore } from "./store.js";
  * the LAN and in a Worker; `site.json` and the key list let another public site link to these pages.
  *
  *   /                      the front page: counts, search, shelves, top-level subjects, other sites
- *   /books[?q=&sort=]      books by author, title, or year, or matching a search over titles, authors, and subjects
+ *   /books[?q=&sort=]      books by author, title, date added, or year, or matching a search over titles, authors, and subjects
  *   /books/<id>            one book's catalogue entry, with links to it on other sites
  *   /subjects[/<tag>]      the subject tree, and the books under a subject
  *   /shelves[/<id>]        Calibre-Web's public shelves
@@ -20,7 +20,7 @@ export interface PublicResponse { status: number; type: string; body: string; et
 
 interface Book {
   id: string; title: string; authors: string; year: number | null; publisher: string | null; language: string | null; isbn: string | null;
-  format: string | null; citekeys: string; zotero_keys: string;
+  format: string | null; citekeys: string; zotero_keys: string; added: string | null;
 }
 interface Subject { tag: string; name: string; label: string; parent: string | null; books: number }
 interface Shelf { id: number; name: string; books: number }
@@ -127,6 +127,7 @@ const BOOK_SORTS: [string, string, string, string][] = [
   ["match", "Best match", "best match first", "f.rank"],
   ["author", "Author", "by author", "b.sort"],
   ["title", "Title", "by title", "b.title COLLATE NOCASE, b.sort"],
+  ["added", "Added", "most recently added first", "b.added IS NULL, b.added DESC, b.sort"],
   ["newest", "Newest", "newest first", "b.year IS NULL, b.year DESC, b.sort"],
   ["oldest", "Oldest", "oldest first", "b.year IS NULL, b.year, b.sort"],
 ];

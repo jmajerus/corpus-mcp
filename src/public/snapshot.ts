@@ -24,7 +24,7 @@ export const SNAPSHOT_SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE books (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, authors TEXT NOT NULL, year INTEGER, publisher TEXT, language TEXT, isbn TEXT,
-  format TEXT, citekeys TEXT NOT NULL, zotero_keys TEXT NOT NULL, sort TEXT NOT NULL
+  format TEXT, citekeys TEXT NOT NULL, zotero_keys TEXT NOT NULL, sort TEXT NOT NULL, added TEXT
 );
 CREATE TABLE subjects (tag TEXT PRIMARY KEY, name TEXT NOT NULL, label TEXT NOT NULL, parent TEXT, books INTEGER NOT NULL);
 CREATE TABLE book_subjects (book_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (book_id, tag));
@@ -109,7 +109,7 @@ function fill(c: Corpus, snap: Database.Database, o: SnapshotOptions): void {
     const sorts = JSON.parse(b.author_sorts) as string[];
     insert("books", {
       id: b.id, title: b.title, authors: b.authors, year: b.year, publisher: b.publisher, language: b.language, isbn: b.isbn, format: b.format,
-      citekeys: JSON.stringify([...citekeys]), zotero_keys: JSON.stringify(zotero),
+      citekeys: JSON.stringify([...citekeys]), zotero_keys: JSON.stringify(zotero), added: b.added ?? null,
       sort: `${(sorts[0] ?? authors[0] ?? "￿").toLowerCase()}\u0000${b.title.toLowerCase()}`,
     });
     const subjects = subjectsOf.get(b.id)!;

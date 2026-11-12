@@ -133,6 +133,21 @@ another site's: both snapshots have tables such as `meta`.
 6. Deploy corpus-mcp. Within about 15 seconds of the server starting, the first
    upload reaches D1 and the site is live.
 
+## Schema changes
+
+A change to the snapshot's tables (`SNAPSHOT_SCHEMA` in `src/public/snapshot.ts`)
+comes with a migration in `worker/migrations/`, and a test checks that the
+migrations, applied in order, end up with the same tables as the snapshot.
+Deploy in this order:
+
+1. `npm run worker:migrate` applies the new migrations to D1.
+2. `npm run worker:deploy` deploys the pages that use the new columns.
+3. Deploy corpus-mcp. Its next upload re-sends the changed rows.
+
+If corpus-mcp is deployed before the migration, D1 rejects the new rows and the
+upload stays queued (`/health` shows it under `replica`). It goes through once the
+migration is applied.
+
 ## Day to day
 
 Nothing needs doing: the snapshot and the drain keep the site current. To act

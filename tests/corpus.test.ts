@@ -5,7 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readCatalogue } from "../src/calibre.js";
+import { calibreTimestamp, readCatalogue } from "../src/calibre.js";
 import { chunkPage } from "../src/chunk.js";
 import type { Config } from "../src/config.js";
 import { bookBibtex } from "../src/bibtex.js";
@@ -94,6 +94,13 @@ afterEach(() => {
 });
 
 describe("calibre catalogue", () => {
+  it("reads when each book was added, as UTC ISO 8601", () => {
+    expect(calibreTimestamp("2026-11-12 10:16:25.389786+00:00")).toBe("2026-11-12T10:16:25Z");
+    expect(calibreTimestamp("2026-11-12 09:38:30.482398")).toBe("2026-11-12T09:38:30Z");
+    expect(calibreTimestamp("0101-01-01 00:00:00+00:00")).toBeNull();
+    expect(calibreTimestamp(null)).toBeNull();
+  });
+
   it("reads metadata and format files from metadata.db", () => {
     const [networks, echoes] = readCatalogue(path.join(root, "main"));
     expect(networks.metadata).toMatchObject({

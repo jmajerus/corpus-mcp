@@ -13,6 +13,8 @@ export interface BookMetadata {
   publisher: string | null;
   /** null when Calibre has no date (it stores year 0101 for "undefined"). */
   year: number | null;
+  /** When the book was added to Calibre, as UTC ISO 8601 ("2026-11-12T10:16:25Z"); Calibre's "timestamp". */
+  added: string | null;
   language: string | null;
   isbn: string | null;
   /** A citekey set by hand as Calibre identifier "citekey:<key>"; it overrides a pinned key. */
@@ -29,7 +31,7 @@ export interface CatalogueEntry {
   files: Record<string, string>;
 }
 
-interface BookRow { id: number; title: string; path: string; uuid: string | null; pubdate: string | null }
+interface BookRow { id: number; title: string; path: string; uuid: string | null; pubdate: string | null; timestamp: string | null }
 
 /**
  * Reads a library's metadata.db, the catalogue authority. The metadata.opf files in book
@@ -61,7 +63,7 @@ export function readCatalogue(libraryRoot: string): CatalogueEntry[] {
       formats.get(row.book)!.push(row);
     }
 
-    const books = db.prepare("SELECT id, title, path, uuid, pubdate FROM books ORDER BY id").all() as BookRow[];
+    const books = db.prepare("SELECT id, title, path, uuid, pubdate, timestamp FROM books ORDER BY id").all() as BookRow[];
     return books.map((b) => {
       const year = Number(b.pubdate?.slice(0, 4));
       const files: Record<string, string> = {};
@@ -78,6 +80,7 @@ export function readCatalogue(libraryRoot: string): CatalogueEntry[] {
           authorSorts: authorSorts.get(b.id) ?? [],
           publisher: publishers.get(b.id)?.[0] ?? null,
           year: year > 1000 ? year : null,
+          added: calibreTimestamp(b.timestamp),
           language: languages.get(b.id)?.[0] ?? null,
           isbn: isbns.get(b.id)?.[0] ?? null,
           citekey: citekeys.get(b.id)?.[0]?.trim().toLowerCase() || null,
@@ -91,4 +94,10 @@ export function readCatalogue(libraryRoot: string): CatalogueEntry[] {
   } finally {
     db.close();
   }
+}
+
+/** Calibre's timestamp ("2026-11-12 10:16:25.389786+00:00", UTC, sometimes without the offset) as ISO 8601 UTC to the second. */
+export function calibreTimestamp(value: string | null): string | null {
+  const m = value?.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);
+  return m && Number(m[1].slice(0, 4)) > 1000 ? `${m[1]}T${m[2]}Z` : null;
 }

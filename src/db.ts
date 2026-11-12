@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS books (
   author_sorts TEXT NOT NULL DEFAULT '[]', -- JSON array, Calibre's sort form per author
   publisher TEXT,
   year INTEGER,
+  added TEXT,                        -- when it was added to Calibre (Calibre's timestamp), UTC ISO 8601
   language TEXT,
   isbn TEXT,
   calibre_citekey TEXT,              -- Calibre identifier "citekey", set by hand
@@ -145,6 +146,7 @@ const ADDED_BOOK_COLUMNS: Record<string, string> = {
   printed_year: "INTEGER",
   title_page: "TEXT",
   title_page_version: "INTEGER",
+  added: "TEXT",
 };
 
 function migrate(db: DB): void {
