@@ -69,7 +69,7 @@ export interface Config {
   port: number;
 }
 
-/** The library Calibre-Web serves on calibre-web.localdomain (/mnt/Calibre/main). */
+/** The mirror of the library Calibre-Web serves on calibre-web.localdomain (deploy/corpus-sync.sh). */
 const DEFAULT_LIBRARIES = ["main"];
 
 function citekeyPreset(name: string | undefined): PresetName {

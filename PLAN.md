@@ -21,8 +21,8 @@ explains what changed.
 | Scope | Calibre books only. Zotero attachments stay with zotero-mcp. |
 | Runtime | A dedicated Proxmox LXC (`corpus-mcp.localdomain`), on the same pattern as the zotero-mcp LXC, with the same `authoring` login. Nothing runs on the workstation except development and `npm run deploy`. |
 | Transport | Streamable HTTP at `http://corpus-mcp.localdomain:8000/mcp`, plus stdio for tests and development. |
-| Book source | The Calibre-Web server `calibre-web.localdomain` (CT 115) is the master. It serves one consolidated library, `/mnt/Calibre/main`. Neither the older calibre-server (`calibre.localdomain`) nor the workstation's Calibre files are used. |
-| Book transfer | The corpus LXC pulls a read-only mirror over SSH every 10 minutes with rsync. It copies only `metadata.db` and PDF, EPUB, MOBI, and AZW3 files. On CT 115 a `corpus-sync` user is restricted to `rrsync -ro /mnt/Calibre`, and an ACL denies it `private`. CT 115's disk volume cannot be mounted into a second container while CT 115 runs, so mounting it is not an option. |
+| Book source | The Calibre-Web server `calibre-web.localdomain` (CT 115) is the master. It serves one consolidated library, wherever its own settings put it (`config_calibre_dir`, plus `config_calibre_split_dir` in split mode); corpus-mcp never names the path. Neither the older calibre-server (`calibre.localdomain`) nor the workstation's Calibre files are used. |
+| Book transfer | The corpus LXC pulls a read-only mirror over SSH every 10 minutes with rsync. It takes a consistent snapshot of `metadata.db` and copies only PDF, EPUB, MOBI, and AZW3 files. On CT 115 the sync key is forced to `deploy/corpus-source.sh`, which reads the library's location from Calibre-Web's `app.db` on every call and roots `rrsync -ro` at its book files. CT 115's disk volume cannot be mounted into a second container while CT 115 runs, so mounting it is not an option. |
 | Index | A SQLite file inside the LXC with FTS5. It is derived data and can be rebuilt from the books at any time. |
 | Libraries | `main`, the library Calibre-Web serves. The other folders on the volume (`tech`, `private`, and so on) are not pulled. A book tagged `private` in Calibre is never indexed (`CORPUS_EXCLUDE_TAGS`). |
 | Language | TypeScript on Node 22, matching Concept Clusters. |
@@ -106,8 +106,8 @@ possible Concept Clusters change. It is not required.
 
 ```text
 calibre-web.localdomain (CT 115)          corpus-mcp LXC
-/mnt/Calibre/main ─────── rsync pull ──▶ /srv/corpus/books/main/…
-  (corpus-sync: rrsync -ro)                 │
+Calibre-Web's library ── pull ─────────▶ /srv/corpus/books/main/…
+  (forced command: catalogue + rrsync -ro)  │
                      corpus-refresh.timer ▼  (pull → scan → extract → SQLite)
                                      /var/lib/corpus-mcp/corpus.db  (WAL)
                                         │  read-only
@@ -429,7 +429,8 @@ library.
 
 - **Export on CT 115.** The sync key's forced command is
   `deploy/corpus-source.sh`, installed as `~authoring/.local/bin/corpus-source`.
-  It dispatches read-only rsync to `rrsync -ro`, answers `shelves` with JSON
+  It finds the library from Calibre-Web's settings, answers `library` and
+  `catalogue`, dispatches read-only rsync to `rrsync -ro`, answers `shelves` with JSON
   from `app.db` (opened read-only, public shelves only), and refuses
   everything else. Tested: shell, `..` escape, write, and injection
   (`shelves; id`) are all refused. `app.db` is never copied, because it also
@@ -933,13 +934,12 @@ and the two link to each other by a convention, not shared code.
   `restrict,command="/usr/bin/rrsync -ro /mnt/Calibre/main"`. That key
   cannot open a shell, write, or reach outside `main`; all three were tested.
   The key is now forced to `~authoring/.local/bin/corpus-source` (see
-  *Shelves*), which still allows only read-only rsync of `main` plus the
-  shelf export. The LXC's env has
-  `CORPUS_SOURCE=authoring@calibre-web.localdomain` and
-  `CORPUS_REMOTE_PATH=./`. Once CT 115 is fixed, run `--source-setup`, set
-  `CORPUS_SOURCE=corpus-sync@calibre-web.localdomain` and remove
-  `CORPUS_REMOTE_PATH` from `/etc/corpus-mcp/env`, then delete the key line
-  from `~authoring/.ssh/authorized_keys` on CT 115.
+  *Shelves* and docs/operations.md, *The pull*), which serves only the library
+  Calibre-Web's settings name. The LXC's env has
+  `CORPUS_SOURCE=authoring@calibre-web.localdomain`. Once CT 115 is fixed,
+  run `--source-setup`, set `CORPUS_SOURCE=corpus-sync@calibre-web.localdomain`
+  in `/etc/corpus-mcp/env`, then delete the key line from
+  `~authoring/.ssh/authorized_keys` on CT 115.
 - **Native build.** `better-sqlite3` 13 has no prebuilt binaries, so the LXC
   needs `build-essential` and `python3`. `provision.sh` installs them.
 

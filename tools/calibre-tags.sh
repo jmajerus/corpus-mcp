@@ -4,7 +4,7 @@
 # TAG_PLAN (base64 JSON): {"books": [{"calibre_id", "uuid", "title", "add": [...], "remove": [...]}]}.
 # corpus-mcp's /api/tag-plan supplies approved vocabulary tags to add; a cleanup plan lists tags to remove.
 #
-#   TAG_PLAN=<base64> calibre-tags.sh [--apply] [library]     (default library: /mnt/Calibre/main)
+#   TAG_PLAN=<base64> calibre-tags.sh [--apply] [library]     (default: Calibre-Web's library)
 #
 # Without --apply it lists the changes. With --apply it backs up metadata.db first, then sets each
 # book's tags to its current tags, minus those removed, plus those added, with calibredb set_metadata.
@@ -12,7 +12,9 @@ set -euo pipefail
 
 apply=0
 [ "${1:-}" = "--apply" ] && { apply=1; shift; }
-library="${1:-/mnt/Calibre/main}"
+# Without a library argument, Calibre-Web's library, from its own settings (asked of corpus-source,
+# installed beside this script); refused if Calibre-Web keeps the library split.
+library="${1:-$(SSH_ORIGINAL_COMMAND=calibre-library "$(dirname "$0")/corpus-source")}"
 bin="${CALIBRE_BIN:-/usr/bin}"
 : "${TAG_PLAN:?TAG_PLAN is required}"
 

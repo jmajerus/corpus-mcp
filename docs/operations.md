@@ -5,7 +5,7 @@ How corpus-mcp is built, configured, and deployed, and how it changes Calibre.
 ## How it works
 
 ```text
-Calibre library ── rsync (read-only) ──▶ books/<library>/…
+Calibre-Web's library ─ pull (read-only) ─▶ books/<library>/…
                                               │
                         corpus-mcp index      ▼  metadata.db → MuPDF → SQLite FTS5
                                            corpus.db
@@ -38,12 +38,47 @@ Calibre library ── rsync (read-only) ──▶ books/<library>/…
 
 Calibre-Web shelves are topic collections, such as *Misinformation*, kept in
 Calibre-Web's own `app.db` rather than in the Calibre library. The sync key's
-forced command, [`deploy/corpus-source.sh`](../deploy/corpus-source.sh), allows
-exactly two things: read-only rsync of the library, and a `shelves` command
-that prints the public shelves and their book ids as JSON. `app.db`, which
-also holds password hashes, never leaves the Calibre-Web host. Each refresh
-replaces the index's `shelves` and `book_shelves` tables from that export.
-If the export fails, the previous membership is kept.
+forced command (see [The pull](#the-pull)) has a `shelves` command that prints
+the public shelves and their book ids as JSON. `app.db`, which also holds
+password hashes, never leaves the Calibre-Web host. Each refresh replaces the
+index's `shelves` and `book_shelves` tables from that export. If the export
+fails, the previous membership is kept.
+
+## The pull
+
+The library is wherever Calibre-Web's own settings say it is. Nothing in
+corpus-mcp names its path. The sync key's forced command,
+[`deploy/corpus-source.sh`](../deploy/corpus-source.sh), reads
+`config_calibre_dir` from `app.db` on every call. In Calibre-Web's split mode
+("Separate Book Files from Library") it also reads `config_calibre_split_dir`.
+`metadata.db` is then in the first directory and the book files are in the
+second. Each refresh ([`deploy/corpus-sync.sh`](../deploy/corpus-sync.sh)) runs
+five steps:
+
+1. `library` asks where the library is. When the answer differs from the
+   last run, the refresh log says so, and the dashboard's *Last pull* card
+   shows *Library moved* for a week.
+2. `catalogue` takes a consistent snapshot of `metadata.db` with SQLite's
+   backup API, even while Calibre-Web is writing.
+3. rsync, rooted by `rrsync -ro` at the book files directory, copies only the
+   formats the indexer reads. The forced command refuses to serve a directory
+   that also holds `app.db`.
+4. The new `metadata.db` is installed only if the files came through, so the
+   catalogue and the files move together. rsync holds its own updates and
+   deletions until the transfer completes (`--delay-updates --delete-delay`),
+   so a pull that fails partway leaves the previous files.
+5. `shelves` fetches the shelf export.
+
+The local mirror is always unsplit, with `metadata.db` beside the book
+folders. It goes to `CORPUS_SHELVES_LIBRARY`, or else the first of
+`CORPUS_LIBRARIES`. If any step fails, the previous mirror is kept and the
+status shows `failed`.
+
+Calibre's own tools (`calibredb`, `calibre-debug`) expect the book files beside
+`metadata.db`. In split mode they would put new files in the wrong place, so the
+admin's Calibre jobs are refused there with a message saying why. The same goes
+for the hand-run scripts (`calibre-import.sh` and the others) when they are
+given no library. Run with a library argument, they still use that library.
 
 ## Access
 
