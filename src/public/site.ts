@@ -8,7 +8,7 @@ import type { PublicStore } from "./store.js";
  * the LAN and in a Worker; `site.json` and the key list let another public site link to these pages.
  *
  *   /                      the front page: counts, search, shelves, top-level subjects, other sites
- *   /books[?q=]            books by author, or matching a search over titles, authors, and subjects
+ *   /books[?q=&sort=]      books by author, title, or year, or matching a search over titles, authors, and subjects
  *   /books/<id>            one book's catalogue entry, with links to it on other sites
  *   /subjects[/<tag>]      the subject tree, and the books under a subject
  *   /shelves[/<id>]        Calibre-Web's public shelves
@@ -43,6 +43,8 @@ dl.entry { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px;
 dl.entry dt { color: var(--muted); }
 dl.entry dd { margin: 0; overflow-wrap: anywhere; }
 .pager { display: flex; gap: 12px; margin: 14px 0; }
+.sorts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; }
+.sorts a[aria-current] { color: var(--text); font-weight: 600; text-decoration: none; }
 .preview-banner { background: var(--warn-bg); color: var(--text); border-bottom: 1px solid var(--border); padding: 8px 16px; text-align: center; font-size: 0.9rem; }
 `;
 
@@ -120,23 +122,47 @@ ${top.length ? `<h2>Subjects</h2><ul class="tree">${top.map((s) => `<li><a href=
 ${sites.length ? `<h2>Elsewhere</h2><ul class="tree">${sites.map((s) => `<li><a href="${esc(s.url)}/">${esc(s.name)}</a></li>`).join("")}</ul>` : ""}`);
 }
 
+/** The orders /books offers: [key, link text, how the subtitle says it, ORDER BY on books b]. "match" is for searches only. */
+const BOOK_SORTS: [string, string, string, string][] = [
+  ["match", "Best match", "best match first", "f.rank"],
+  ["author", "Author", "by author", "b.sort"],
+  ["title", "Title", "by title", "b.title COLLATE NOCASE, b.sort"],
+  ["newest", "Newest", "newest first", "b.year IS NULL, b.year DESC, b.sort"],
+  ["oldest", "Oldest", "oldest first", "b.year IS NULL, b.year, b.sort"],
+];
+
+/** Links to each order, keeping the search; the default order (best match when searching, else author) has no sort parameter. */
+function sortLinks(q: string, current: string): string {
+  const sorts = BOOK_SORTS.filter(([key]) => q || key !== "match");
+  const fallback = sorts[0][0];
+  return `<nav class="sorts" aria-label="Sort">Sort: ${sorts.map(([key, label]) => {
+    const p = new URLSearchParams();
+    if (q) p.set("q", q);
+    if (key !== fallback) p.set("sort", key);
+    const href = `/books${p.size ? `?${p}` : ""}`;
+    return `<a href="${esc(href)}"${key === current ? ' aria-current="true"' : ""}>${label}</a>`;
+  }).join("")}</nav>`;
+}
+
 async function books(store: PublicStore, params: URLSearchParams): Promise<string> {
   const q = params.get("q")?.trim() ?? "";
   const offset = offsetOf(params);
   const match = ftsQuery(q);
   if (q && !match) return page(store, "Books", "books", `<h1>Books</h1>${searchForm(q)}<p class="empty">No books.</p>`);
+  const offered = BOOK_SORTS.filter(([key]) => match || key !== "match");
+  const [key, , said, order] = offered.find(([k]) => k === params.get("sort")) ?? offered[0];
   const [total, list] = match
     ? await Promise.all([
       store.first<{ n: number }>("SELECT COUNT(*) AS n FROM books_fts WHERE books_fts MATCH ?", match),
-      store.all<Book>(`SELECT b.* FROM books_fts f JOIN books b ON b.id = f.book_id WHERE books_fts MATCH ? ORDER BY rank LIMIT ${PAGE} OFFSET ?`, match, offset),
+      store.all<Book>(`SELECT b.* FROM books_fts f JOIN books b ON b.id = f.book_id WHERE books_fts MATCH ? ORDER BY ${order} LIMIT ${PAGE} OFFSET ?`, match, offset),
     ])
     : await Promise.all([
       store.first<{ n: number }>("SELECT COUNT(*) AS n FROM books"),
-      store.all<Book>(`SELECT * FROM books ORDER BY sort LIMIT ${PAGE} OFFSET ?`, offset),
+      store.all<Book>(`SELECT b.* FROM books b ORDER BY ${order} LIMIT ${PAGE} OFFSET ?`, offset),
     ]);
   return page(store, q ? `“${q}”` : "Books", "books", `<h1>Books</h1>
-<p class="sub">${q ? `${plural(total!.n, "book")} matching “${esc(q)}”` : `${plural(total!.n, "book")}, by author`}</p>
-${searchForm(q)}${bookList(list)}${pager("/books", params, total!.n, offset)}`);
+<p class="sub">${q ? `${plural(total!.n, "book")} matching “${esc(q)}”, ${said}` : `${plural(total!.n, "book")}, ${said}`}</p>
+${searchForm(q)}${total!.n > 1 ? sortLinks(q, key) : ""}${bookList(list)}${pager("/books", params, total!.n, offset)}`);
 }
 
 async function book(store: PublicStore, id: string): Promise<string | null> {
