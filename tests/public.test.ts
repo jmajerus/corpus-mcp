@@ -128,6 +128,24 @@ describe("the pages", () => {
     expect(await renderPublic(store, "/admin")).toBeNull();
   });
 
+  it("sorts the book list by author, title, or year, keeping a search", async () => {
+    const order = async (q: string) => [...(await get("/books", q)).body.matchAll(/<li><a href="\/books\/[^"]+">([^<]+)</g)].map((m) => m[1]);
+    expect(await order("")).toEqual(["Networks", "Crowds"]);
+    expect(await order("sort=title")).toEqual(["Crowds", "Networks"]);
+    expect(await order("sort=newest")).toEqual(["Networks", "Crowds"]);
+    expect(await order("sort=oldest")).toEqual(["Crowds", "Networks"]);
+    expect(await order("sort=bogus")).toEqual(["Networks", "Crowds"]);
+    expect((await get("/books", "sort=oldest")).body).toContain("2 books, oldest first");
+    const browse = (await get("/books")).body;
+    expect(browse).not.toContain("Best match");
+    expect(browse).toContain('<a href="/books?sort=title">Title</a>');
+    expect(browse).toContain('<a href="/books" aria-current="true">Author</a>');
+    // A search ranks by match unless asked otherwise, and its sort links keep the search.
+    const searched = (await get("/books", "q=social")).body;
+    expect(searched).toContain('<a href="/books?q=social&amp;sort=title">Title</a>');
+    expect(searched).toContain('aria-current="true">Best match</a>');
+  });
+
   it("shows a book's entry with its links to other sites", async () => {
     const page = (await get(`/books/${encodeURIComponent("main:1")}`)).body;
     expect(page).toContain("author2001networks");
