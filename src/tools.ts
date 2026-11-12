@@ -39,6 +39,8 @@ export interface Corpus {
 export interface BookRow {
   id: string; library: string; uuid: string | null; title: string; authors: string; author_sorts: string;
   publisher: string | null; year: number | null; language: string | null; isbn: string | null;
+  /** When it was added to Calibre (UTC ISO 8601); absent in an index from before the column. */
+  added?: string | null;
   calibre_citekey: string | null; proposed_citekey: string | null; citekey_blockers: string; printed_isbns: string | null; tags: string;
   printed_years: string | null; printed_year: number | null; title_page: string | null;
   description: string | null; format: BookFormat | null; file_path: string | null; sha256: string | null; reflowable: number | null;

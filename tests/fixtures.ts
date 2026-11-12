@@ -122,6 +122,8 @@ export interface FixtureBook {
   authors?: string[];
   publisher?: string;
   pubdate?: string;
+  /** Calibre's timestamp, when the book was added. */
+  added?: string;
   isbn?: string;
   /** Calibre identifier "citekey". */
   citekey?: string;
@@ -138,7 +140,7 @@ export function makeLibrary(root: string, library: string, books: FixtureBook[])
   fs.mkdirSync(libraryRoot, { recursive: true });
   const db = new Database(path.join(libraryRoot, "metadata.db"));
   db.exec(`
-    CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, path TEXT, uuid TEXT, pubdate TEXT);
+    CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, path TEXT, uuid TEXT, pubdate TEXT, timestamp TEXT);
     CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, sort TEXT);
     CREATE TABLE books_authors_link (id INTEGER PRIMARY KEY, book INTEGER, author INTEGER);
     CREATE TABLE publishers (id INTEGER PRIMARY KEY, name TEXT);
@@ -156,7 +158,7 @@ export function makeLibrary(root: string, library: string, books: FixtureBook[])
   for (const book of books) {
     const author = book.authors?.[0] ?? "Unknown";
     const folder = `${author}/${book.title} (${book.id})`;
-    db.prepare("INSERT INTO books VALUES (?, ?, ?, ?, ?)").run(book.id, book.title, folder, `uuid-${book.id}`, book.pubdate ?? "0101-01-01 00:00:00+00:00");
+    db.prepare("INSERT INTO books VALUES (?, ?, ?, ?, ?, ?)").run(book.id, book.title, folder, `uuid-${book.id}`, book.pubdate ?? "0101-01-01 00:00:00+00:00", book.added ?? null);
     (book.authors ?? []).forEach((name, i) => {
       const words = name.split(" ");
       const sort = book.sorts?.[i] ?? (words.length > 1 ? `${words.at(-1)}, ${words.slice(0, -1).join(" ")}` : name);

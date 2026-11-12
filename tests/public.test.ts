@@ -40,9 +40,9 @@ const options = (sites: LinkedSite[] = []): SnapshotOptions =>
 beforeAll(() => {
   root = tempDir();
   makeLibrary(root, "main", [
-    { id: 1, title: "Networks", authors: ["Ann Author"], pubdate: "2001-01-01", tags: ["social-sciences.sociology.social-change"],
+    { id: 1, title: "Networks", authors: ["Ann Author"], pubdate: "2001-01-01", added: "2026-11-01 10:00:00+00:00", tags: ["social-sciences.sociology.social-change"],
       files: { pdf: makePdf({ pages: [["Weak ties carry novel information"]] }) } },
-    { id: 2, title: "Crowds", authors: ["Bob Writer"], pubdate: "1999-01-01", tags: ["social-sciences.psychology", "not-a-term"],
+    { id: 2, title: "Crowds", authors: ["Bob Writer"], pubdate: "1999-01-01", added: "2026-11-10 09:00:00.123456", tags: ["social-sciences.psychology", "not-a-term"],
       files: { pdf: makePdf({ pages: [["Crowds and their moods"]] }) } },
     { id: 3, title: "Diary", authors: ["Cy Self"], tags: ["private"], files: { pdf: makePdf({ pages: [["Not for anyone"]] }) } },
   ]);
@@ -134,6 +134,8 @@ describe("the pages", () => {
     expect(await order("sort=title")).toEqual(["Crowds", "Networks"]);
     expect(await order("sort=newest")).toEqual(["Networks", "Crowds"]);
     expect(await order("sort=oldest")).toEqual(["Crowds", "Networks"]);
+    expect(await order("sort=added")).toEqual(["Crowds", "Networks"]);
+    expect((await get("/books", "sort=added")).body).toContain("2 books, most recently added first");
     expect(await order("sort=bogus")).toEqual(["Networks", "Crowds"]);
     expect((await get("/books", "sort=oldest")).body).toContain("2 books, oldest first");
     const browse = (await get("/books")).body;
@@ -339,7 +341,11 @@ describe("the LAN", () => {
 });
 
 describe("the replica in D1", () => {
-  const MIGRATION = path.join(import.meta.dirname, "..", "worker", "migrations", "0001_snapshot.sql");
+  const MIGRATIONS = path.join(import.meta.dirname, "..", "worker", "migrations");
+  /** Every D1 migration in order, as wrangler applies them. */
+  const migrate = (db: Database.Database) => {
+    for (const f of fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort()) db.exec(fs.readFileSync(path.join(MIGRATIONS, f), "utf8"));
+  };
   const TOKEN = "test-token";
 
   /** better-sqlite3 as the D1 binding the proxy uses, with batch() as one transaction, as D1's is. */
@@ -372,7 +378,7 @@ describe("the replica in D1", () => {
     const file = path.join(root, `${name}.db`);
     buildSnapshot(c, options([quotesSite]), file);
     const replica = new Database(":memory:");
-    replica.exec(fs.readFileSync(MIGRATION, "utf8"));
+    migrate(replica);
     const env: ProxyEnv = { DB: proxyBinding(replica), D1_PROXY_TOKEN: TOKEN };
     let fail = false;
     let lose = false;
@@ -407,8 +413,14 @@ describe("the replica in D1", () => {
   }
 
   it("is created with the snapshot's schema", () => {
-    const strip = (sql: string) => sql.replace(/--.*$/gm, "").replace(/\s+/g, " ").trim();
-    expect(strip(fs.readFileSync(MIGRATION, "utf8"))).toBe(strip(SNAPSHOT_SCHEMA));
+    // Tables, their columns in order, and indexes, as the migrations leave them and as the snapshot creates them.
+    const shape = (db: Database.Database) => (db.prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'books_fts_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { type: string; name: string }[])
+      .map(({ type, name }) => [type, name, type === "table" ? (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string; type: string; notnull: number; pk: number }[]).map((c) => [c.name, c.type, c.notnull, c.pk]) : null]);
+    const migrated = new Database(":memory:");
+    migrate(migrated);
+    const fresh = new Database(":memory:");
+    fresh.exec(SNAPSHOT_SCHEMA);
+    expect(shape(migrated)).toEqual(shape(fresh));
   });
 
   it("ships the snapshot, then only what changed, and keeps a failed batch queued", async () => {
@@ -491,7 +503,7 @@ describe("the replica in D1", () => {
     buildSnapshot(c, options([quotesSite]), file);
     const snap = new Database(file, { readonly: true });
     const local = new Database(":memory:");
-    local.exec(fs.readFileSync(MIGRATION, "utf8"));
+    migrate(local);
     local.exec(replicaScript(snap));
     const rows = (db: Database.Database) => [...snapshotRows(db)].map((x) => JSON.stringify(x));
     expect(rows(local)).toEqual(rows(snap));

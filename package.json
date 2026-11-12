@@ -14,6 +14,7 @@
     "worker:dev": "wrangler dev -c worker/wrangler.jsonc --local",
     "worker:proxy": "wrangler dev -c worker/wrangler.proxy.jsonc --local --port 8788",
     "worker:deploy": "npm test && node --env-file-if-exists=.env node_modules/wrangler/bin/wrangler.js deploy -c worker/wrangler.jsonc --define \"RENDER_BUILD:$(node tools/render-build.mjs)\"",
+    "worker:migrate": "node --env-file-if-exists=.env node_modules/wrangler/bin/wrangler.js d1 migrations apply DB --remote -c worker/wrangler.jsonc",
     "worker:deploy-proxy": "node --env-file-if-exists=.env node_modules/wrangler/bin/wrangler.js deploy -c worker/wrangler.proxy.jsonc"
   },
   "license": "PolyForm-Noncommercial-1.0.0",

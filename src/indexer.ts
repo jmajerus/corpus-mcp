@@ -331,7 +331,7 @@ function metadataColumns(m: BookMetadata, preset: PresetName) {
   const proposal = proposeCitekey(m, preset);
   return {
     calibre_id: m.calibreId, uuid: m.uuid, title: m.title, authors: JSON.stringify(m.authors),
-    author_sorts: JSON.stringify(m.authorSorts), publisher: m.publisher, year: m.year, language: m.language,
+    author_sorts: JSON.stringify(m.authorSorts), publisher: m.publisher, year: m.year, added: m.added, language: m.language,
     isbn: m.isbn, calibre_citekey: m.citekey, proposed_citekey: proposal.key,
     citekey_blockers: JSON.stringify(proposal.blockers), tags: JSON.stringify(m.tags), description: m.description,
   };
