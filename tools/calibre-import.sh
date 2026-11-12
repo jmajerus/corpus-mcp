@@ -3,7 +3,7 @@
 # Calibre host as the library's owner, whose calibre has the DeDRM plugin (with the Kindle keyfile
 # imported) and KFX Input, so Kindle .kfx-zip archives are decrypted as they are added.
 #
-#   calibre-import.sh [--apply] [--tags kindle,...] <folder> [library]   (default library: /mnt/Calibre/main)
+#   calibre-import.sh [--apply] [--tags kindle,...] <folder> [library]   (default: Calibre-Web's library)
 #
 # Without --apply it lists the files. With --apply it backs up metadata.db first, then adds one file
 # at a time and moves it into _done/, _duplicates/ (calibre already has that title and author), or
@@ -21,7 +21,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 folder="${1:?usage: calibre-import.sh [--apply] [--tags a,b] <folder> [library]}"
-library="${2:-/mnt/Calibre/main}"
+# Without a library argument, Calibre-Web's library, from its own settings (asked of corpus-source,
+# installed beside this script); refused if Calibre-Web keeps the library split.
+library="${2:-$(SSH_ORIGINAL_COMMAND=calibre-library "$(dirname "$0")/corpus-source")}"
 bin="${CALIBRE_BIN:-/usr/bin}"
 
 # The _done, _duplicates, and _failed folders hold files already handled, so they are never re-added.

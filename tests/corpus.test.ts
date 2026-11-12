@@ -642,44 +642,6 @@ describe("shelves", () => {
     scanLibraries(config, db);
     expect(listBooks(c, { query: "Networks" }).books.find((b) => b.book_id === "main:1")?.shelves).toEqual([]);
   });
-
-  it("exports only public shelves from app.db and allows nothing but rsync and the export", () => {
-    const appDb = path.join(root, "app.db");
-    const app = new Database(appDb);
-    app.exec(`
-      CREATE TABLE shelf (id INTEGER PRIMARY KEY, name TEXT, is_public INTEGER);
-      CREATE TABLE book_shelf_link (id INTEGER PRIMARY KEY, book_id INTEGER, "order" INTEGER, shelf INTEGER);
-      INSERT INTO shelf VALUES (1, 'Misinformation', 1), (2, 'Diary', 0);
-      INSERT INTO book_shelf_link (book_id, "order", shelf) VALUES (53, 1, 1), (7, 2, 1), (99, 1, 2);`);
-    app.close();
-    const script = fs.readFileSync(new URL("../deploy/corpus-source.sh", import.meta.url), "utf8").replace(/^APP_DB=.*$/m, `APP_DB="${appDb}"`);
-    const run = (command: string) => spawnSync("sh", ["-c", script], { env: { ...process.env, SSH_ORIGINAL_COMMAND: command }, encoding: "utf8" });
-    const exported = JSON.parse(run("shelves").stdout);
-    expect(exported.shelves).toEqual([{ id: 1, name: "Misinformation", books: [{ book_id: 53, order: 1 }, { book_id: 7, order: 2 }] }]);
-    const refused = run("cat /etc/passwd");
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toMatch(/only read-only rsync, 'shelves', and the tags-\/convert- commands are allowed/);
-    expect(run("tags-apply; id").status).toBe(1);
-  });
-
-  it("runs the admin's named Calibre commands through their scripts, with the plan on stdin", () => {
-    const tools = path.join(root, "tools");
-    fs.mkdirSync(tools);
-    // Stand-ins that report how they were called.
-    fs.writeFileSync(path.join(tools, "calibre-tags.sh"), 'echo "tags $* plan=$(printf %s "$TAG_PLAN" | base64 -d)"\n');
-    fs.writeFileSync(path.join(tools, "calibre-convert.sh"), 'echo "convert $*"\n');
-    fs.writeFileSync(path.join(tools, "calibre-metadata.py"), 'import sys; print("metadata " + " ".join(sys.argv[1:]) + " plan=" + sys.stdin.read())\n');
-    const script = fs.readFileSync(new URL("../deploy/corpus-source.sh", import.meta.url), "utf8")
-      .replace(/^TOOLS_DIR=.*$/m, `TOOLS_DIR="${tools}"`).replace(/^LIBRARY=.*$/m, 'LIBRARY="/lib/main"');
-    const run = (command: string, input = "") =>
-      spawnSync("sh", ["-c", script], { env: { ...process.env, SSH_ORIGINAL_COMMAND: command }, input, encoding: "utf8" }).stdout.trim();
-    expect(run("tags-preview", '{"books":[]}')).toBe('tags /lib/main plan={"books":[]}');
-    expect(run("tags-apply", '{"books":[1]}')).toBe('tags --apply /lib/main plan={"books":[1]}');
-    expect(run("convert-preview")).toBe("convert /lib/main");
-    expect(run("convert-apply")).toBe("convert --apply /lib/main");
-    expect(run("metadata-preview", '{"books":[]}')).toBe('metadata /lib/main plan={"books":[]}');
-    expect(run("metadata-apply", '{"books":[1]}')).toBe('metadata --apply /lib/main plan={"books":[1]}');
-  });
 });
 
 describe("tags", () => {

@@ -32,6 +32,17 @@ let canWrite = false, kinds = {};
 const card = (title, big, rows, cls) => '<div class="card"><h3>' + esc(title) + '</h3><div class="big ' + (cls || "") + '">' + big + '</div><div class="rows">' +
   rows.map(([k, v, c]) => "<div><span>" + k + '</span><span class="' + (c || "") + '">' + v + "</span></div>").join("") + "</div></div>";
 const go = (href, text) => '<a href="' + href + '">' + text + "</a>";
+// Where Calibre-Web's settings put its library (deploy/corpus-sync.sh records it), and a notice for a week after it moves.
+const recentMove = (sync) => sync.library_changed && Date.now() - Date.parse(sync.library_changed.at) < 7 * 24 * 3600 * 1000;
+const librarySummary = (l) => l.split ? "split: metadata.db in " + l.metadata_dir + ", book files in " + l.books_dir : l.metadata_dir;
+function calibreLibraryRows(sync) {
+  const l = sync.calibre_library;
+  if (!l) return [];
+  const rows = [["Calibre-Web library", '<span title="' + esc(librarySummary(l)) + '">' + esc(l.metadata_dir) + "</span>"]];
+  if (l.split) rows.push(["Book files (split)", esc(l.books_dir), "warn"]);
+  if (recentMove(sync)) rows.push(['<span title="' + esc("was " + librarySummary(sync.library_changed.from)) + '">Library moved</span>', ago(sync.library_changed.at), "warn"]);
+  return rows;
+}
 
 async function loadMetrics() {
   let m;
@@ -71,7 +82,8 @@ async function loadMetrics() {
     card("Last refresh", ago(m.index.last_scan), run ? [["Took", run.seconds.toFixed(1) + " s"], ["Extracted", num(run.extracted)], ["Failed", num(run.failed), run.failed ? "warn" : ""],
       ["Unreadable libraries", num((run.unreadable_libraries || []).length), (run.unreadable_libraries || []).length ? "bad" : ""]] : [], staleScan ? "warn" : ""),
     card("Last pull", sync ? ago(sync.finished_at) : "no status", sync ? Object.entries(sync.libraries || {}).map(([k, v]) => ["Library " + esc(k), esc(v), v === "ok" ? "good" : "bad"])
-      .concat([[go("/admin/shelves", "Shelves"), esc(sync.shelves), sync.shelves === "ok" ? "good" : "bad"]]) : [], syncOk ? "" : "warn"),
+      .concat([[go("/admin/shelves", "Shelves"), esc(sync.shelves), sync.shelves === "ok" ? "good" : "bad"]]).concat(calibreLibraryRows(sync)) : [],
+      syncOk && !recentMove(sync) ? "" : "warn"),
     card("Data", bytes(m.data.data_db_bytes), [["Index (corpus.db)", bytes(m.index.corpus_db_bytes)], ["Backups", num(m.data.backups.count)],
       ["Newest backup", ago(m.data.backups.newest_at), backupAge > 36 * 3600 * 1000 ? "warn" : ""]]),
     card("Disk free", m.disk.map((d) => bytes(d.free_bytes)).join(" / "), m.disk.map((d) => [esc(d.path), bytes(d.free_bytes) + " of " + bytes(d.total_bytes),

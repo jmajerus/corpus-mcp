@@ -23,12 +23,13 @@ const USAGE = `Usage: npm run deploy -- [--current | --pr <number> | --main] [--
   --current       the same from the latest commit of what the server was last deployed from: the
                   same pull request, or the same branch on origin (recorded in /var/lib/corpus-mcp/deployed.json)
   --provision     one-time setup of the corpus LXC (Node 22, corpus user, sync key); prints the key
-  --source-setup  one-time setup on calibre-web.localdomain: a corpus-sync user limited to
-                  read-only rsync of /mnt/Calibre (private denied), keyed to the corpus LXC
+  --source-setup  one-time setup on calibre-web.localdomain: a corpus-sync user limited to the
+                  forced command (deploy/corpus-source.sh), keyed to the corpus LXC; the
+                  command finds the library from Calibre-Web's settings
   --source-setup-user-key
                   the same without root on calibre-web: adds the sync key to authoring's own
-                  authorized_keys, forced to read-only rsync of /mnt/Calibre/main, and points
-                  the corpus LXC's env at it
+                  authorized_keys, forced to the same command, and points the corpus LXC's env
+                  at it. Rerun it after changing deploy/corpus-source.sh
   --vocabulary[=file]
                   validate the tag vocabulary (default CORPUS_VOCABULARY_SOURCE) and install it as
                   /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
@@ -115,15 +116,15 @@ async function sourceSetupUserKey() {
   const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
   const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
   if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
-  // The forced command (deploy/corpus-source.sh) allows read-only rsync of main, the shelf export, and
-  // /admin's named Calibre commands, which run the two scripts installed beside it.
+  // The forced command (deploy/corpus-source.sh) finds the library from Calibre-Web's settings and allows
+  // its catalogue snapshot, read-only rsync of its book files, the shelf export, and /admin's named
+  // Calibre commands, which run the scripts installed beside it.
   const encode = (file) => Buffer.from(fs.readFileSync(path.join(root, file))).toString("base64");
   const sourceUser = SOURCE_HOST.split("@")[0];
   await runAsUser(SOURCE_HOST, [
     "set -eu",
     "install -d -m 0755 ~/.local/bin",
     `printf %s ${shellQuote(encode("deploy/corpus-source.sh"))} | base64 -d | sed`
-      + ` -e 's|^RSYNC_ROOT=.*|RSYNC_ROOT="/mnt/Calibre/main"|' -e 's|^LIBRARY=.*|LIBRARY="/mnt/Calibre/main"|'`
       + ` -e "s|^TOOLS_DIR=.*|TOOLS_DIR=\\"$HOME/.local/bin\\"|" > ~/.local/bin/corpus-source`,
     `printf %s ${shellQuote(encode("tools/calibre-tags.sh"))} | base64 -d > ~/.local/bin/calibre-tags.sh`,
     `printf %s ${shellQuote(encode("tools/calibre-convert.sh"))} | base64 -d > ~/.local/bin/calibre-convert.sh`,
@@ -148,7 +149,8 @@ install -d -m 0755 /etc/corpus-mcp
 set_env() { grep -q "^$1=" /etc/corpus-mcp/env && sed -i "s|^$1=.*|$1=$2|" /etc/corpus-mcp/env || echo "$1=$2" >> /etc/corpus-mcp/env; }
 set_env CORPUS_SOURCE ${sourceUser}@calibre-web.localdomain
 set_env CORPUS_LIBRARIES main
-set_env CORPUS_REMOTE_PATH ./
+# The source finds the library itself now; an old remote path would mislead.
+sed -i '/^CORPUS_REMOTE_PATH=/d' /etc/corpus-mcp/env
 echo "env updated"`);
   console.log("\nSource key installed. Next: npm run deploy");
 }

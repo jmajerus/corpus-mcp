@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Applies approved tag proposals to Calibre: fetches the plan from corpus-mcp (/api/tag-plan) and runs
-// tools/calibre-tags.sh on the Calibre-Web host as the library owner (the shared authoring login).
+// the installed forced command (deploy/corpus-source.sh, tags-preview / tags-apply) on the Calibre-Web
+// host as the library owner (the shared authoring login), so the library is the one Calibre-Web's
+// settings name, as for /admin's tag jobs.
 //
 //   npm run tags:apply                             list what would change
 //   npm run tags:apply -- --apply                  write the tags (backs up metadata.db first)
@@ -31,11 +33,10 @@ if (!plan.books.length) {
   process.exit(0);
 }
 
-const encoded = Buffer.from(JSON.stringify(plan)).toString("base64");
 const ssh = spawn("ssh", ["-o", "StrictHostKeyChecking=yes", SOURCE_HOST,
-  `TAG_PLAN=${encoded} bash -s -- ${apply ? "--apply " : ""}/mnt/Calibre/${LIBRARY}`], {
+  `SSH_ORIGINAL_COMMAND=${apply ? "tags-apply" : "tags-preview"} "$HOME/.local/bin/corpus-source"`], {
   env: { ...process.env, SSH_ASKPASS: path.join(root, "tools", "askpass.mjs"), SSH_ASKPASS_REQUIRE: "force", DISPLAY: process.env.DISPLAY || "corpus-tags" },
   stdio: ["pipe", "inherit", "inherit"],
 });
-ssh.stdin.end(fs.readFileSync(path.join(root, "tools", "calibre-tags.sh")));
+ssh.stdin.end(JSON.stringify(plan));
 ssh.on("exit", (code) => { process.exitCode = code ?? 1; });

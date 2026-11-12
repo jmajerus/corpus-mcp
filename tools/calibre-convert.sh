@@ -4,7 +4,7 @@
 # KFX needs calibre's KFX Input plugin, installed for the library's owner. Runs on the Calibre host, as the
 # library's owner, with the same ebook-convert + calibredb add_format calls Calibre-Web makes.
 #
-#   calibre-convert.sh [--apply] [library]     (default library: /mnt/Calibre/main)
+#   calibre-convert.sh [--apply] [library]     (default: Calibre-Web's library)
 #
 # Without --apply it only lists the books. With --apply it backs up metadata.db first, converts
 # each book in a temporary directory, adds the EPUB with --dont-replace, and keeps the source format.
@@ -12,7 +12,9 @@ set -euo pipefail
 
 apply=0
 [ "${1:-}" = "--apply" ] && { apply=1; shift; }
-library="${1:-/mnt/Calibre/main}"
+# Without a library argument, Calibre-Web's library, from its own settings (asked of corpus-source,
+# installed beside this script); refused if Calibre-Web keeps the library split.
+library="${1:-$(SSH_ORIGINAL_COMMAND=calibre-library "$(dirname "$0")/corpus-source")}"
 bin="${CALIBRE_BIN:-/usr/bin}"
 
 books=$(python3 - "$library" <<'EOF'
