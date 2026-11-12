@@ -27,10 +27,14 @@ chmod 0755 /usr/local/bin/calibre-duplicates.py /usr/local/bin/calibre-metadata-
 # /admin's Calibre commands write the library, so corpus-sync needs the group of each directory
 # Calibre-Web's settings name (metadata.db's and, in split mode, the book files').
 library_json=$(SSH_ORIGINAL_COMMAND=library /usr/local/bin/corpus-source)
-for dir in $(printf %s "$library_json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["metadata_dir"]); print(d["books_dir"])' | sort -u); do
-  group=$(stat -c %G "$dir")
-  if getent group "$group" >/dev/null; then usermod -aG "$group" corpus-sync; fi
-done
+printf %s "$library_json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["metadata_dir"]); print(d["books_dir"])' | sort -u |
+  while IFS= read -r dir; do
+    group=$(stat -c %G "$dir")
+    if getent group "$group" >/dev/null; then usermod -aG "$group" corpus-sync; fi
+  done
+# Earlier versions rooted rrsync at /mnt/Calibre and denied corpus-sync the private library by ACL.
+# The forced command now serves only the library Calibre-Web names, so drop that legacy deny.
+if [ -d /mnt/Calibre/private ] && command -v setfacl >/dev/null; then setfacl -x u:corpus-sync /mnt/Calibre/private 2>/dev/null || true; fi
 echo "restrict,command=\"/usr/local/bin/corpus-source\" $CORPUS_PUBKEY" > /home/corpus-sync/.ssh/authorized_keys
 chown corpus-sync:corpus-sync /home/corpus-sync/.ssh/authorized_keys
 chmod 0600 /home/corpus-sync/.ssh/authorized_keys

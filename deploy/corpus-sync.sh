@@ -11,7 +11,7 @@
 #   3. rsyncs the book files (only the formats the indexer reads) from the book files location,
 #      which in Calibre-Web's split mode is not where metadata.db is
 #   4. installs the new metadata.db only if the book files came through, so the catalogue and
-#      the files move together
+#      the files move together (rsync holds its own changes until the transfer completes)
 #   5. fetches Calibre-Web's public shelves ("shelves") into CORPUS_SHELVES_FILE, replacing it
 #      only on success so a failed fetch keeps the previous membership
 # The local mirror is always unsplit: metadata.db sits beside the book folders.
@@ -59,8 +59,10 @@ if [ "$pull" = ok ]; then
 fi
 
 # 3. The book files. metadata.db (and its .new) are excluded, which also keeps --delete off them.
+# --delay-updates and --delete-delay hold every change until the transfer is complete, so a pull
+# that fails partway leaves the previous files in place for the previous metadata.db.
 if [ "$pull" = ok ]; then
-  rsync -rt --delete --prune-empty-dirs --timeout=600 \
+  rsync -rt --delete --delete-delay --delay-updates --prune-empty-dirs --timeout=600 \
     -e "ssh $ssh_opts" \
     --exclude='/metadata.db*' --exclude='/.caltrash/' --include='*/' \
     --include='cover.jpg' --include='*.pdf' --include='*.epub' --include='*.mobi' --include='*.azw3' \

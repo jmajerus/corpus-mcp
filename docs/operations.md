@@ -64,7 +64,9 @@ five steps:
    formats the indexer reads. The forced command refuses to serve a directory
    that also holds `app.db`.
 4. The new `metadata.db` is installed only if the files came through, so the
-   catalogue and the files move together.
+   catalogue and the files move together. rsync holds its own updates and
+   deletions until the transfer completes (`--delay-updates --delete-delay`),
+   so a pull that fails partway leaves the previous files.
 5. `shelves` fetches the shelf export.
 
 The local mirror is always unsplit, with `metadata.db` beside the book

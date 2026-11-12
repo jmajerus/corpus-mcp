@@ -33,6 +33,8 @@ if (!plan.books.length) {
   process.exit(0);
 }
 
+// This is the authoring password login (askpass), an ordinary shell, not the corpus LXC's key, whose
+// forced command would take "tags-apply" itself; so it runs the installed command the way sshd would.
 const ssh = spawn("ssh", ["-o", "StrictHostKeyChecking=yes", SOURCE_HOST,
   `SSH_ORIGINAL_COMMAND=${apply ? "tags-apply" : "tags-preview"} "$HOME/.local/bin/corpus-source"`], {
   env: { ...process.env, SSH_ASKPASS: path.join(root, "tools", "askpass.mjs"), SSH_ASKPASS_REQUIRE: "force", DISPLAY: process.env.DISPLAY || "corpus-tags" },
