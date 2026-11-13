@@ -1,15 +1,34 @@
 import { expect, it } from "vitest";
-import { contentFindings, epubProfile, pdfProfile, type BookContents } from "../src/duplicate-contents.js";
+import path from "node:path";
+import { contentFindings, contentProfile, epubProfile, pdfProfile, textOverlap, type BookContents } from "../src/duplicate-contents.js";
 import { makePdf, makeShapedEpub as makeEpub } from "./fixtures.js";
 
 it("profiles an EPUB's text, navigation, print pages, links and images, leaving markup and its navigation out of the words", () => {
-  // Words: the text, "don’t stop", the link numbers and "external".
+  // Words: the text, "don’t stop", the link numbers, "external" and the last chapter's "The end".
   expect(epubProfile(makeEpub({ words: 500, images: 3, toc: 12, pages: 40, links: 7 }))).toEqual({
-    words: 500 + 2 + 7 + 1, contents: 12, page_list: 40, links: 7, sample: false, images: 3, image_bytes: 3 * 2048, font_bytes: 0, text_bytes: expect.any(Number),
+    words: 500 + 2 + 7 + 1 + 2, contents: 12, page_list: 40, links: 7, sample: false, images: 3, image_bytes: 3 * 2048, font_bytes: 0,
+    text_bytes: expect.any(Number), sketch: expect.any(Array),
   });
   expect(epubProfile(makeEpub({ ncxPages: 25 })).page_list).toBe(25);
+});
+
+it("reads sample wording only at the end of the reading order", () => {
   expect(epubProfile(makeEpub({ ending: "You’ve reached the end of this free sample." })).sample).toBe(true);
   expect(epubProfile(makeEpub({ ending: "A sample of soil was taken." })).sample).toBe(false);
+  // A chapter that quotes a store's pitch is not the book's ending (and comes later in the archive than the ending).
+  expect(epubProfile(makeEpub({ quote: "The ad said: buy the full book now." })).sample).toBe(false);
+});
+
+it("estimates shared text from sketches: the same text whatever its markup, none between different texts", () => {
+  const a = epubProfile(makeEpub({ words: 3000, images: 1 })), b = epubProfile(makeEpub({ words: 3000, images: 9, links: 50 }));
+  expect(textOverlap(a.sketch, b.sketch)).toBeGreaterThan(0.95);
+  expect(textOverlap(a.sketch, epubProfile(makeEpub({ words: 3000, vocabulary: "other" })).sketch)).toBe(0);
+  expect(textOverlap(a.sketch, [])).toBeNull();
+  expect(a.sketch).toHaveLength(256);
+});
+
+it("reports a catalogued file missing from the mirror as unreadable", () => {
+  expect(contentProfile(path.join(import.meta.dirname, "no-such-book.epub"), "EPUB")).toEqual({ error: "The EPUB is missing from the mirror or cannot be read (ENOENT)." });
 });
 
 it("profiles a PDF's pages, text layer, bookmarks and printed page numbers", () => {
@@ -29,7 +48,8 @@ it("names the copy that falls short, and why, and keeps a size gap only where th
   expect(f.size_warnings).toEqual(["EPUB sizes differ 18.5×: …"]);
 
   const fewer = contentFindings([{ id: "a", contents: epub({ words: 1000, toc: 20, links: 60 }) }, { id: "b", contents: epub({ words: 2000, toc: 0, links: 10 }) }], []);
-  expect(fewer.content_warnings.map(w => [w.measure, w.against])).toEqual([["words", ["a"]], ["contents", ["b"]], ["links", ["b"]]]);
+  // Half its text missing: a has fewer words, and shares only about half of b's passages.
+  expect(fewer.content_warnings.map(w => [w.measure, w.copy, w.against])).toEqual([["words", "a", ["a"]], ["contents", "b", ["b"]], ["links", "b", ["b"]], ["text", "a", []]]);
   expect(fewer.content_warnings[1].message).toBe("b’s EPUB has no table of contents; a’s has 20 entries.");
 });
 
@@ -45,4 +65,19 @@ it("keeps the size warning when a copy cannot be read, and flags a sample", () =
     ["EPUB sizes differ by 40%: …"]);
   expect(f.content_warnings.map(w => [w.measure, w.against])).toEqual([["error", ["a"]], ["sample", ["b"]]]);
   expect(f.size_warnings).toEqual(["EPUB sizes differ by 40%: …"]);
+});
+
+it("warns at exactly 5% fewer words", () => {
+  // 995 and 945 words of text, plus 5 more in each copy: 1,000 and 950.
+  const f = contentFindings([{ id: "a", contents: epub({ words: 995 }) }, { id: "b", contents: epub({ words: 945 }) }], []);
+  expect(f.content_warnings.filter(w => w.measure === "words").map(w => w.message)).toEqual(["b’s EPUB has 5% fewer words than a’s (950 vs 1,000): it may be missing chapters, be abridged, or be another edition."]);
+});
+
+it("keeps the size warning, and warns, when copies with the same counts have different texts", () => {
+  const f = contentFindings([{ id: "a", contents: epub({}) }, { id: "b", contents: epub({ vocabulary: "other" }) }], ["EPUB sizes differ by 20%: …"]);
+  expect(f.content_warnings.map(w => [w.measure, w.copy, w.against])).toEqual([["text", "b", []]]);
+  expect(f.content_warnings[0].message).toBe("b’s and a’s EPUB texts share only about 0% of their passages: they may be different editions, translations or books.");
+  expect(f.content_notes).toEqual([]);
+  expect(f.size_warnings).toEqual(["EPUB sizes differ by 20%: …"]);
+  expect(f.content_overlap).toEqual({ EPUB: { reference: "a", shared: { b: 0 } } });
 });

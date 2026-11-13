@@ -367,15 +367,17 @@ keeper, a record with saved references can only be the keeper, and a record in
 another library than the keeper cannot be trashed into it.
 
 Each card's **Compare contents** table sets the copies' EPUBs and PDFs side by side:
-words, table-of-contents entries, print pages mapped (an EPUB page list, which lets
+how much of their text they share (estimated from a sample of hashed five-word
+sequences, against the copy with the most words), words, table-of-contents entries, print pages mapped (an EPUB page list, which lets
 a passage be cited by its printed page), internal links, images, fonts and markup, and
 for a PDF its pages, pages with a text layer, bookmarks and printed page numbers.
 Where one copy falls well short of another, the card warns and names it: 5% fewer
 words, under half the contents entries, print pages, links or images, a PDF that is
-mostly scanned images, an EPUB or PDF that ends like a store sample, or one that
-cannot be read. Copies whose EPUB or PDF sizes differ by 10% or more are compared the
-same way. If their text and structure match, the card explains the gap (images,
-fonts or markup) in a note instead of warning. The count above the groups says how
+mostly scanned images, an EPUB or PDF whose last pages read like a store sample, or
+one that cannot be read. Copies sharing under 70% of their text are warned about as
+possibly different editions, translations or books, without counting against either. Copies whose EPUB or PDF sizes differ by 10% or more are compared the
+same way. Only if they share at least 90% of their text and their counts match does
+the card explain the gap (images, fonts or markup) in a note instead of warning. The count above the groups says how
 many groups have a warning, and the preview repeats them.
 
 The suggested keeper is a record with saved references, then the copy that falls

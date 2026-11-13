@@ -34,7 +34,10 @@ Calibre-Web table that references the duplicate, and an orphaned shelf link, sti
 blocks. Corpus ranks keepers with the public shelves it mirrors, each cover's colourfulness
 (Hasler–Süsstrunk), and a profile of each copy's mirrored EPUB and PDF
 (`src/duplicate-contents.ts`: words, navigation, page list, links, images and fonts;
-pages, text layer, bookmarks and page labels), all cached by file identity. None is
+pages, text layer, bookmarks and page labels; and a bottom-k sketch of 256 hashed
+five-word sequences for estimating shared text), all cached by file identity. A size
+gap becomes an explanatory note only when every copy shares at least 90% of the
+reference copy's text and the counts match; sketches stay server-side. None is
 part of a fingerprint, so keep-both decisions survive them. The source helper still
 compares only sizes; a preview stores corpus's content findings beside the plan
 (`params.contents`, never sent to the source), and its page shows them.

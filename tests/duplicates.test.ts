@@ -345,6 +345,7 @@ it("compares the copies' contents, prefers the more complete one as keeper, and 
  expect(g).toMatchObject({suggested_keep:"main:2",suggested_because:"has the most complete contents"});
  expect(g.content_warnings.map(w=>[w.measure,w.against])).toEqual([["page_list",["main:1"]],["images",["main:1"]]]);
  expect(g.books.find(b=>b.id==="main:2")!.contents.EPUB).toMatchObject({images:30,page_list:200});
+ expect(g.books[1].contents.EPUB).not.toHaveProperty("sketch");expect(g.content_overlap).toEqual({EPUB:{reference:"main:1",shared:{"main:2":1}},PDF:{reference:"main:1",shared:{"main:2":1}}});
  expect(g.books[0].contents.PDF).toMatchObject({pages:1});
  expect(pair().fingerprint).toBe(before);expect(pair().books[1].fingerprint).toBe(bookPrint);
  // The preview page gets the findings; the source gets only the plan.

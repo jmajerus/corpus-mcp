@@ -246,8 +246,7 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     for (const b of g.books.values()) {
       b.cover_colour = coverColour(path.join(c.booksRoot, b.folder, "cover.jpg"));
       for (const fmt of ["EPUB", "PDF"] as const) {
-        const profile = b.files[fmt] ? contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt) : null;
-        if (profile) b.contents[fmt] = profile;
+        if (b.files[fmt]) b.contents[fmt] = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt);
       }
     }
     const books = [...g.books.values()];
@@ -279,10 +278,13 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
   const result = [...groups.values()].map(g => {
     const books = [...g.books.values()].sort((a, b) => a.calibre_id - b.calibre_id);
     const suggested = [...books].sort(before)[0];
+    const findings = contentFindings(books, sizeWarnings(books));
+    // The text sketches only serve the comparison; the page gets the profiles without them.
+    for (const b of books) b.contents = Object.fromEntries(Object.entries(b.contents).map(([f, p]) => [f, "sketch" in p ? (({ sketch: _sketch, ...rest }) => rest)(p) : p]));
     return {
       key: books.map(b => b.id).join("|"), books, pairs: g.pairs, suggested_keep: suggested.id,
       suggested_because: reason(suggested, books.filter(b => b !== suggested)),
-      ...contentFindings(books, sizeWarnings(books)),
+      ...findings,
       identical: g.pairs.every(p => p.evidence.includes("Identical selected file")),
       writable: g.pairs.every(p => p.writable),
     };
@@ -294,7 +296,8 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
  * page: the source helper compares only file sizes. */
 export function duplicateContents(c: Corpus, writableLibrary: string, keepers: string[]) {
   const out: Record<number, { warnings: string[]; notes: string[] }> = {};
-  for (const g of duplicateGroups(c, writableLibrary, true).groups) {
+  // The same groups as the review screen and the plan: reviewed keep-both pairs do not link groups.
+  for (const g of duplicateGroups(c, writableLibrary).groups) {
     const keep = g.books.find(b => keepers.includes(b.id));
     if (keep && (g.content_warnings.length || g.content_notes.length)) out[keep.calibre_id] = { warnings: g.content_warnings.map(w => w.message), notes: g.content_notes };
   }
