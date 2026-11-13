@@ -53,7 +53,7 @@ async function load() {
     (j.params && j.params.books ? " · books " + j.params.books.map((b) => bookLink(b, b)).join(", ") : "");
   const items = j.items || [];
   const plan = j.params && j.params.plan;
-  const nothing = j.status === "succeeded" && (plan?.books ? plan.books.length === 0 : items.length === 0);
+  const nothing = j.status === "succeeded" && (plan?.books ? plan.books.length === 0 : items.every(it => it.convert_skipped));
   const actions = [];
   if (j.mode === "preview" && j.status === "succeeded" && !nothing && !items.some(it => it.duplicate_review?.blockers.length)) actions.push('<button type="button" class="primary" id="apply"' + (canWrite ? "" : " disabled") + ">Apply this preview</button>");
   if (j.mode === "preview" && nothing) actions.push('<span class="note">Nothing to apply.</span>');
@@ -70,6 +70,7 @@ async function load() {
         (it.duplicate_partial ? '<p class="status-failed">' + esc(it.duplicate_partial.message) + ' Backup: ' + esc(it.duplicate_partial.backup) + '</p>' : '') +
         (it.duplicate_resolved ? '<p>Duplicate ' + esc(it.duplicate_resolved.removed_id) + ' moved to Calibre’s trash. Backup: ' + esc(it.duplicate_resolved.backup) + '</p>' : '') +
         (it.metadata ? '<div>' + (it.metadata.partial ? '<strong>Partially applied</strong><br>' : '') + '<span class="chg del">' + esc(it.metadata.before.title) + ' · ' + esc(it.metadata.before.authors.join("; ")) + " · " + esc(it.metadata.before.year ?? "year unknown") + '</span><br><span class="chg add">' + esc(it.metadata.after.title) + ' · ' + esc(it.metadata.after.authors.join("; ")) + " · " + esc(it.metadata.after.year ?? "year unknown") + '</span></div>' : "") +
+        (it.convert_skipped ? '<span class="status-failed">Not converted: ' + esc(it.convert_skipped === "encrypted" ? "DRM-encrypted; download it again and add it through DeDRM" : it.convert_skipped + " file") + " (" + esc(String(it.source_format).toUpperCase()) + ")</span>" : "") +
         (it.added_format ? '<span class="chg add"><b>+</b>' + esc(String(it.added_format).toUpperCase()) + " from " + esc(String(it.source_format).toUpperCase()) + "</span>" : "") +
         "</td></tr>").join("") + "</tbody></table></div>"
     : "";

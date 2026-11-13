@@ -27,7 +27,7 @@ export const JOB_KINDS: Record<JobKind, JobSpec> = {
   backup: { title: "Back up data.db", calibre: false, previewable: false },
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
   cleanup: { title: "Remove non-subject tags from Calibre", calibre: true, previewable: true },
-  convert: { title: "Add EPUBs for MOBI/AZW3/KFX-only books", calibre: true, previewable: true },
+  convert: { title: "Add EPUBs or PDFs for MOBI/AZW/KFX-only books", calibre: true, previewable: true },
   zotero: { title: "Sync from Zotero now", calibre: false, previewable: false },
 };
 
@@ -48,6 +48,8 @@ export interface JobItem {
   duplicate_partial?: {backup:string;message:string};
   duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string;
+  /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */
+  convert_skipped?: string;
 }
 
 const MAX_LOG = 256 * 1024;
