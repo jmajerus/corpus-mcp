@@ -141,6 +141,18 @@ it("normalizes candidate keys once and coalesces overlapping evidence without tr
  ]);
 });
 
+it("matches one ASIN or ISBN across the Calibre fields that hold it",()=>{
+ const book=(identifiers:Record<string,string>)=>({title:'T'+Math.random(),authors:['Unknown'],format:'epub',sha256:null,identifiers});
+ expect(duplicateCandidates([
+  book({'mobi-asin':'B009U9S6EO'}),book({bookid:'urn:asin:B009U9S6EO'}),
+  book({isbn:'0-306-40615-2'}),book({EbookISBN:'9780306406157'}),book({bookid:'urn:isbn:978-0-306-40615-7'}),
+  book({bookid:'urn:uuid:B009U9S6EO'}),book({citekey:'B009U9S6EO'}),
+ ])).toEqual([
+  {i:0,j:1,evidence:['Matching identifier']},
+  {i:2,j:3,evidence:['Matching identifier']},{i:2,j:4,evidence:['Matching identifier']},{i:3,j:4,evidence:['Matching identifier']},
+ ]);
+});
+
 it("normalizes a large unrelated catalogue linearly rather than comparing every pair",()=>{
  let titleReads=0;
  const books=Array.from({length:10000},(_,i)=>({get title(){titleReads++;return 'Title '+i;},authors:['Author '+i],format:'pdf',sha256:'hash-'+i,identifiers:{asin:'ASIN'+i}}));

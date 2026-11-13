@@ -4,6 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { type BookRow, type Corpus, ToolError, getBook } from "./tools.js";
 import { recordChanges } from "./data.js";
+import { isbn13, validIsbn } from "./isbn.js";
 
 const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -86,6 +87,20 @@ interface DuplicateCandidate {
 }
 const EVIDENCE = ["Identical selected file", "Matching identifier", "Matching title and authors"] as const;
 
+/** One key per real-world identifier, whichever Calibre field holds it: a KFX import stores
+ * the ASIN as bookid "urn:asin:…" where a MOBI import wrote mobi-asin, and ISBNs arrive as
+ * isbn, EbookISBN or isbn-id, in ISBN-10 or ISBN-13 form. */
+export function identifierKey(type: string, value: string): string[] | null {
+  const t = type.toLowerCase();
+  if (t === "citekey" || t === "calibre") return null;
+  const urn = /^urn:(asin|isbn):(.+)$/i.exec(value.trim());
+  const kind = urn ? urn[1].toLowerCase() : t.includes("asin") || t.startsWith("amazon") ? "asin" : t.includes("isbn") ? "isbn" : t;
+  const id = (urn ? urn[2] : value).replace(/[\s-]/g, "").toLowerCase();
+  if (!id) return null;
+  const isbn = kind === "isbn" ? validIsbn(id) : null;
+  return ["identifier", kind, isbn ? isbn13(isbn) : id];
+}
+
 /** Normalize each book once; enumerate only pairs that share a candidate key.
  * Large true-duplicate groups still need one result for each matching pair.
  */
@@ -100,7 +115,8 @@ export function duplicateCandidates(books: DuplicateCandidate[]) {
   books.forEach((book, index) => {
     if (book.sha256) add(["file", book.format, book.sha256], EVIDENCE[0], index);
     for (const [type, value] of Object.entries(book.identifiers)) {
-      if (!["citekey", "calibre"].includes(type)) add(["identifier", type.includes("asin") ? "asin" : type.toLowerCase(), value.replace(/[\s-]/g, "").toLowerCase()], EVIDENCE[1], index);
+      const key = identifierKey(type, value);
+      if (key) add(key, EVIDENCE[1], index);
     }
     const title = normal(book.title), authors = book.authors.map(normal).sort();
     if (title && authors.join("|") && !authors.includes("unknown")) add(["title-authors", title, authors], EVIDENCE[2], index);
