@@ -26,8 +26,11 @@
   locations are not pages. `position` is where the passage is in the index.
 - `bibtex` is null when the citekey is blocked; `isbn` is null when Calibre's
   ISBN is missing or fails its check digit.
-- Until consumers switch, the legacy `citation` (`title`, `author`,
-  `publisher`, `year`, `pages`) and `zotero_filing` fields are also returned.
+- Until consumers switch, the legacy `citation` field (`title`, `author`,
+  `publisher`, `year`, `pages`) is also returned. The legacy `zotero_filing`
+  calls, which named a tool no portal server has, were removed on 2026-11-13:
+  file a book from `bibtex` or `isbn` with the reference manager's own tool
+  (Zotero's `zotero_add_item`).
 
 ## Locators
 
@@ -57,7 +60,7 @@ never changes on its own and is accepted anywhere a book id is. A `citekey`
 identifier set in Calibre takes precedence over a pinned key.
 
 Pinned keys live in `data.db`, which unlike the index is never rebuilt and is
-backed up nightly. `corpus_status` lists books whose metadata blocks a key:
+backed up nightly. `status` lists books whose metadata blocks a key:
 an unknown author, no year, or one author record naming several people.
 
 When Calibre has no valid ISBN, `cite_passage` also returns `isbn_candidates`.
@@ -77,7 +80,7 @@ publication year printed, so a reissue's "© 1949 … introduction © 2003" give
 reprint years never count. Citations, BibTeX, and proposed citekeys then use
 that year, so the book is no longer blocked by "no year". `cite_passage` marks
 it with `year_source: "printed"` and `year_evidence` (the page and line), and
-warns that it should be confirmed and added in Calibre. `corpus_status` lists
+warns that it should be confirmed and added in Calibre. `status` lists
 these books under `printed_years`, and the admin book page shows every year
 found.
 
@@ -91,7 +94,7 @@ name printed only on the title page counts when its line holds one name, since
 "Rahul Sharma Vesa Kaihlavirta" is two people. A title that's a file name is
 matched to the printed line it was squashed from. Unlike a printed year, these
 are only candidates: a wrong author does more harm than a missing one, so they
-never go into a citation or a citekey. `corpus_status` lists them under
+never go into a citation or a citekey. `status` lists them under
 `title_pages`, and the admin book page and the dashboard's Authors card show
 an editable correction beside the cover. Apply to Calibre saves the reviewed title,
 individual authors, and publication year, then refreshes citation and citekey metadata. Books whose
@@ -129,8 +132,8 @@ last library version, with long timeouts, retries, and Zotero's `Backoff` and
 
 Agents now save quotes in quote-mcp (its `add_quote`), which checks them
 against the books here (`POST /api/verify`) and stores each one's anchor here
-(`POST /api/anchors`; see [Operations](operations.md#access)). This server's
-quote tools are retired. What follows describes the quotes still kept here,
+(`POST /api/anchors`; see [Operations](operations.md#access)). This server has
+no quote tools. What follows describes the quotes still kept here,
 saved by people (select text in a book's [reader](admin-ui.md#reading-and-saving-quotes-adminbooksidread)).
 Either way, the passage is checked against the book's text. Quote marks, dashes,
 spacing, case, and a page break inside the passage may differ; what's stored is

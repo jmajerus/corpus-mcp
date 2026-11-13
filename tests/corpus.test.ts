@@ -260,9 +260,9 @@ describe("tools", () => {
     expect(pdfCite.position).toEqual({ page: 3, end_page: 4, page_kind: "page", section: "Part One › Chapter 1", page_label: "1", end_page_label: "2" });
     expect(pdfCite).toMatchObject({ isbn: "9780000000002", isbn_candidates: [] });
     expect(pdfCite.bibtex).toMatch(/^@book\{author1986networks,/);
-    // The legacy fields, for one release.
+    // The legacy citation field, for one release; the legacy zotero_filing calls are gone.
     expect(pdfCite.citation).toEqual({ title: "Networks", author: "Ann Author and Bo Second", publisher: "Free Press", year: "1986", pages: "1-2" });
-    expect(pdfCite.zotero_filing?.map((f) => f.source)).toEqual(["calibre-metadata", "isbn-lookup"]);
+    expect(pdfCite).not.toHaveProperty("zotero_filing");
     const epubCite = citePassage(c, { book_id: "main:2", page: 1 });
     expect(epubCite.csl).toEqual({ id: "calibre:uuid-2", type: "book", title: "Echoes", author: [{ family: "Writer", given: "Cy" }] });
     expect(epubCite.locator).toBeNull();
