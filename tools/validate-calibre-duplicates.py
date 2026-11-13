@@ -188,6 +188,21 @@ assert {4,5,7} <= set(api.all_book_ids())
 db.close()
 ''')
     report['checks']['batchResolvesCleanGroupsSkipsStaleOneWithOneBackup'] = True
+
+    # Two duplicates with different EPUBs and a keeper without one: retaining "the keeper's
+    # version" cannot choose between them, so the group stays blocked either way.
+    for title, seed in [('Batch D', 'operator.pdf'), ('Batch D', 'operator.epub'), ('Batch D', 'operator.epub')]:
+        run(['/usr/bin/calibredb', 'add', '--duplicates', '--with-library', str(library), '--title', title, '--authors', 'Test Writer', str(root / 'seeds' / seed)])
+    with sqlite3.connect(library / 'metadata.db') as db:
+        d = [{'id': i, 'uuid': u} for i, u in db.execute("SELECT id,uuid FROM books WHERE title='Batch D' ORDER BY id")]
+        folder, name = db.execute("SELECT b.path,d.name FROM books b JOIN data d ON d.book=b.id WHERE b.id=?", (d[2]['id'],)).fetchone()
+    import zipfile as _zip
+    with _zip.ZipFile(library / folder / (name + '.epub'), 'a') as archive:
+        archive.writestr('OEBPS/extra.txt', 'a different copy')
+    for discard in (False, True):
+        blocked = review({'keep': d[0], 'remove': d[1:], 'discard_conflicts': discard})
+        assert any('the keeper has none' in b for b in blocked['blockers']), blocked['blockers']
+    report['checks']['conflictBetweenDuplicatesWithoutKeeperVersionBlocks'] = True
     report['scriptSha256'] = hashlib.sha256(helper.read_bytes()).hexdigest()
     report['pass'] = True
 finally:

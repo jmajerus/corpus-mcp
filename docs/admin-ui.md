@@ -356,7 +356,9 @@ keeper, a record with saved references can only be the keeper, and a record in
 another library than the keeper cannot be trashed into it. The suggested keeper
 is a referenced record, then an indexed one, then the one with the most formats, then
 the one added to Calibre first. Explicitly choose whether the keeper's versions should win for conflicting
-formats, then **Preview this group**.
+formats, then **Preview this group**. That choice only keeps the keeper's own version:
+when two duplicates have different files in a format the keeper lacks, the group stays
+blocked until you make one of them the keeper or resolve one separately.
 
 To resolve many groups at once, tick them (or **Select identical-file groups**, the
 safest set, or **Select all shown**) and choose **Preview selected**. The source

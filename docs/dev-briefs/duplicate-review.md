@@ -130,12 +130,15 @@ are both required before the new screen can execute resolutions.
 
 The batch helper ran the same validator on calibre-web.localdomain (Calibre 8.5, as
 `authoring`) in a new disposable library,
-`/mnt/Calibre/.corpus-duplicate-operator-STZbdxnW`. All earlier checks passed under the
+`/mnt/Calibre/.corpus-duplicate-operator-MTqajYxJ`. All earlier checks passed under the
 batch plan format. The new checks also passed:
 
 - A plan previewed with conflicting formats kept, then sent to apply with
   `discard_conflicts` turned on, was refused as changed since preview: the conflict
   choice is part of each group's fingerprint.
+- Two duplicates with different EPUB files, and a keeper without one, stayed blocked
+  with or without `discard_conflicts`: that choice only keeps the keeper's own
+  version, so it never picks between duplicates.
 
 - A three-group batch preview reviewed each group: a keeper with an identical copy and
   an EPUB-only record, a second pair, and a third pair.
@@ -145,5 +148,5 @@ batch plan format. The new checks also passed:
 - The keeper gained the EPUB and the duplicates' tags, and all three trashed records
   restored from Calibre's trash.
 
-Helper SHA-256: `48e2015a698e63e2ff11e2dc68ceb341d2ae94d35882ffa18cd5f0bdfb58cb73`.
+Helper SHA-256: `cca1ab1b18850287fd1e3e1b57ce42d0636989f443e81e24afb87d6198a72f41`.
 No production book was changed.

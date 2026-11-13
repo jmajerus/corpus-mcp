@@ -139,7 +139,12 @@ class Review:
                     formats[fmt] = (remove['id'], info)
                     self.copy_formats.append({'format': fmt, 'from': remove['id']})
                 elif formats[fmt][1]['sha256'] != info['sha256']:
-                    self.conflicts.append({'format': fmt, 'from': remove['id']})
+                    if formats[fmt][0] == self.keep['id']:
+                        self.conflicts.append({'format': fmt, 'from': remove['id']})
+                    else:
+                        # The keeper has no version to retain, so discard_conflicts cannot settle this.
+                        blockers.append(f'Duplicates {formats[fmt][0]} and {remove["id"]} have different {fmt} files and the keeper has none. '
+                                        'Make the one to keep the keeper, or resolve one of them separately.')
             format_files = {v['file'] for v in remove['formats'].values()}
             for name, value in remove['files'].items():
                 if name in format_files or name == 'cover.jpg':
