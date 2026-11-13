@@ -31,9 +31,16 @@ order and date added) or deleted where the keeper is already on that shelf, and 
 shelf's `last_modified` is set, as Calibre-Web's own shelf edits do (Kobo sync reads
 it). The apply backs up `app.db` into the batch's `.files/app.db` first. Every other
 Calibre-Web table that references the duplicate, and an orphaned shelf link, still
-blocks. Corpus ranks keepers with the public shelves it mirrors and each cover's
-colourfulness (Hasler–Süsstrunk, cached by file identity); neither is part of a
-fingerprint, so keep-both decisions survive them.
+blocks. Corpus ranks keepers with the public shelves it mirrors, each cover's colourfulness
+(Hasler–Süsstrunk), and a profile of each copy's mirrored EPUB and PDF
+(`src/duplicate-contents.ts`: words, navigation, page list, links, images and fonts;
+pages, text layer, bookmarks and page labels; and a bottom-k sketch of 256 hashed
+five-word sequences for estimating shared text), all cached by file identity. A size
+gap becomes an explanatory note only when every copy shares at least 90% of the
+reference copy's text and the counts match; sketches stay server-side. None is
+part of a fingerprint, so keep-both decisions survive them. The source helper still
+compares only sizes; a preview stores corpus's content findings beside the plan
+(`params.contents`, never sent to the source), and its page shows them.
 
 ## Batches
 

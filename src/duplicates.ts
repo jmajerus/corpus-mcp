@@ -6,6 +6,7 @@ import * as mupdf from "mupdf";
 import { type BookRow, type Corpus, ToolError } from "./tools.js";
 import { recordChanges } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
+import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 
 const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -32,7 +33,7 @@ function allReferences(c: Corpus) {
   return result;
 }
 
-type CatalogueMetadata = Map<string, { identifiers: Record<string, string>; formats: string[]; sizes: Record<string, number> }>;
+type CatalogueMetadata = Map<string, { identifiers: Record<string, string>; formats: string[]; sizes: Record<string, number>; files: Record<string, string> }>;
 const catalogues = new WeakMap<Corpus, Map<string, { signature: string; metadata: CatalogueMetadata }>>();
 function signature(file: string) {
   try {
@@ -65,14 +66,14 @@ function catalogue(c: Corpus) {
       try {
         db.transaction(() => {
           for (const r of db.prepare("SELECT book,type,val FROM identifiers ORDER BY type,val").all() as {book:number;type:string;val:string}[]) {
-            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [], sizes: {} };
+            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [], sizes: {}, files: {} };
             item.identifiers[r.type] = r.val; metadata.set(key, item);
           }
           // Calibre records each format's size; an older or hand-made catalogue may lack the column.
           const sized = (db.prepare("SELECT name FROM pragma_table_info('data')").pluck().all() as string[]).includes("uncompressed_size");
-          for (const r of db.prepare(`SELECT book,format${sized ? ",uncompressed_size AS size" : ""} FROM data ORDER BY format`).all() as {book:number;format:string;size?:number}[]) {
-            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [], sizes: {} };
-            item.formats.push(r.format); if (r.size) item.sizes[r.format] = r.size; metadata.set(key, item);
+          for (const r of db.prepare(`SELECT book,format,name${sized ? ",uncompressed_size AS size" : ""} FROM data ORDER BY format`).all() as {book:number;format:string;name:string;size?:number}[]) {
+            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [], sizes: {}, files: {} };
+            item.formats.push(r.format); item.files[r.format] = `${r.name}.${r.format.toLowerCase()}`; if (r.size) item.sizes[r.format] = r.size; metadata.set(key, item);
           }
         })();
       } finally { db.close(); }
@@ -180,13 +181,13 @@ function candidateBooks(c: Corpus) {
       formats: metadata.get(b.id)?.formats ?? (b.format ? [b.format.toUpperCase()] : []),
       references: b.uuid ? references.get(b.uuid) ?? emptyReferences() : {},
     };
-    // `added`, shelves and the cover only rank the suggested keeper; they stay out of the
-    // fingerprints, so keep-both decisions hold. The cover is read only for candidates (see below).
+    // `added`, shelves, the cover and the contents only rank the suggested keeper; they stay out of
+    // the fingerprints, so keep-both decisions hold. Covers and contents are read only for candidates (see below).
     return { ...book, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder,
-      sizes: metadata.get(b.id)?.sizes ?? {}, fingerprint: hash(book) };
+      sizes: metadata.get(b.id)?.sizes ?? {}, files: metadata.get(b.id)?.files ?? {}, contents: {} as BookContents, content_flags: 0, fingerprint: hash(book) };
   });
 }
-const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 
 /** Copies whose EPUB or PDF sizes differ by this fraction or more are flagged (as in tools/calibre-duplicates.py). */
 export const SIZE_DIFFERENCE = 0.1;
@@ -225,7 +226,8 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
 
 /** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
  * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
- * C merge into A. The suggested keeper is a referenced record, then one with a colour cover, then
+ * C merge into A. The suggested keeper is a referenced record, then the one whose EPUB or PDF falls
+ * short least against its duplicates, then one with a colour cover, then
  * one on a Calibre-Web shelf, then an indexed one, then the one with the most formats, then the one
  * added to Calibre first (by its added date, then its id). */
 export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismissed = false) {
@@ -240,15 +242,25 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     for (const b of p.books) group.books.set(b.id, b);
     group.pairs.push(p); groups.set(root, group);
   }
-  for (const g of groups.values()) for (const b of g.books.values()) {
-    b.cover_colour = coverColour(path.join(c.booksRoot, b.folder, "cover.jpg"));
+  for (const g of groups.values()) {
+    for (const b of g.books.values()) {
+      b.cover_colour = coverColour(path.join(c.booksRoot, b.folder, "cover.jpg"));
+      for (const fmt of ["EPUB", "PDF"] as const) {
+        if (b.files[fmt]) b.contents[fmt] = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt);
+      }
+    }
+    const books = [...g.books.values()];
+    for (const w of contentFindings(books, []).content_warnings) for (const id of w.against) g.books.get(id)!.content_flags++;
   }
   const colour = (b: DuplicateBook) => b.cover_colour !== null && b.cover_colour >= GREYSCALE_COVER;
-  // Lower is better, in order. A referenced record must be the keeper. The keeper's file and cover are
-  // what survive, so a colour cover beats a black-and-white or missing one (older MOBI-era records
-  // often carry greyscale covers). Shelf links move to the keeper either way, so a shelf only breaks ties.
+  // Lower is better, in order. A referenced record must be the keeper. The keeper's files and cover are
+  // what survive, so the copy whose EPUB or PDF falls short least (missing figures, contents or print
+  // pages, fewer words, a scanned PDF) comes first, then a colour cover over a black-and-white or missing
+  // one (older MOBI-era records often carry greyscale covers). Shelf links move to the keeper either
+  // way, so a shelf only breaks ties.
   const criteria: [string, (b: DuplicateBook) => number][] = [
     ["has saved references", b => referenced(b) ? 0 : 1],
+    ["has the most complete contents", b => b.content_flags],
     ["has a colour cover", b => colour(b) ? 0 : 1],
     ["is on a Calibre-Web shelf", b => b.shelves.length ? 0 : 1],
     ["is indexed", b => b.status === "indexed" ? 0 : 1],
@@ -266,15 +278,30 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
   const result = [...groups.values()].map(g => {
     const books = [...g.books.values()].sort((a, b) => a.calibre_id - b.calibre_id);
     const suggested = [...books].sort(before)[0];
+    const findings = contentFindings(books, sizeWarnings(books));
+    // The text sketches only serve the comparison; the page gets the profiles without them.
+    for (const b of books) b.contents = Object.fromEntries(Object.entries(b.contents).map(([f, p]) => [f, "sketch" in p ? (({ sketch: _sketch, ...rest }) => rest)(p) : p]));
     return {
       key: books.map(b => b.id).join("|"), books, pairs: g.pairs, suggested_keep: suggested.id,
       suggested_because: reason(suggested, books.filter(b => b !== suggested)),
-      size_warnings: sizeWarnings(books),
+      ...findings,
       identical: g.pairs.every(p => p.evidence.includes("Identical selected file")),
       writable: g.pairs.every(p => p.writable),
     };
   }).sort((a, b) => a.books[0].calibre_id - b.books[0].calibre_id);
   return { groups: result, pairs: pairs.length };
+}
+
+/** The content findings of the groups these keepers head, by the keeper's Calibre id, for the preview
+ * page: the source helper compares only file sizes. */
+export function duplicateContents(c: Corpus, writableLibrary: string, keepers: string[]) {
+  const out: Record<number, { warnings: string[]; notes: string[] }> = {};
+  // The same groups as the review screen and the plan: reviewed keep-both pairs do not link groups.
+  for (const g of duplicateGroups(c, writableLibrary).groups) {
+    const keep = g.books.find(b => keepers.includes(b.id));
+    if (keep && (g.content_warnings.length || g.content_notes.length)) out[keep.calibre_id] = { warnings: g.content_warnings.map(w => w.message), notes: g.content_notes };
+  }
+  return out;
 }
 
 export interface DuplicateGroupSelection { keep: string; remove: string[]; fingerprints: Record<string, string>; discard_conflicts?: boolean }

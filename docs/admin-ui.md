@@ -364,17 +364,30 @@ To resolve a group, choose its **Keep** record; every record that matches the ke
 directly is marked **Trash**. Untick any you want to leave alone. A record that only
 matches another duplicate (A–B–C, where C does not match A) cannot merge into that
 keeper, a record with saved references can only be the keeper, and a record in
-another library than the keeper cannot be trashed into it. The suggested keeper
-is a record with saved references, then one with a colour cover rather than a
-black-and-white or missing one, then one on a public Calibre-Web shelf, then an
-indexed one, then the one with the most formats, then the one added to Calibre first.
-The keeper's own file and cover are what survive, and older MOBI-era records often
-carry greyscale covers; shelf memberships move to the keeper either way. Each card
-lists its public shelves and whether its cover is colour, black and white, or missing,
-and the suggested keeper says why it was chosen. When copies' EPUB or PDF files differ
-in size by 10% or more, the card and the preview warn that one may be incomplete, a
-sample, another edition or a different conversion (not a blocker); the count above the groups says how many
-groups have such a warning. Explicitly choose whether the keeper's versions should win for conflicting
+another library than the keeper cannot be trashed into it.
+
+Each card's **Compare contents** table sets the copies' EPUBs and PDFs side by side:
+how much of their text they share (estimated from a sample of hashed five-word
+sequences, against the copy with the most words), words, table-of-contents entries, print pages mapped (an EPUB page list, which lets
+a passage be cited by its printed page), internal links, images, fonts and markup, and
+for a PDF its pages, pages with a text layer, bookmarks and printed page numbers.
+Where one copy falls well short of another, the card warns and names it: 5% fewer
+words, under half the contents entries, print pages, links or images, a PDF that is
+mostly scanned images, an EPUB or PDF whose last pages read like a store sample, or
+one that cannot be read. Copies sharing under 70% of their text are warned about as
+possibly different editions, translations or books, without counting against either. Copies whose EPUB or PDF sizes differ by 10% or more are compared the
+same way. Only if they share at least 90% of their text and their counts match does
+the card explain the gap (images, fonts or markup) in a note instead of warning. The count above the groups says how
+many groups have a warning, and the preview repeats them.
+
+The suggested keeper is a record with saved references, then the copy that falls
+short least, then one with a colour cover rather than a black-and-white or missing
+one, then one on a public Calibre-Web shelf, then an indexed one, then the one with
+the most formats, then the one added to Calibre first. The keeper's own files and
+cover are what survive, and older MOBI-era records often carry greyscale covers;
+shelf memberships move to the keeper either way. Each card lists its public shelves
+and whether its cover is colour, black and white, or missing, and the suggested
+keeper says why it was chosen. Explicitly choose whether the keeper's versions should win for conflicting
 formats, then **Preview this group**. That choice only keeps the keeper's own version:
 when two duplicates have different files in a format the keeper lacks, the group stays
 blocked until you make one of them the keeper or resolve one separately. **Keepers’

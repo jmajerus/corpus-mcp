@@ -70,7 +70,7 @@ async function load() {
       items.map((it) => "<tr><td>" + bookLink(library + ":" + it.calibre_id, it.title) + '<br><span class="note">' + esc(library + ":" + it.calibre_id) + "</span></td><td>" +
         (it.added || []).map((t) => '<span class="chg add" title="' + esc(t) + '"><b>+</b>' + esc(LABELS.get(t) || t) + "</span>").join("") +
         (it.removed || []).map((t) => '<span class="chg del" title="' + esc(t) + '"><b>−</b>' + esc(LABELS.get(t) || t) + "</span>").join("") +
-        (it.duplicate_review ? duplicateReview(it.duplicate_review, library, calibreLink) : '') +
+        (it.duplicate_review ? duplicateReview(it.duplicate_review, library, calibreLink, ((j.params && j.params.contents) || {})[it.duplicate_review.plan.keep.id]) : '') +
         (it.duplicate_skipped ? '<p class="status-failed">Skipped without changes: ' + esc(it.duplicate_skipped.message) + '</p>' : '') +
         (it.duplicate_partial ? '<p class="status-failed">' + esc(it.duplicate_partial.message) + ' Backup: ' + esc(it.duplicate_partial.backup) + '</p>' : '') +
         (it.duplicate_resolved ? '<p>Duplicate ' + esc(it.duplicate_resolved.removed_id) + ' moved to Calibre’s trash' + ((it.duplicate_resolved.shelves || []).length ? '; shelves ' + esc(it.duplicate_resolved.shelves.map(s => s.shelf + ' ' + (s.action === 'moved' ? 'moved to the keeper' : 'already had the keeper')).join(', ')) : '') + '. Backup: ' + esc(it.duplicate_resolved.backup) + '</p>' : '') +
@@ -86,14 +86,18 @@ async function load() {
   if (j.status === "running") setTimeout(load, 1500);
 }
 
-function duplicateReview(r, library, calibreLink) {
+function duplicateReview(r, library, calibreLink, contents) {
+  // Corpus compared the copies' contents when the preview was made; a size gap they explain is a note, not a warning.
+  const explained = new Set(((contents && contents.notes) || []).map(n => n.split(' ')[0]));
   // Reviews saved before batch resolution hold one remove object and plain format names.
   const removes = [].concat(r.plan.remove).map(x => x.id), members = [r.keep, ...[].concat(r.remove || [])].filter(Boolean);
   const fmt = list => (list || []).map(c => typeof c === 'string' ? c : c.format + ' from ' + c.from).join(', ') || 'none';
   return '<div><strong>Keep ' + esc(library + ':' + r.plan.keep.id) + '; trash ' + esc(removes.map(id => library + ':' + id).join(', ')) + '</strong><p>' + calibreLink(r.plan.keep.id, 'Open keeper in Calibre-Web') + removes.map(id => ' · ' + calibreLink(id, 'Open ' + id + ' in Calibre-Web')).join('') + '</p>' +
     (r.keep ? '<p>Copy unique formats: ' + esc(fmt(r.copy_formats)) + '. Keep keeper’s conflicting formats: ' + esc(fmt(r.conflicting_formats)) + '.</p><p>Unique tags and missing descriptive metadata are preserved. Every record and its files are backed up before the duplicates enter Calibre’s trash.</p>' +
       ((r.shelves || []).length ? '<p>Calibre-Web shelves: ' + esc(r.shelves.map(s => s.shelf + (s.action === 'move' ? ' moves from ' + s.duplicate + ' to the keeper' : ' already has the keeper; ' + s.duplicate + '’s link is removed')).join('; ')) + '. Calibre-Web’s app.db is backed up first.</p>' : '') : '') +
-    (r.size_warnings || []).map(w => '<p class="warning">' + esc(w) + '</p>').join('') +
+    ((contents && contents.warnings) || []).map(w => '<p class="warning">' + esc(w) + '</p>').join('') +
+    (r.size_warnings || []).filter(w => !explained.has(w.split(' ')[0])).map(w => '<p class="warning">' + esc(w) + '</p>').join('') +
+    ((contents && contents.notes) || []).map(w => '<p class="note">' + esc(w) + '</p>').join('') +
     r.blockers.map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +
     (members.length > 1 ? '<details><summary>Compare source metadata and formats</summary><div class="scroll"><table><thead><tr><th>Field</th>' + members.map((m, i) => '<th>' + (i ? 'Duplicate ' : 'Keeper ') + esc(m.id) + '</th>').join('') + '</tr></thead><tbody>' + ['title','authors','pubdate','publisher','comments','series','languages','rating','tags','identifiers'].map(k => '<tr><th>' + esc(k) + '</th>' + members.map(m => '<td>' + esc(JSON.stringify(m.values[k] ?? '')) + '</td>').join('') + '</tr>').join('') + '<tr><th>formats</th>' + members.map(m => '<td>' + esc(Object.keys(m.formats).join(', ')) + '</td>').join('') + '</tr></tbody></table></div><p>The keeper’s populated fields take precedence. Missing descriptive fields and identifiers are copied from the first duplicate that has them.</p></details>' : '') + '</div>';
 }

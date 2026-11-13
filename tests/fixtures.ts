@@ -1,3 +1,4 @@
+import { strToU8, zipSync } from "fflate";
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import os from "node:os";
@@ -181,4 +182,26 @@ export function makeLibrary(root: string, library: string, books: FixtureBook[])
     }
   }
   db.close();
+}
+
+/** An EPUB of a given shape, for comparing duplicates: `words` of text drawn from `vocabulary`, `images` figures, an
+ * EPUB 3 nav with `toc` entries and `pages` print pages, an NCX page list of `ncxPages`, `links` internal links,
+ * `quote` inside the first chapter, and `ending` as the last chapter in reading order. */
+export function makeShapedEpub(o: { words?: number; vocabulary?: string; images?: number; toc?: number; pages?: number; ncxPages?: number; links?: number; quote?: string; ending?: string } = {}) {
+  const text = Array.from({ length: o.words ?? 1000 }, (_, i) => `${o.vocabulary ?? "word"}${i}`).join(" ");
+  const links = Array.from({ length: o.links ?? 0 }, (_, i) => `<a href="notes.xhtml#n${i}">${i}</a>`).join("");
+  const files: Record<string, Uint8Array> = {
+    "mimetype": strToU8("application/epub+zip"),
+    "META-INF/container.xml": strToU8('<container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'),
+    "OEBPS/content.opf": strToU8('<package><manifest><item id="c2" href="ch2.xhtml"/><item id="c1" href="ch1.xhtml"/><item id="nav" href="nav.xhtml"/></manifest>' +
+      '<spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>'),
+    // ch2, the ending, comes first in the archive: the reading order is the spine's, not the ZIP's.
+    "OEBPS/ch2.xhtml": strToU8(`<html><body><p>${o.ending ?? "The end."}</p></body></html>`),
+    "OEBPS/ch1.xhtml": strToU8(`<html><head><title>Not counted</title><style>p{}</style></head><body><p>${text}</p><p>don&#8217;t&nbsp;stop</p>${links}<a href="https://example.org/">external</a><p>${o.quote ?? ""}</p></body></html>`),
+    "OEBPS/nav.xhtml": strToU8(`<html><body><nav epub:type="toc"><ol>${"<li><a href=\"ch1.xhtml\">Chapter title words</a></li>".repeat(o.toc ?? 0)}</ol></nav>` +
+      `<nav epub:type="page-list"><ol>${"<li><a href=\"ch1.xhtml#p\">1</a></li>".repeat(o.pages ?? 0)}</ol></nav></body></html>`),
+  };
+  if (o.ncxPages) files["OEBPS/toc.ncx"] = strToU8(`<ncx><navMap><navPoint/></navMap><pageList>${"<pageTarget/>".repeat(o.ncxPages)}</pageList></ncx>`);
+  for (let i = 0; i < (o.images ?? 1); i++) files[`OEBPS/images/fig${i}.jpg`] = new Uint8Array(2048);
+  return zipSync(files);
 }
