@@ -55,7 +55,7 @@ const VERSION = "0.2.0";
 const INSTRUCTIONS = `Search, read, and cite books in the Calibre libraries (books that are not Zotero attachments; use the Zotero server for those).
 Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). Pages are 1-based. For PDFs a page is a physical page and page_label is the printed number to cite. For EPUB and MOBI a page is a stable reading location, not a citable page number; cite those by chapter (the section path).
 Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey.
-Quotes are kept in quote-mcp: save one with its add_quote (work = a book id or citekey from here), which checks the words against the book here, and cite it with its cite_quote. This server's quote tools are retired.`;
+Quotes are kept in quote-mcp: save one with its add_quote (work = a book id or citekey from here), which checks the words against the book here, and cite it with its cite_quote. This server has no quote tools.`;
 
 const bookId = z.string().describe('Book id from search_corpus or list_books (e.g. "main:42"), or the book\'s citekey');
 const page = z.number().int().min(1);
@@ -205,22 +205,6 @@ export function createServer(c: Corpus): McpServer {
     return typeof email === "string" ? email : undefined;
   };
 
-  // Quotes moved to quote-mcp (docs/dev-briefs/holdings-and-quotes.md §3). For one release the old tools stay,
-  // answering with the quote-mcp tool to use instead, so an agent that still calls them learns where to go.
-  const retired = (name: string, title: string, pointer: string) =>
-    server.registerTool(name, {
-      title: `${title} (retired)`,
-      description: `Retired: quotes are now kept in quote-mcp. ${pointer}`,
-      inputSchema: {},
-      annotations: { title: `${title} (retired)`, ...readOnly },
-    }, () => ({ isError: true, content: [{ type: "text", text: `${name} is retired: quotes are now kept in quote-mcp. ${pointer}` }] }));
-  retired("save_quote", "Save a quote", "Use quote-mcp's add_quote, with this book's id (main:42) or citekey as work; it checks the words against the book here first.");
-  retired("search_quotes", "Search quotes", "Use quote-mcp's search_quotes.");
-  retired("get_quote", "Get a quote", "Use quote-mcp's get_quote.");
-  retired("cite_quote", "Cite a quote", "Use quote-mcp's cite_quote; for a book's filing data, use cite_passage here.");
-  retired("update_quote", "Update a quote", "quote-mcp has no tool to change a quote yet; ask the person to change it there.");
-  retired("delete_quote", "Delete a quote", "quote-mcp has no tool to delete a quote yet; ask the person to delete it there.");
-
   server.registerTool("get_book_outline", {
     title: "Get book outline",
     description: "Metadata and table of contents with the page where each section starts. Read this before reading a long book.",
@@ -262,7 +246,7 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("cite_passage", {
     title: "Cite a book",
-    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position. PDF locators use printed page labels; EPUB and MOBI locations are not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. When Calibre has no publication year, the year printed on the book's copyright page is used, with year_source \"printed\" and year_evidence (page and line); confirm it before relying on it. The legacy citation and zotero_filing fields remain for one release.",
+    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position. PDF locators use printed page labels; EPUB and MOBI locations are not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. When Calibre has no publication year, the year printed on the book's copyright page is used, with year_source \"printed\" and year_evidence (page and line); confirm it before relying on it. The legacy citation field remains for one release.",
     inputSchema: {
       book_id: bookId,
       page: page.optional().describe("Page of the cited passage"),
@@ -286,7 +270,7 @@ export function createServer(c: Corpus): McpServer {
     return json(pinCitekey(c, args, typeof email === "string" ? email : undefined));
   }));
 
-  server.registerTool("corpus_status", {
+  server.registerTool("status", {
     title: "Corpus status",
     description: "Index freshness, book counts by library and format, books that failed, have no text layer, or have no outline, citekey readiness (pinned keys, and books blocked from filing by missing Calibre metadata), and the ISBNs, publication years, authors, and titles books print that Calibre lacks.",
     inputSchema: {},

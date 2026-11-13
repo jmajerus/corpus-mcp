@@ -30,19 +30,14 @@ Both are set where each tool is registered, in [`src/server.ts`](../src/server.t
 | `add_provisional_term` | Add a provisional term | ✓ | Proposes a term to terminology-mcp, copied from a reference-vocabulary term (`source`); usable for tagging at once, provisional until its owner confirms it there. |
 | `tagging_worklist` | Get books to tag | | Books still without a tag proposal, with the context needed to choose tags. |
 | `propose_tags` | Propose tags for a book | ✓ | Proposes 1–3 vocabulary tags for a book, for a person to review. |
-| `corpus_status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs, years, authors, and titles books print that Calibre lacks. |
+| `status` | Corpus status | | Reports index freshness, counts, books that failed, have no text layer, or have no outline, which books are ready for a citekey, and the ISBNs, years, authors, and titles books print that Calibre lacks. |
 
-| `save_quote` | Save a quote (retired) | | Points to quote-mcp's `add_quote`, which checks the passage against the book. |
-| `search_quotes` | Search quotes (retired) | | Points to quote-mcp's `search_quotes`. |
-| `get_quote` | Get a quote (retired) | | Points to quote-mcp's `get_quote`. |
-| `update_quote` | Update a quote (retired) | | quote-mcp has no change tool yet; ask the person to change it there. |
-| `delete_quote` | Delete a quote (retired) | | quote-mcp has no delete tool yet; ask the person to delete it there. |
-| `cite_quote` | Cite a quote (retired) | | Points to quote-mcp's `cite_quote`; use `cite_passage` here for filing data. |
+Quotes are kept in quote-mcp, which has its own tools (`add_quote`,
+`search_quotes`, `cite_quote`, and more). corpus-mcp's retired quote tools,
+which only pointed there, were removed on 2026-11-13.
 
-The quote tools (`save_quote`, `search_quotes`, `get_quote`, `update_quote`,
-`delete_quote`, `cite_quote`) are retired: quotes are kept in quote-mcp now.
-For one release they stay listed, marked "(retired)", and answer with the
-quote-mcp tool to use instead.
+`status` was `corpus_status` until 2026-11-13. It was renamed so that a portal
+prefixing each server's tools shows `corpus_status`, not `corpus_corpus_status`.
 
 The tools marked *Writes* declare `readOnlyHint: false`; every other tool is
 annotated read-only. Clients that group or gate tools by permission, as Claude web

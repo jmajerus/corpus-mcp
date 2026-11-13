@@ -513,9 +513,6 @@ export function printedIsbns(book: BookRow): IsbnCandidate[] {
   return book.printed_isbns ? (JSON.parse(book.printed_isbns) as IsbnCandidate[]) : [];
 }
 
-/** Legacy: the filing calls the first CSL release still returns, until consumers switch to bibtex and isbn. */
-interface LegacyFiling { tool: "file_zotero_reference"; arguments: { bibtex: string } | { isbn: string }; source: "calibre-metadata" | "isbn-lookup" }
-
 export interface CiteArgs { book_id: string; page?: number; end_page?: number }
 
 /**
@@ -588,11 +585,7 @@ export function citePassage(c: Corpus, args: CiteArgs) {
     warnings.push(`Calibre has no valid ISBN, but the book prints ${isbnCandidates.length} (isbn_candidates). Confirm the one for this edition (the file is ${book.format?.toUpperCase()}) before using it, and add it to Calibre. ISBNs in the last pages (position "back") are often adverts for other books.`);
   }
   if (!bibtex && !isbn) warnings.push("There is no BibTeX entry or valid ISBN to file this book with yet. Fix the metadata in Calibre.");
-  const zoteroFiling: LegacyFiling[] = [
-    ...(bibtex ? [{ tool: "file_zotero_reference" as const, source: "calibre-metadata" as const, arguments: { bibtex } }] : []),
-    ...(isbn ? [{ tool: "file_zotero_reference" as const, source: "isbn-lookup" as const, arguments: { isbn } }] : []),
-  ];
-  return { ...result, zotero_filing: zoteroFiling, warnings };
+  return { ...result, warnings };
 }
 
 export interface PinArgs { book_id: string; citekey: string; replace?: boolean }

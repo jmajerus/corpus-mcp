@@ -143,8 +143,8 @@ it("serves the tools over Streamable HTTP", async () => {
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
-    "add_provisional_term", "cite_passage", "cite_quote", "corpus_status", "delete_quote", "get_book_outline", "get_quote", "get_tag_vocabulary", "list_books", "list_shelves",
-    "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "save_quote", "search_corpus", "search_quotes", "tagging_worklist", "update_quote", "vocabulary_report",
+    "add_provisional_term", "cite_passage", "get_book_outline", "get_tag_vocabulary", "list_books", "list_shelves",
+    "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "search_corpus", "status", "tagging_worklist", "vocabulary_report",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });
@@ -152,9 +152,6 @@ it("serves the tools over Streamable HTTP", async () => {
   expect(missing.isError).toBe(true);
   const image = await client.callTool({ name: "render_page", arguments: { book_id: "main:1", page: 1 } });
   expect((image.content as { type: string }[])[0].type).toBe("image");
-  const retired = await client.callTool({ name: "save_quote", arguments: { book_id: "main:1", text: "novel information" } });
-  expect(retired.isError).toBe(true);
-  expect((retired.content as { text: string }[])[0].text).toContain("quote-mcp's add_quote");
   await client.close();
 });
 

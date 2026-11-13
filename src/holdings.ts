@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { pinnedByUuid } from "./data.js";
-import { validIsbn } from "./isbn.js";
-import { type BookRow, type Corpus, effectiveCitekey } from "./tools.js";
+import { isbn13, validIsbn } from "./isbn.js";
+import { type BookRow, type Corpus, effectiveCitekey, printedIsbns } from "./tools.js";
 import { zoteroMatch } from "./zotero.js";
 
 /**
@@ -11,7 +11,8 @@ import { zoteroMatch } from "./zotero.js";
  * one. `zotero` is the item the book is matched to (confirmed, filed with the book's UUID, or the one item
  * with its ISBN), never a candidate a person hasn't confirmed. `isbns` is Calibre's ISBN when its check
  * digit holds, as digits with no hyphens; never one only seen printed in the book, which a person hasn't
- * confirmed either. Books with an excluded tag aren't sent.
+ * confirmed either; those are `isbn_candidates`, a hint for a person to confirm, never a match. Books with
+ * an excluded tag aren't sent.
  */
 
 export const HOLDINGS_VERSION = 1;
@@ -28,8 +29,19 @@ export interface HoldingsBook {
   /** False for a book with no text layer (fewer than 20 characters a page). */
   has_text: boolean;
   isbns: string[];
+  /**
+   * ISBN-13s printed in the book's own text that aren't in `isbns`, front matter first; absent when there are
+   * none. Editions print each other's ISBNs, and the last pages advertise other books, so a candidate is
+   * something for a person to confirm, never a match.
+   */
+  isbn_candidates?: string[];
   citekey: string | null;
   citekey_source: "calibre" | "pinned" | "zotero" | null;
+  /**
+   * The citekey corpus-mcp proposes, as cite_passage's BibTeX uses it: only when Calibre's metadata blocks
+   * nothing; absent otherwise. A fallback for citing an unfiled book, never a key to resolve or match by.
+   */
+  proposed_citekey?: string;
   zotero: { library: string; key: string; matched_by: string } | null;
 }
 
@@ -55,12 +67,18 @@ export function holdingsBook(c: Corpus, b: BookRow, zoteroLibrary?: string): Hol
     }
   }
   const isbn = b.isbn ? validIsbn(b.isbn) : null;
+  // Read at index time, so this is a JSON parse, not a scan.
+  const printed = printedIsbns(b).sort((x, y) => (x.position === y.position ? x.page - y.page : x.position === "front" ? -1 : 1));
+  const candidates = [...new Set(printed.map((p) => p.isbn13))].filter((i) => !isbn || i !== isbn13(isbn));
   return {
     calibre_uuid: b.uuid, book_id: b.id, library: b.library, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year,
     formats: b.format ? [b.format] : [],
     has_text: hasText(b),
     isbns: isbn ? [isbn] : [],
-    citekey, citekey_source, zotero,
+    ...(candidates.length ? { isbn_candidates: candidates } : {}),
+    citekey, citekey_source,
+    ...(b.proposed_citekey && !(JSON.parse(b.citekey_blockers) as string[]).length ? { proposed_citekey: b.proposed_citekey } : {}),
+    zotero,
   };
 }
 

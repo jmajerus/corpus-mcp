@@ -52,7 +52,9 @@ indexed book:
     "calibre_uuid": "f2b79da7-…", "book_id": "main:223", "library": "main",
     "title": "Learning Systems Thinking", "authors": ["Diana Montalion"], "year": 2024,
     "formats": ["pdf"], "has_text": true, "isbns": ["9781718503984"],
+    "isbn_candidates": ["9781718503991"],
     "citekey": "montalion2024learning", "citekey_source": "pinned",
+    "proposed_citekey": "montalion2024learning",
     "zotero": { "library": "users/123", "key": "ABCD1234" }
   }]
 }
@@ -61,9 +63,19 @@ indexed book:
 - `has_text` is false for a book with no text layer.
 - `isbns` is Calibre's ISBN when its check digit holds, as digits (and a
   final X) with no hyphens, ISBN-10 or ISBN-13 as Calibre holds it. ISBNs
-  only seen printed in the book aren't sent.
+  only seen printed in the book are never in `isbns`.
+- `isbn_candidates` (optional, added 2026-11-13) lists the ISBNs printed in
+  the book's text that aren't its valid Calibre ISBN, as ISBN-13 digits,
+  front matter first. The key is absent when there are none. It is a hint
+  for a person to confirm (holdings-mcp flags likely missed matches with
+  it), never a match: editions print each other's ISBNs, and the last pages
+  advertise other books.
 - `citekey` is a real key only (pinned, Calibre's, or the matched item's),
   never a proposed one, as in the public key list.
+- `proposed_citekey` (optional, added 2026-11-13) is the key `cite_passage`
+  would file the book under, sent only when Calibre's metadata blocks none.
+  quote-mcp cites an unfiled book by it; it is never a key to resolve or
+  match by. `POST /api/verify`'s `book` carries the same fields.
 - `zotero` is the matched item, or null. Candidates a person hasn't
   confirmed aren't sent.
 - Books with an excluded tag (`private`) aren't sent, as they aren't
