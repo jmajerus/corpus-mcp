@@ -10,7 +10,7 @@ import { scanLibraries } from "../src/indexer.js";
 import { zoteroMatch } from "../src/zotero.js";
 import { type Corpus, getBook } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
-import { coverColour, GREYSCALE_COVER, duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
+import { coverColour, GREYSCALE_COVER, sizeWarnings, duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
 import { DUPLICATES_HTML } from "../src/web/duplicates.js";
 import { JOB_HTML } from "../src/web/jobs.js";
@@ -320,4 +320,12 @@ it("prefers a colour cover, then a shelved record, and says why, without changin
  expect(pair().fingerprint).toBe(before);expect(pair().books[1].fingerprint).toBe(bookPrint);
  c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','k','main:2','T','now')").run();
  expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"has saved references"});
+});
+it("flags groups whose EPUB or PDF sizes differ a lot, but not small differences",()=>{
+ expect(sizeWarnings([{id:"main:100",sizes:{EPUB:357*1024}},{id:"main:783",sizes:{EPUB:6617*1024}}])[0]).toMatch(/^EPUB sizes differ 18\.5×: main:100 0\.3 MiB, main:783 6\.5 MiB\./);
+ expect(sizeWarnings([{id:"main:102",sizes:{EPUB:1267}},{id:"main:810",sizes:{EPUB:1698}},{id:"main:9",sizes:{PDF:5}}])).toEqual([]);
+ const db=new Database(path.join(root,"main/metadata.db"));
+ db.exec("ALTER TABLE data ADD COLUMN uncompressed_size INTEGER; UPDATE data SET uncompressed_size=CASE book WHEN 1 THEN 1000000 ELSE 3000000 END");db.close();
+ expect(duplicateGroups(c,"main").groups[0].size_warnings).toEqual([expect.stringMatching(/^PDF sizes differ 3\.0×/)]);
+ expect(pair().fingerprint).toBeDefined();
 });

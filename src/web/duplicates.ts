@@ -29,13 +29,14 @@ function updateBatch(){
  const picked=groups.filter(g=>state[g.key].picked&&ready(g)),records=picked.reduce((n,g)=>n+state[g.key].trash.length,0);
  const button=document.getElementById('preview-batch');button.disabled=!picked.length;
  button.textContent=picked.length?'Preview '+picked.length+' group'+(picked.length===1?'':'s')+' ('+records+' to trash)':'Preview selected';
- document.getElementById('count').textContent=shown().length+' groups shown, '+groups.length+' in all.';
+ const sizes=groups.filter(g=>(g.size_warnings||[]).length).length;
+ document.getElementById('count').textContent=shown().length+' groups shown, '+groups.length+' in all.'+(sizes?' '+sizes+' with EPUB or PDF sizes that differ a lot; check those before choosing a keeper.':'');
 }
 function render() {
  document.getElementById('groups').innerHTML=shown().map(g=>{
   const n=groups.indexOf(g),s=state[g.key];
   const evidence=[...new Set(g.pairs.flatMap(p=>p.evidence))];
-  const warnings=[...new Set(g.pairs.map(p=>p.edition_warning).filter(Boolean))];
+  const warnings=[...new Set(g.pairs.map(p=>p.edition_warning).filter(Boolean))].concat(g.size_warnings||[]);
   return '<section class="card pair"><h2><label><input type="checkbox" data-pick="'+n+'" '+(s.picked?'checked ':'')+(ready(g)?'':'disabled')+'> '+g.books.length+' records</label> · '+evidence.map(esc).join(' · ')+'</h2>'+warnings.map(w=>'<p class="warning">'+esc(w)+'</p>').join('')+'<div class="compare">'+g.books.map(b=>{
    const keep=b.id===s.keep,trash=s.trash.includes(b.id),canTrash=trashable(g,s.keep,b);
    const looks=[b.shelves.length?'Shelves: '+b.shelves.join(', '):'On no public shelf',b.cover_colour===null?'no cover':b.cover_colour<5?'black-and-white cover':'colour cover'];

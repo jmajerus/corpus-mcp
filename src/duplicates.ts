@@ -32,7 +32,7 @@ function allReferences(c: Corpus) {
   return result;
 }
 
-type CatalogueMetadata = Map<string, { identifiers: Record<string, string>; formats: string[] }>;
+type CatalogueMetadata = Map<string, { identifiers: Record<string, string>; formats: string[]; sizes: Record<string, number> }>;
 const catalogues = new WeakMap<Corpus, Map<string, { signature: string; metadata: CatalogueMetadata }>>();
 function signature(file: string) {
   try {
@@ -65,12 +65,14 @@ function catalogue(c: Corpus) {
       try {
         db.transaction(() => {
           for (const r of db.prepare("SELECT book,type,val FROM identifiers ORDER BY type,val").all() as {book:number;type:string;val:string}[]) {
-            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [] };
+            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [], sizes: {} };
             item.identifiers[r.type] = r.val; metadata.set(key, item);
           }
-          for (const r of db.prepare("SELECT book,format FROM data ORDER BY format").all() as {book:number;format:string}[]) {
-            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [] };
-            item.formats.push(r.format); metadata.set(key, item);
+          // Calibre records each format's size; an older or hand-made catalogue may lack the column.
+          const sized = (db.prepare("SELECT name FROM pragma_table_info('data')").pluck().all() as string[]).includes("uncompressed_size");
+          for (const r of db.prepare(`SELECT book,format${sized ? ",uncompressed_size AS size" : ""} FROM data ORDER BY format`).all() as {book:number;format:string;size?:number}[]) {
+            const key = `${library}:${r.book}`, item = metadata.get(key) ?? { identifiers: {}, formats: [], sizes: {} };
+            item.formats.push(r.format); if (r.size) item.sizes[r.format] = r.size; metadata.set(key, item);
           }
         })();
       } finally { db.close(); }
@@ -180,10 +182,26 @@ function candidateBooks(c: Corpus) {
     };
     // `added`, shelves and the cover only rank the suggested keeper; they stay out of the
     // fingerprints, so keep-both decisions hold. The cover is read only for candidates (see below).
-    return { ...book, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder, fingerprint: hash(book) };
+    return { ...book, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder,
+      sizes: metadata.get(b.id)?.sizes ?? {}, fingerprint: hash(book) };
   });
 }
-const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+
+/** Copies whose EPUB or PDF sizes differ by this factor or more are flagged (as in tools/calibre-duplicates.py). */
+export const SIZE_RATIO = 1.5;
+/** Not a blocker: copies of one book whose EPUB or PDF differ a lot in size suggest one is incomplete,
+ * a sample, or another edition. */
+export function sizeWarnings(books: { id: string; sizes: Record<string, number> }[]) {
+  const warnings: string[] = [];
+  for (const fmt of ["EPUB", "PDF"]) {
+    const sized = books.filter(b => b.sizes[fmt]);
+    if (sized.length < 2) continue;
+    const values = sized.map(b => b.sizes[fmt]), ratio = Math.max(...values) / Math.min(...values);
+    if (ratio >= SIZE_RATIO) warnings.push(`${fmt} sizes differ ${ratio.toFixed(1)}×: ${sized.map(b => `${b.id} ${(b.sizes[fmt] / 1048576).toFixed(1)} MiB`).join(", ")}. One copy may be incomplete, a sample, or another edition.`);
+  }
+  return warnings;
+}
 const referenced = (b: DuplicateBook) => Object.values(b.references).some(n => n > 0);
 
 export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
@@ -248,6 +266,7 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     return {
       key: books.map(b => b.id).join("|"), books, pairs: g.pairs, suggested_keep: suggested.id,
       suggested_because: reason(suggested, books.filter(b => b !== suggested)),
+      size_warnings: sizeWarnings(books),
       identical: g.pairs.every(p => p.evidence.includes("Identical selected file")),
       writable: g.pairs.every(p => p.writable),
     };

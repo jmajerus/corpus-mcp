@@ -13,6 +13,7 @@ moves each duplicate's shelf links to its keeper (or drops them where the keeper
 shelf) just before the duplicates go to the trash. Any other Calibre-Web link still blocks.
 """
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -23,6 +24,8 @@ import sys
 import zipfile
 
 MAX_GROUPS = 500
+# Copies whose EPUB or PDF sizes differ by this factor or more are flagged (as in src/duplicates.ts).
+SIZE_RATIO = 1.5
 
 
 class DuplicateReviewError(Exception):
@@ -44,41 +47,55 @@ def inside(root, relative):
     return p
 
 
-def shelf_plan(app_db, keep_id, remove_id):
-    """The duplicate's shelf links and what the apply will do with each, without private shelf names."""
-    plan = []
+def shelf_steps(web, keep_id, remove_ids):
+    """Each duplicate's shelf links, in the group's order, and whether each moves to the keeper or is
+    dropped because the keeper, or an earlier duplicate's moved link, is already on that shelf. The
+    preview and the apply share it, so two duplicates on one shelf keep only the first one's link."""
+    on = {shelf for (shelf,) in web.execute('SELECT shelf FROM book_shelf_link WHERE book_id=?', (keep_id,))}
+    steps = []
+    for remove_id in remove_ids:
+        for link_id, shelf_id, name, public in web.execute('SELECT l.id,s.id,s.name,s.is_public FROM book_shelf_link l JOIN shelf s ON s.id=l.shelf WHERE l.book_id=? ORDER BY s.id,l.id', (remove_id,)).fetchall():
+            steps.append({'link': link_id, 'shelf_id': shelf_id, 'shelf': f'“{name}”' if public else 'a private shelf',
+                          'duplicate': remove_id, 'action': 'drop' if shelf_id in on else 'move'})
+            on.add(shelf_id)
+    return steps
+
+
+def shelf_plan(app_db, keep_id, remove_ids):
+    """What the apply will do with the group's shelf links, without private shelf names."""
     with sqlite3.connect(f'file:{app_db}?mode=ro', uri=True) as web:
-        for shelf_id, name, public in web.execute('SELECT s.id,s.name,s.is_public FROM shelf s JOIN book_shelf_link l ON l.shelf=s.id WHERE l.book_id=? ORDER BY s.id', (remove_id,)):
-            present = web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone() is not None
-            plan.append({'shelf': f'“{name}”' if public else 'a private shelf', 'duplicate': remove_id, 'action': 'drop' if present else 'move'})
-    return plan
+        return [{k: step[k] for k in ('shelf', 'duplicate', 'action')} for step in shelf_steps(web, keep_id, remove_ids)]
 
 
-def move_shelves(app_db, keep_id, remove_id):
-    """In one transaction, move the duplicate's shelf links to the keeper, keeping their order and date,
-    or drop a link where the keeper is already on that shelf; touch each shelf as Calibre-Web does."""
-    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat(sep=' ')
-    web = sqlite3.connect(app_db, timeout=30, isolation_level=None)
+@contextlib.contextmanager
+def calibre_web_write(app_db):
+    """Calibre-Web's write lock, held until the block ends: committed if it succeeds, rolled back if not."""
+    web = sqlite3.connect(f'file:{app_db}?mode=rw', uri=True, timeout=30, isolation_level=None)
     try:
         web.execute('BEGIN IMMEDIATE')
         try:
-            done = []
-            for link_id, shelf_id, name, public in web.execute('SELECT l.id,s.id,s.name,s.is_public FROM book_shelf_link l JOIN shelf s ON s.id=l.shelf WHERE l.book_id=? ORDER BY s.id', (remove_id,)).fetchall():
-                if web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone():
-                    web.execute('DELETE FROM book_shelf_link WHERE id=?', (link_id,))
-                    action = 'dropped'
-                else:
-                    web.execute('UPDATE book_shelf_link SET book_id=? WHERE id=?', (keep_id, link_id))
-                    action = 'moved'
-                web.execute('UPDATE shelf SET last_modified=? WHERE id=?', (now, shelf_id))
-                done.append({'shelf': f'“{name}”' if public else 'a private shelf', 'action': action})
+            yield web
             web.execute('COMMIT')
-            return done
         except BaseException:
             web.execute('ROLLBACK')
             raise
     finally:
         web.close()
+
+
+def move_shelves(web, keep_id, remove_ids):
+    """Within the caller's transaction, move the duplicates' shelf links to the keeper (keeping their
+    order and date added) or drop the redundant ones, and touch each shelf as Calibre-Web does."""
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat(sep=' ')
+    done = []
+    for step in shelf_steps(web, keep_id, remove_ids):
+        if step['action'] == 'move':
+            web.execute('UPDATE book_shelf_link SET book_id=? WHERE id=?', (keep_id, step['link']))
+        else:
+            web.execute('DELETE FROM book_shelf_link WHERE id=?', (step['link'],))
+        web.execute('UPDATE shelf SET last_modified=? WHERE id=?', (now, step['shelf_id']))
+        done.append({'shelf': step['shelf'], 'duplicate': step['duplicate'], 'action': 'moved' if step['action'] == 'move' else 'dropped'})
+    return done
 
 
 def reference_blockers(library, app_db, keep_id, remove_id):
@@ -155,10 +172,9 @@ class Review:
         self.removes = [self.state(ref) for ref in group['remove']]
         blockers, self.shelves = [], []
         for remove, _ in self.removes:
-            refs = reference_blockers(library, app_db, self.keep['id'], remove['id'])
-            blockers += refs
-            if app_db.is_file() and not refs:
-                self.shelves += shelf_plan(app_db, self.keep['id'], remove['id'])
+            blockers += reference_blockers(library, app_db, self.keep['id'], remove['id'])
+        if app_db.is_file() and not blockers:
+            self.shelves = shelf_plan(app_db, self.keep['id'], [r['id'] for r, _ in self.removes])
         ki = dict(self.km.identifiers)
         merged_ids, owner_of = dict(ki), {k: self.keep['id'] for k in ki}
         formats = {fmt: (self.keep['id'], info) for fmt, info in self.keep['formats'].items()}
@@ -208,6 +224,16 @@ class Review:
             except (ValueError, OSError, zipfile.BadZipFile) as error:
                 blockers.append('A surviving EPUB is damaged. Choose a valid keeper or repair it first: ' + str(error))
         self.blockers = blockers
+        # Not a blocker: copies of one book whose EPUB or PDF differ a lot in size suggest that one is
+        # incomplete, a sample, or another edition.
+        self.size_warnings = []
+        members = [self.keep] + [r for r, _ in self.removes]
+        for fmt in ('EPUB', 'PDF'):
+            sizes = {m['id']: m['formats'][fmt]['size'] for m in members if fmt in m['formats']}
+            if len(sizes) > 1 and max(sizes.values()) >= SIZE_RATIO * max(1, min(sizes.values())):
+                self.size_warnings.append(f'{fmt} sizes differ {max(sizes.values()) / max(1, min(sizes.values())):.1f}×: '
+                                          + ', '.join(f'{i}: {n / 1048576:.1f} MiB' for i, n in sizes.items())
+                                          + '. One copy may be incomplete, a sample, or another edition.')
         # The conflict choice is part of the review: an apply cannot discard formats the preview kept.
         self.fingerprint = hashlib.sha256(json.dumps([self.keep, [r for r, _ in self.removes], group['discard_conflicts']], sort_keys=True, default=str).encode()).hexdigest()
 
@@ -232,14 +258,15 @@ class Review:
             rel = str(file.relative_to(root))
             if rel not in files:
                 raise DuplicateReviewError(f'A declared format of book {ref["id"]} is missing: {fmt}')
-            formats[fmt] = {'file': rel, 'sha256': files[rel]}
+            formats[fmt] = {'file': rel, 'sha256': files[rel], 'size': file.stat().st_size}
         values = {k: mi.get(k) for k in ['title', 'authors', 'pubdate', 'identifiers', 'tags', 'publisher', 'comments', 'series', 'series_index', 'languages', 'rating']}
         values['custom'] = mi.get_all_user_metadata(make_copy=True)
         return {'id': ref['id'], 'uuid': mi.uuid, 'folder': folder, 'values': values, 'files': files, 'formats': formats}, mi
 
     def summary(self):
         return {'plan': {**self.group, 'reviewed': self.fingerprint}, 'keep': self.keep, 'remove': [r for r, _ in self.removes],
-                'copy_formats': self.copy_formats, 'conflicting_formats': self.conflicts, 'shelves': self.shelves, 'blockers': self.blockers}
+                'copy_formats': self.copy_formats, 'conflicting_formats': self.conflicts, 'shelves': self.shelves,
+                'size_warnings': self.size_warnings, 'blockers': self.blockers}
 
 
 def event(ref, title, **fields):
@@ -299,13 +326,19 @@ def resolve(api, library, app_db, review, saved, backup):
         for fmt, (_, info) in review.surviving.items():
             if digest(pathlib.Path(api.format_abspath(keep['id'], fmt))) != info['sha256']:
                 raise DuplicateReviewError('Keeper format verification failed; duplicates were not trashed.')
-        new_blockers = [b for r in removes for b in reference_blockers(library, app_db, keep['id'], r)]
-        if new_blockers:
-            raise DuplicateReviewError('; '.join(new_blockers))
-        shelves = {r: move_shelves(app_db, keep['id'], r) for r in removes}
-        api.remove_books(list(removes), permanent=False)
+        if not app_db.is_file():
+            raise DuplicateReviewError('Calibre-Web reference database is unavailable; duplicates were not trashed.')
+        # Calibre-Web's write lock is held from the last reference check through the trash, so nothing can
+        # link to a duplicate in between, and the shelf moves roll back if the trash fails.
+        with calibre_web_write(app_db) as web:
+            new_blockers = [b for r in removes for b in reference_blockers(library, app_db, keep['id'], r)]
+            if new_blockers:
+                raise DuplicateReviewError('; '.join(new_blockers))
+            shelves = move_shelves(web, keep['id'], list(removes))
+            api.remove_books(list(removes), permanent=False)
         for remove, _ in review.removes:
-            event(keep, km.title, duplicate_resolved={'removed_id': remove['id'], 'removed_uuid': remove['uuid'], 'backup': str(backup), 'trash': True, 'shelves': shelves[remove['id']]})
+            event(keep, km.title, duplicate_resolved={'removed_id': remove['id'], 'removed_uuid': remove['uuid'], 'backup': str(backup), 'trash': True,
+                                                      'shelves': [{'shelf': x['shelf'], 'action': x['action']} for x in shelves if x['duplicate'] == remove['id']]})
     except Exception:
         # Preserve the original error; never claim the trash step completed.
         event(keep, km.title, duplicate_partial={'backup': str(backup), 'message': 'Resolution interrupted; inspect keeper and trash before retrying.'})

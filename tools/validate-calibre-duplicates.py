@@ -135,6 +135,24 @@ script=sys.argv[1];sys.argv=sys.argv[1:];runpy.run_path(script,run_name='__main_
     with sqlite3.connect(library / 'metadata.db') as db:
         assert db.execute('SELECT count(*) FROM books').fetchone()[0] == 2
     report['checks']['partialCopyFailureAuditedWithoutTrash'] = True
+    # Fail inside Calibre-Web's lock, after the shelf moves and at the trash: the moves must roll back.
+    with sqlite3.connect(web) as db:
+        before_links = db.execute('SELECT id,book_id,"order",shelf,date_added FROM book_shelf_link ORDER BY id').fetchall()
+    trash_fault = root / 'fault-trash.py'
+    trash_fault.write_text('''import sys,runpy
+from calibre.db.cache import Cache
+def fail(self,*args,**kwargs):
+ raise OSError('Injected trash failure')
+Cache.remove_books=fail
+script=sys.argv[1];sys.argv=sys.argv[1:];runpy.run_path(script,run_name='__main__')
+''')
+    failed = run(['/usr/bin/calibre-debug','-e',str(trash_fault),'--',str(helper),str(library),str(web),'--apply'],{'groups':[review(plan)['plan']]},expected=None)
+    assert failed.returncode != 0 and 'Injected trash failure' in failed.stderr, failed.stderr
+    with sqlite3.connect(web) as db:
+        assert db.execute('SELECT id,book_id,"order",shelf,date_added FROM book_shelf_link ORDER BY id').fetchall() == before_links
+    with sqlite3.connect(library / 'metadata.db') as db:
+        assert db.execute('SELECT count(*) FROM books').fetchone()[0] == 2
+    report['checks']['trashFailureRollsBackShelfMoves'] = True
     preview = review(plan)
     result = review(preview['plan'], True)
     assert 'duplicate_resolved' in result.stdout
@@ -162,7 +180,8 @@ assert set(api.all_book_ids())=={1,2}
 db.close()
 ''')
     report['checks']['formatsTagsMetadataCoverExtrasPreservedAndTrashRestorable'] = True
-    assert len(list(library.glob('metadata.db.before-duplicates-*.files'))) == 2
+    # The interrupted copy, the failed trash and the successful retry each backed up first.
+    assert len(list(library.glob('metadata.db.before-duplicates-*.files'))) == 3
     report['checks']['bothRecordBackupsRetained'] = True
 
     # A batch: keeper 3 with an identical copy 4 and an EPUB-only 5; keeper 6 with 7; and 8/9,
@@ -177,8 +196,13 @@ db.close()
     groups = [{'keep': ref[3], 'remove': [ref[4], ref[5]], 'discard_conflicts': False},
               {'keep': ref[6], 'remove': [ref[7]], 'discard_conflicts': False},
               {'keep': ref[8], 'remove': [ref[9]], 'discard_conflicts': False}]
+    # 4 and 5 are both on Main and keeper 3 is not: only 4's link may move, as the preview says.
+    with sqlite3.connect(web) as db:
+        db.execute("INSERT INTO book_shelf_link(book_id,\"order\",shelf,date_added) VALUES(4,11,1,'2026-11-13'),(5,12,1,'2026-11-13')")
     reviews = batch(groups)
     assert [r['blockers'] for r in reviews] == [[], [], []], reviews
+    assert reviews[0]['shelves'] == [{'shelf': '“Main”', 'duplicate': 4, 'action': 'move'}, {'shelf': '“Main”', 'duplicate': 5, 'action': 'drop'}], reviews[0]['shelves']
+    assert all(r['size_warnings'] == [] for r in reviews)
     assert reviews[0]['copy_formats'] == [{'format': 'EPUB', 'from': 5}] and reviews[0]['conflicting_formats'] == []
     report['checks']['batchPreviewReviewsEachGroup'] = True
     native("import sys\nfrom calibre.db.legacy import LibraryDatabase\ndb=LibraryDatabase(sys.argv[1]);db.new_api.set_field('rating',{9:6});db.close()\n")
@@ -204,6 +228,21 @@ assert {4,5,7} <= set(api.all_book_ids())
 db.close()
 ''')
     report['checks']['batchResolvesCleanGroupsSkipsStaleOneWithOneBackup'] = True
+    with sqlite3.connect(web) as db:
+        assert db.execute('SELECT book_id,"order" FROM book_shelf_link WHERE book_id IN (3,4,5)').fetchall() == [(3, 11)]
+    report['checks']['twoDuplicatesOnOneShelfKeepOneLink'] = True
+
+    # Copies whose PDFs differ 2× in size are flagged, without blocking.
+    big = root / 'operator-big.pdf'
+    seed = (root / 'seeds' / 'operator.pdf').read_bytes()
+    big.write_bytes(seed + b'\n%' + b'x' * len(seed) + b'\n')
+    for file in [root / 'seeds' / 'operator.pdf', big]:
+        run(['/usr/bin/calibredb', 'add', '--duplicates', '--with-library', str(library), '--title', 'Batch E', '--authors', 'Test Writer', str(file)])
+    with sqlite3.connect(library / 'metadata.db') as db:
+        e = [{'id': i, 'uuid': u} for i, u in db.execute("SELECT id,uuid FROM books WHERE title='Batch E' ORDER BY id")]
+    sized = review({'keep': e[0], 'remove': [e[1]], 'discard_conflicts': True})
+    assert len(sized['size_warnings']) == 1 and sized['size_warnings'][0].startswith('PDF sizes differ 2.0×') and sized['blockers'] == [], sized
+    report['checks']['sizeDifferenceWarnsWithoutBlocking'] = True
 
     # Two duplicates with different EPUBs and a keeper without one: retaining "the keeper's
     # version" cannot choose between them, so the group stays blocked either way.

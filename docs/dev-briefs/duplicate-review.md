@@ -20,9 +20,13 @@ Browser reloads do not trigger source synchronization. The duplicate API include
 `last_scan`, the configured Calibre-Web URL and writable library. The screen can
 start the existing authorized refresh job, wait for completion and reload candidates;
 it also reloads index data when returning from another tab or browser history.
-Calibre's native trash does not touch Calibre-Web's `app.db`, so the helper moves
-each duplicate's shelf links to its keeper itself, in one `BEGIN IMMEDIATE`
-transaction per duplicate, just before the trash: a link is re-pointed (keeping its
+Calibre's native trash does not touch Calibre-Web's `app.db`, so the helper moves the
+group's shelf links to its keeper itself. One `BEGIN IMMEDIATE` transaction per group
+spans the last reference check, the moves and Calibre's trash, and commits only after
+the trash succeeds: nothing can link to a duplicate in between (Calibre-Web's writes
+wait), and a failed trash rolls the moves back. The plan is computed for the whole group
+in its order, by the same function in preview and apply, so two duplicates on a shelf
+the keeper lacks keep only the first one's link. A link is re-pointed (keeping its
 order and date added) or deleted where the keeper is already on that shelf, and the
 shelf's `last_modified` is set, as Calibre-Web's own shelf edits do (Kobo sync reads
 it). The apply backs up `app.db` into the batch's `.files/app.db` first. Every other
@@ -161,8 +165,8 @@ No production book was changed.
 ## Shelf moves, 2026-11-13
 
 The helper ran the validator on calibre-web.localdomain (Calibre 8.5, as `authoring`)
-in `/mnt/Calibre/.corpus-duplicate-operator-2TjRiQ1Y`, with Calibre-Web's own `shelf`,
-`book_shelf_link` and `bookmark` columns. All 14 checks passed, including:
+in `/mnt/Calibre/.corpus-duplicate-operator-A1sZ2sjB`, with Calibre-Web's own `shelf`,
+`book_shelf_link` and `bookmark` columns. All 17 checks passed, including:
 
 - A preview with the duplicate on a shelf the keeper shares and on a private shelf
   reported a drop and a move, with no blocker and no private name.
@@ -170,6 +174,11 @@ in `/mnt/Calibre/.corpus-duplicate-operator-2TjRiQ1Y`, with Calibre-Web's own `s
 - After apply, the keeper held both links with their original order and date, the
   duplicate held none, both shelves were marked modified, and the batch backup's
   `app.db` still had the duplicate's links.
+- A trash made to fail inside Calibre-Web's lock left every shelf link as it was and
+  both records in place.
+- Two duplicates on a shelf the keeper lacked: the preview showed one move and one
+  drop, and the keeper ended with the first duplicate's link (its order) only.
+- Copies whose PDFs differ 2× in size were flagged in the preview without a blocker.
 
-Helper SHA-256: `a46c2181a9fa60193f36eca0277987e43a0dc35a70e672dcf6d5a10dd74270d4`.
+Helper SHA-256: `82a7874d283e66f17cf01d67268175894f857c923cfbb0e5aec88c5a9df0e72d`.
 No production book or shelf was changed.

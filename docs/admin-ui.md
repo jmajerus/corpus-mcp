@@ -310,8 +310,8 @@ then clear normally; other missing fields can still block a citekey.
 
 If metadata changed since the form loaded, reload and review it again. Extracted
 names remain suggestions until Apply; they do not silently become citation authors.
-The source host needs the updated named `metadata-preview` and `metadata-apply`
-commands (`deploy --source-setup` or `--source-setup-user-key`). These commands use
+The source host's named `metadata-preview` and `metadata-apply` commands are
+installed by every deploy, from the same commit as the app. These commands use
 `tools/calibre-metadata.py`; the existing tag and conversion commands are unchanged.
 
 The source writer uses `calibre-debug` from the same Calibre installation as the existing source tools. The metadata API accepts ordered author lists directly, preserving author order and comma-containing names, and recomputes title/author sort values. See the [Calibre database API](https://manual.calibre-ebook.com/db_api.html).
@@ -371,7 +371,10 @@ indexed one, then the one with the most formats, then the one added to Calibre f
 The keeper's own file and cover are what survive, and older MOBI-era records often
 carry greyscale covers; shelf memberships move to the keeper either way. Each card
 lists its public shelves and whether its cover is colour, black and white, or missing,
-and the suggested keeper says why it was chosen. Explicitly choose whether the keeper's versions should win for conflicting
+and the suggested keeper says why it was chosen. When copies' EPUB or PDF files differ
+in size by 1.5× or more, the card and the preview warn that one may be incomplete, a
+sample, or another edition (not a blocker); the count above the groups says how many
+groups have such a warning. Explicitly choose whether the keeper's versions should win for conflicting
 formats, then **Preview this group**. That choice only keeps the keeper's own version:
 when two duplicates have different files in a format the keeper lacks, the group stays
 blocked until you make one of them the keeper or resolve one separately. **Keepers’
@@ -389,9 +392,13 @@ previewed again.
 Calibre-Web shelf memberships do not block. The preview lists, for each duplicate,
 the shelves it is on and whether its link moves to the keeper or is dropped because
 the keeper is already there; public shelf names are shown, private ones stay hidden.
-Apply backs up Calibre-Web's `app.db` once per batch, then, for each group, just before
-its duplicates go to the trash, moves their shelf links to the keeper (keeping each
-link's order and date added) and marks those shelves modified, as Calibre-Web does. An
+Apply backs up Calibre-Web's `app.db` once per batch. For each group it then takes
+Calibre-Web's write lock, checks the duplicates' references one last time, moves their
+shelf links to the keeper (keeping each link's order and date added; where two
+duplicates share a shelf the keeper lacks, the first one's link moves and the other's
+is dropped, as the preview shows), marks those shelves modified, as Calibre-Web does,
+trashes the duplicates, and only then commits. If the trash fails, the shelf moves
+roll back. An
 orphaned shelf link, and any other Calibre-Web link to a duplicate (bookmarks, reading
 status, archive or download history), still blocks. Source metadata and
 file hashes must still match the reviewed plan, and previews expire after an hour.
@@ -413,11 +420,9 @@ resolution. References are not automatically reassigned to different file offset
 editions. Browser writes and MCP proposal/citekey writes pause while an apply runs.
 
 The source helper is `tools/calibre-duplicates.py`, invoked by `duplicates-preview`
-and `duplicates-apply`. After deploying this feature, update source helpers with:
-
-```sh
-npm run deploy -- --source-setup-user-key
-```
+and `duplicates-apply`. Every deploy (`npm run deploy`, `--main`, `--pr`, `--current`)
+installs it and the other Calibre-side scripts from the same commit as the app, so the
+two never disagree about a plan's format.
 
 See [duplicate-resolution operations](dev-briefs/duplicate-review.md) for backups,
 recovery limits and the native validation evidence.

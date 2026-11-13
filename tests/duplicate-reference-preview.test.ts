@@ -16,10 +16,11 @@ beforeEach(()=>{
  INSERT INTO book_shelf_link(book_id,"order",shelf,date_added) VALUES(116,1,1,'2025-06-09'),(127,7,1,'2026-11-12'),(127,3,2,'2026-11-12'),(127,5,3,'2026-11-12');`);
 });
 afterEach(()=>{web.close();fs.rmSync(root,{recursive:true,force:true});});
-function call(fn:string){
+function call(fn:string,body?:string){
  const script=`import importlib.util,json,pathlib,sys
 spec=importlib.util.spec_from_file_location('duplicates',sys.argv[1]);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-root=pathlib.Path(sys.argv[2]);print(json.dumps(module.${fn}))`;
+root=pathlib.Path(sys.argv[2])
+${body ?? `print(json.dumps(module.${fn}))`}`;
  const r=spawnSync('python3',['-B','-c',script,path.resolve('tools/calibre-duplicates.py'),root],{encoding:'utf8'});
  expect(r.status,r.stderr).toBe(0);return JSON.parse(r.stdout);
 }
@@ -28,17 +29,37 @@ const links=()=>web.prepare('SELECT book_id,"order",shelf,date_added FROM book_s
 it('treats shelf links as moves, naming public shelves and hiding private names',()=>{
  const before=fs.readFileSync(path.join(root,'web.db'));
  expect(inspect()).toEqual([]);
- expect(call("shelf_plan(root/'web.db',116,127)")).toEqual([
+ expect(call("shelf_plan(root/'web.db',116,[127])")).toEqual([
   {shelf:'“Main”',duplicate:127,action:'drop'},{shelf:'a private shelf',duplicate:127,action:'move'},{shelf:'“Peace Studies”',duplicate:127,action:'move'}]);
  expect(fs.readFileSync(path.join(root,'web.db'))).toEqual(before);
 });
+const move=(removes:string)=>call('',`with module.calibre_web_write(root/'web.db') as web:
+    print(json.dumps(module.move_shelves(web,116,${removes})))`);
 it('moves the duplicate’s shelf links to the keeper in place, drops redundant ones, and touches each shelf',()=>{
- expect(call("move_shelves(root/'web.db',116,127)")).toEqual([
-  {shelf:'“Main”',action:'dropped'},{shelf:'a private shelf',action:'moved'},{shelf:'“Peace Studies”',action:'moved'}]);
+ expect(move('[127]')).toEqual([
+  {shelf:'“Main”',duplicate:127,action:'dropped'},{shelf:'a private shelf',duplicate:127,action:'moved'},{shelf:'“Peace Studies”',duplicate:127,action:'moved'}]);
  expect(links()).toEqual([
   {book_id:116,order:1,shelf:1,date_added:'2025-06-09'},{book_id:116,order:3,shelf:2,date_added:'2026-11-12'},{book_id:116,order:5,shelf:3,date_added:'2026-11-12'}]);
  expect(web.prepare("SELECT count(*) FROM shelf WHERE last_modified > '2026-01-01 00:00:00'").pluck().get()).toBe(3);
- expect(call("move_shelves(root/'web.db',116,127)")).toEqual([]);
+ expect(move('[127]')).toEqual([]);
+});
+it('keeps only the first of two duplicates’ links to one shelf, in the preview and the apply alike',()=>{
+ web.exec(`INSERT INTO book_shelf_link(book_id,"order",shelf,date_added) VALUES(130,9,3,'2026-11-13')`);
+ expect(call("shelf_plan(root/'web.db',116,[127,130])").filter((s:any)=>s.shelf==='“Peace Studies”')).toEqual([
+  {shelf:'“Peace Studies”',duplicate:127,action:'move'},{shelf:'“Peace Studies”',duplicate:130,action:'drop'}]);
+ expect(move('[127,130]').filter((s:any)=>s.shelf==='“Peace Studies”')).toEqual([
+  {shelf:'“Peace Studies”',duplicate:127,action:'moved'},{shelf:'“Peace Studies”',duplicate:130,action:'dropped'}]);
+ expect(web.prepare('SELECT book_id,"order" FROM book_shelf_link WHERE shelf=3').all()).toEqual([{book_id:116,order:5}]);
+});
+it('rolls the shelf moves back when the trash fails inside the lock',()=>{
+ const before=links();
+ const out=call('',`try:
+    with module.calibre_web_write(root/'web.db') as web:
+        module.move_shelves(web,116,[127])
+        raise OSError('trash failed')
+except OSError as error:
+    print(json.dumps(str(error)))`);
+ expect(out).toBe('trash failed');expect(links()).toEqual(before);
 });
 it('reports remaining references after shelf membership is cleared, including orphaned links',()=>{
  web.exec('DELETE FROM book_shelf_link; INSERT INTO book_shelf_link(book_id,shelf) VALUES(127,99); INSERT INTO bookmark VALUES(127);');

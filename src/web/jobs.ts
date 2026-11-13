@@ -4,6 +4,7 @@ const JOB_CSS = `
 .chg { display: inline-block; border-radius: 6px; padding: 1px 8px; margin: 1px 4px 1px 0; font-size: 0.82rem; overflow-wrap: anywhere; }
 .chg.add { background: var(--ok-bg); } .chg.del { background: var(--danger-bg); text-decoration: line-through; }
 .chg b { margin-right: 4px; }
+.warning { color: var(--warn); }
 .status-succeeded { color: var(--ok); } .status-running { color: var(--warn); } .status-failed, .status-interrupted { color: var(--danger); }`;
 
 /** /admin/jobs: every admin job, newest first. */
@@ -92,6 +93,7 @@ function duplicateReview(r, library, calibreLink) {
   return '<div><strong>Keep ' + esc(library + ':' + r.plan.keep.id) + '; trash ' + esc(removes.map(id => library + ':' + id).join(', ')) + '</strong><p>' + calibreLink(r.plan.keep.id, 'Open keeper in Calibre-Web') + removes.map(id => ' · ' + calibreLink(id, 'Open ' + id + ' in Calibre-Web')).join('') + '</p>' +
     (r.keep ? '<p>Copy unique formats: ' + esc(fmt(r.copy_formats)) + '. Keep keeper’s conflicting formats: ' + esc(fmt(r.conflicting_formats)) + '.</p><p>Unique tags and missing descriptive metadata are preserved. Every record and its files are backed up before the duplicates enter Calibre’s trash.</p>' +
       ((r.shelves || []).length ? '<p>Calibre-Web shelves: ' + esc(r.shelves.map(s => s.shelf + (s.action === 'move' ? ' moves from ' + s.duplicate + ' to the keeper' : ' already has the keeper; ' + s.duplicate + '’s link is removed')).join('; ')) + '. Calibre-Web’s app.db is backed up first.</p>' : '') : '') +
+    (r.size_warnings || []).map(w => '<p class="warning">' + esc(w) + '</p>').join('') +
     r.blockers.map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +
     (members.length > 1 ? '<details><summary>Compare source metadata and formats</summary><div class="scroll"><table><thead><tr><th>Field</th>' + members.map((m, i) => '<th>' + (i ? 'Duplicate ' : 'Keeper ') + esc(m.id) + '</th>').join('') + '</tr></thead><tbody>' + ['title','authors','pubdate','publisher','comments','series','languages','rating','tags','identifiers'].map(k => '<tr><th>' + esc(k) + '</th>' + members.map(m => '<td>' + esc(JSON.stringify(m.values[k] ?? '')) + '</td>').join('') + '</tr>').join('') + '<tr><th>formats</th>' + members.map(m => '<td>' + esc(Object.keys(m.formats).join(', ')) + '</td>').join('') + '</tr></tbody></table></div><p>The keeper’s populated fields take precedence. Missing descriptive fields and identifiers are copied from the first duplicate that has them.</p></details>' : '') + '</div>';
 }
