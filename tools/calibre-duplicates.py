@@ -164,7 +164,8 @@ class Review:
             except (ValueError, OSError, zipfile.BadZipFile) as error:
                 blockers.append('A surviving EPUB is damaged. Choose a valid keeper or repair it first: ' + str(error))
         self.blockers = blockers
-        self.fingerprint = hashlib.sha256(json.dumps([self.keep, [r for r, _ in self.removes]], sort_keys=True, default=str).encode()).hexdigest()
+        # The conflict choice is part of the review: an apply cannot discard formats the preview kept.
+        self.fingerprint = hashlib.sha256(json.dumps([self.keep, [r for r, _ in self.removes], group['discard_conflicts']], sort_keys=True, default=str).encode()).hexdigest()
 
     def state(self, ref):
         api = self.api

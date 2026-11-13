@@ -166,6 +166,7 @@ export class JobRunner {
       params = preview.params;
       if (kind === "duplicates") {
         // Apply the groups the source reviewed without blockers; blocked groups stay as they are.
+        if (preview.items.some(it => it.duplicate_review && !Array.isArray(it.duplicate_review.plan.remove))) throw new ToolError("That preview predates batch resolution. Preview again.");
         const groups = preview.items.flatMap(it => it.duplicate_review && !it.duplicate_review.blockers.length && it.duplicate_review.plan.reviewed ? [it.duplicate_review.plan] : []);
         if (!groups.length) throw new ToolError("Every group in that preview has blockers. Resolve them and preview again.");
         for (const g of groups) for (const r of g.remove) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);

@@ -14,8 +14,8 @@ let groups = [], state = {}, canWrite = false, calibreWebUrl = null, writableLib
 const pairKey = (a,b) => [a,b].sort().join('|');
 function direct(g){const m=new Map();for(const p of g.pairs)if(!p.dismissed)m.set(pairKey(p.books[0].id,p.books[1].id),p);return m;}
 const referenced = b => Object.values(b.references||{}).some(v=>v>0);
-/** The records that may be trashed into keeper: paired with it directly, unreferenced, writable. */
-function trashable(g,keep,b){return b.id!==keep&&g.writable&&!referenced(b)&&direct(g).has(pairKey(keep,b.id));}
+/** The records that may be trashed into keeper: paired with it directly, unreferenced, and that pair writable. */
+function trashable(g,keep,b){const p=direct(g).get(pairKey(keep,b.id));return b.id!==keep&&!!p&&p.writable&&!referenced(b);}
 function init(g){
  const old=state[g.key];
  const keep=old&&g.books.some(b=>b.id===old.keep)?old.keep:g.suggested_keep;
@@ -23,7 +23,7 @@ function init(g){
  state[g.key]={keep,trash,picked:old?.picked??false,conflicts:old?.conflicts??false};
 }
 function selection(g){const s=state[g.key];const ids=[s.keep,...s.trash];return {keep:s.keep,remove:s.trash,discard_conflicts:s.conflicts,fingerprints:Object.fromEntries(g.books.filter(b=>ids.includes(b.id)).map(b=>[b.id,b.fingerprint]))};}
-function ready(g){return canWrite&&g.writable&&state[g.key].trash.length>0;}
+function ready(g){return canWrite&&state[g.key].trash.length>0;}
 function shown(){const q=document.getElementById('search').value.toLowerCase();return groups.filter(g=>g.books.some(b=>(b.id+' '+b.title+' '+b.authors.join(' ')).toLowerCase().includes(q)));}
 function updateBatch(){
  const picked=groups.filter(g=>state[g.key].picked&&ready(g)),records=picked.reduce((n,g)=>n+state[g.key].trash.length,0);
@@ -40,11 +40,12 @@ function render() {
    const keep=b.id===s.keep,trash=s.trash.includes(b.id),canTrash=trashable(g,s.keep,b);
    const calibreLink=calibreWebUrl && b.library===writableLibrary ? '<p><a href="'+esc((calibreWebUrl.endsWith('/') ? calibreWebUrl.slice(0,-1) : calibreWebUrl)+'/book/'+b.calibre_id)+'" target="_blank" rel="noopener">Open this record in Calibre-Web</a></p>' : '';
    const refs=Object.entries(b.references).filter(([k,v])=>v).map(([k,v])=>k+': '+v).join(', ');
-   const why=keep?'':!canTrash?(referenced(b)?'Has saved references; it can only be the keeper.':!g.writable?'Not in the writable library.':'Does not match the keeper directly; choose another keeper or resolve it separately.'):'';
+   const p=direct(g).get(pairKey(s.keep,b.id));
+   const why=keep?'':!canTrash?(referenced(b)?'Has saved references; it can only be the keeper.':!p?'Does not match the keeper directly; choose another keeper or resolve it separately.':'Not in the writable library with the keeper.'):'';
    return '<div class="member'+(keep?' keep':trash?' trash':'')+'"><img class="cover" src="/api/books/'+encodeURIComponent(b.id)+'/cover" alt="" loading="lazy" onerror="this.remove()"><h3>'+bookLink(b.id,b.title)+'</h3><p>'+esc(b.id)+' · '+esc(b.authors.join('; '))+' · '+esc(b.year??'Year unknown')+'</p><p>Formats: '+esc(b.formats.join(', ')||'none')+' · '+esc(b.status)+(b.file_size?' · '+esc((b.file_size/1048576).toFixed(1))+' MiB':'')+'</p>'+(b.error?'<p class="warning">'+esc(b.error)+'</p>':'')+'<p>'+Object.entries(b.identifiers).map(([k,v])=>esc(k+': '+v)).join(' · ')+'</p><p>Saved references: '+esc(refs||'none')+'</p>'+calibreLink
     +'<p class="choice"><label><input type="radio" name="keep-'+n+'" data-keep="'+n+'" value="'+esc(b.id)+'" '+(keep?'checked':'')+'> Keep</label><label><input type="checkbox" data-trash="'+n+'" value="'+esc(b.id)+'" '+(trash?'checked ':'')+(canTrash?'':'disabled')+'> Trash</label></p>'+(why?'<p class="note">'+esc(why)+'</p>':'')+'</div>';
   }).join('')+'</div><details><summary>'+g.pairs.length+' match'+(g.pairs.length===1?'':'es')+'</summary><ul class="matches">'+g.pairs.map((p,i)=>'<li>'+esc(p.books[0].id)+' ↔ '+esc(p.books[1].id)+': '+p.evidence.map(esc).join(', ')+(p.dismissed?' · <em>reviewed: keep both</em>':'')+' <button data-dismiss="'+n+':'+i+'" '+(!canWrite?'disabled':'')+'>'+(p.dismissed?'Reopen':'Keep both')+'</button></li>').join('')+'</ul></details>'
-   +'<p><label><input type="checkbox" data-conflicts="'+n+'" '+(s.conflicts?'checked':'')+'> Retain the keeper’s versions when records have different files in the same format</label></p><div class="actions"><button data-preview="'+n+'" '+(ready(g)?'':'disabled')+'>Preview this group</button>'+(!g.writable?'<span class="note">Resolution requires records in the writable library.</span>':'')+'</div></section>';
+   +'<p><label><input type="checkbox" data-conflicts="'+n+'" '+(s.conflicts?'checked':'')+'> Retain the keeper’s versions when records have different files in the same format</label></p><div class="actions"><button data-preview="'+n+'" '+(ready(g)?'':'disabled')+'>Preview this group</button>'+(!g.writable?'<span class="note">Only records in the writable library can be resolved.</span>':'')+'</div></section>';
  }).join('') || '<p>No duplicate candidates match. Previously reviewed pairs reappear if their metadata, file hash, or references change.</p>';
  updateBatch();
 }

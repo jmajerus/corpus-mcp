@@ -259,3 +259,32 @@ it("applies only the groups the source reviewed without blockers",async()=>{
  expect(sent[1].p).toEqual({library:"main",groups:[{keep:{id:1,uuid:"uuid-1"},remove:[{id:2,uuid:"uuid-2"}],discard_conflicts:false,reviewed:"ok"}]});
  expect(applied.items[0].duplicate_skipped?.message).toBe("changed");
 });
+it("suggests the record added to Calibre first, not the lowest id",()=>{
+ c.db.prepare("UPDATE books SET added=? WHERE id=?").run("2026-11-12T00:00:00Z","main:1");
+ c.db.prepare("UPDATE books SET added=? WHERE id=?").run("2025-06-09T00:00:00Z","main:2");
+ expect(duplicateGroups(c,"main").groups[0].suggested_keep).toBe("main:2");
+ c.db.prepare("UPDATE books SET added=NULL WHERE id='main:2'").run();
+ expect(duplicateGroups(c,"main").groups[0].suggested_keep).toBe("main:1");
+});
+it("keeps keep-both decisions valid whatever only ranks the keeper",()=>{
+ const p=pair();dismissDuplicate(c,"main",p.books.map(b=>b.id),p.fingerprint,false);
+ c.db.prepare("UPDATE books SET added='2020-01-01T00:00:00Z' WHERE id='main:1'").run();
+ expect(duplicatePairs(c,"main").total).toBe(0);
+});
+it("asks for a new preview instead of applying one saved before batch resolution",()=>{
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async()=>{}});
+ const id=Number(c.data.prepare("INSERT INTO jobs(kind,mode,params,status,created_at,log,items) VALUES('duplicates','preview',?,'succeeded',?,'',?)").run(
+  JSON.stringify({plan:{library:"main",keep:{id:1,uuid:"uuid-1"},remove:{id:2,uuid:"uuid-2"},discard_conflicts:false}}),new Date().toISOString(),
+  JSON.stringify([{calibre_id:1,title:"Book",duplicate_review:{plan:{keep:{id:1,uuid:"uuid-1"},remove:{id:2,uuid:"uuid-2"},discard_conflicts:false,reviewed:"x"},blockers:[]}}])).lastInsertRowid);
+ expect(()=>r.start("duplicates","apply",{previewOf:id})).toThrow(/predates batch resolution/);
+});
+it("renders duplicate reviews saved before batch resolution on the job page",async()=>{
+ const els=new Map<string,any>();const el=(id:string)=>{if(!els.has(id))els.set(id,{innerHTML:'',textContent:'',scrollTop:0,clientHeight:0,scrollHeight:0,addEventListener(){}});return els.get(id);};
+ const legacy={calibre_id:1,title:"Book",duplicate_review:{plan:{keep:{id:1,uuid:"u1"},remove:{id:2,uuid:"u2"},discard_conflicts:false},keep:{id:1,values:{},formats:{PDF:{}}},remove:{id:2,values:{},formats:{EPUB:{}}},copy_formats:["EPUB"],conflicting_formats:[],blockers:[]}};
+ const api=async(url:string)=>url.includes('limit=1')?{kinds:{}}:{id:20,kind:'duplicates',mode:'preview',status:'succeeded',created_at:'2026-11-07T00:00:00Z',params:{plan:{library:'main'}},items:[legacy],log:''};
+ const script=[...JOB_HTML.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].at(-1)![1];
+ new Function('document','location','ME','VOCAB','LABELS','api','post','esc','bookLink','when','num','toast','confirm','setTimeout',script)(
+  {getElementById:el,title:''},{pathname:'/admin/jobs/20'},Promise.resolve({can_write:true}),Promise.resolve(new Map()),new Map(),api,async()=>({}),String,(_:string,t:string)=>t,String,String,()=>{},()=>true,()=>{});
+ await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));
+ expect(el('items').innerHTML).toContain('Keep main:1; trash main:2');expect(el('items').innerHTML).toContain('Copy unique formats: EPUB.');
+});

@@ -85,8 +85,9 @@ async function load() {
 }
 
 function duplicateReview(r, library, calibreLink) {
-  const removes = r.plan.remove.map(x => x.id), members = [r.keep, ...(r.remove || [])].filter(Boolean);
-  const fmt = list => list.map(c => c.format + ' from ' + c.from).join(', ') || 'none';
+  // Reviews saved before batch resolution hold one remove object and plain format names.
+  const removes = [].concat(r.plan.remove).map(x => x.id), members = [r.keep, ...[].concat(r.remove || [])].filter(Boolean);
+  const fmt = list => (list || []).map(c => typeof c === 'string' ? c : c.format + ' from ' + c.from).join(', ') || 'none';
   return '<div><strong>Keep ' + esc(library + ':' + r.plan.keep.id) + '; trash ' + esc(removes.map(id => library + ':' + id).join(', ')) + '</strong><p>' + calibreLink(r.plan.keep.id, 'Open keeper in Calibre-Web') + removes.map(id => ' · ' + calibreLink(id, 'Open ' + id + ' in Calibre-Web')).join('') + '</p>' +
     (r.keep ? '<p>Copy unique formats: ' + esc(fmt(r.copy_formats)) + '. Keep keeper’s conflicting formats: ' + esc(fmt(r.conflicting_formats)) + '.</p><p>Unique tags and missing descriptive metadata are preserved. Every record and its files are backed up before the duplicates enter Calibre’s trash.</p>' : '') +
     r.blockers.map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +

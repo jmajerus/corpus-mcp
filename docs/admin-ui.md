@@ -352,9 +352,10 @@ formats, or reference counts) makes the pair appear again automatically.
 To resolve a group, choose its **Keep** record; every record that matches the keeper
 directly is marked **Trash**. Untick any you want to leave alone. A record that only
 matches another duplicate (A–B–C, where C does not match A) cannot merge into that
-keeper, and a record with saved references can only be the keeper. The suggested keeper
+keeper, a record with saved references can only be the keeper, and a record in
+another library than the keeper cannot be trashed into it. The suggested keeper
 is a referenced record, then an indexed one, then the one with the most formats, then
-the oldest. Explicitly choose whether the keeper's versions should win for conflicting
+the one added to Calibre first. Explicitly choose whether the keeper's versions should win for conflicting
 formats, then **Preview this group**.
 
 To resolve many groups at once, tick them (or **Select identical-file groups**, the
@@ -364,7 +365,7 @@ blockers. **Apply N of M groups** resolves the groups without blockers in one jo
 after one `metadata.db` backup, and skips the others without changing them. A group
 whose sources changed since the preview is also skipped; the job then ends as failed
 and lists the skipped groups. Shelf and other reference blockers are shown together in
-the preview. Public shelf names are shown, while private shelf names stay hidden.
+the preview. Previews saved before batch resolution must be previewed again. Public shelf names are shown, while private shelf names stay hidden.
 You can instead delete an unwanted record directly in Calibre-Web: its delete
 operation cleans up shelf memberships automatically. Preserve unique formats or
 saved data first, and ensure the keeper belongs to any shelf you want to retain.

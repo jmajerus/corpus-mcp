@@ -30,7 +30,8 @@ The plan sent to the source is `{"groups": [{keep, remove: [...], discard_confli
 The corpus checks each book's own fingerprint from the review screen (not the pair or
 group, so regrouping does not matter), that every book appears once, and that each
 trashed record pairs directly with its keeper, is writable and is unreferenced. The
-source reviews each group under one write lock and fingerprints its members. Apply
+source reviews each group under one write lock and fingerprints its members and its
+conflict choice. Apply
 re-reviews every group first; groups that changed or gained blockers are skipped
 before the single `metadata.db` backup. Each remaining group then backs up its own
 folders into `…/.files/<keeper id>/` and resolves in turn. A group whose files change
@@ -129,8 +130,12 @@ are both required before the new screen can execute resolutions.
 
 The batch helper ran the same validator on calibre-web.localdomain (Calibre 8.5, as
 `authoring`) in a new disposable library,
-`/mnt/Calibre/.corpus-duplicate-operator-YHKDIJre`. All earlier checks passed under the
+`/mnt/Calibre/.corpus-duplicate-operator-STZbdxnW`. All earlier checks passed under the
 batch plan format. The new checks also passed:
+
+- A plan previewed with conflicting formats kept, then sent to apply with
+  `discard_conflicts` turned on, was refused as changed since preview: the conflict
+  choice is part of each group's fingerprint.
 
 - A three-group batch preview reviewed each group: a keeper with an identical copy and
   an EPUB-only record, a second pair, and a third pair.
@@ -140,5 +145,5 @@ batch plan format. The new checks also passed:
 - The keeper gained the EPUB and the duplicates' tags, and all three trashed records
   restored from Calibre's trash.
 
-Helper SHA-256: `b18d8ea28d51f97462804d5472f5232a6f7bb85c5448ffc6d30dca0746281284`.
+Helper SHA-256: `48e2015a698e63e2ff11e2dc68ceb341d2ae94d35882ffa18cd5f0bdfb58cb73`.
 No production book was changed.

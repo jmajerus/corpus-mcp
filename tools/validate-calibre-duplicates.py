@@ -78,6 +78,10 @@ print(json.dumps([{'id':i,'uuid':api.get_metadata(i).uuid} for i in [1,2]]));db.
     assert before['blockers'] and before['conflicting_formats'] == [{'format': 'PDF', 'from': 2}]
     assert before['copy_formats'] == [{'format': 'EPUB', 'from': 2}]
     report['checks']['explicitFormatConflictReview'] = True
+    # Choosing to discard conflicts after the preview must not pass as the reviewed plan.
+    flipped = review({**before['plan'], 'discard_conflicts': True}, True, expected=None)
+    assert flipped.returncode != 0 and 'changed since preview' in flipped.stderr, flipped.stderr
+    report['checks']['conflictChoiceIsPartOfReview'] = True
     plan['discard_conflicts'] = True
     preview = review(plan)
     with sqlite3.connect(web) as db:

@@ -143,9 +143,12 @@ function candidateBooks(c: Corpus) {
       formats: metadata.get(b.id)?.formats ?? (b.format ? [b.format.toUpperCase()] : []),
       references: b.uuid ? references.get(b.uuid) ?? emptyReferences() : {},
     };
-    return { ...book, fingerprint: hash(book) };
+    // `added` only ranks the suggested keeper; it stays out of the fingerprints, so adding it
+    // left existing keep-both decisions valid.
+    return { ...book, added: b.added ?? null, fingerprint: hash(book) };
   });
 }
+const hashed = ({ added: _added, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 const referenced = (b: DuplicateBook) => Object.values(b.references).some(n => n > 0);
 
 export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
@@ -154,7 +157,7 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
   const pairs = [];
   for (const {i,j,evidence} of duplicateCandidates(books)) {
     const a = books[i], b = books[j];
-    const key = JSON.stringify([a.id, b.id]), fingerprint = hash([a, b]);
+    const key = JSON.stringify([a.id, b.id]), fingerprint = hash([hashed(a), hashed(b)]);
     const dismissed = decisions.get(key) === fingerprint;
     if (dismissed && !includeDismissed) continue;
     pairs.push({ key, fingerprint, books: [a,b], evidence, dismissed,
@@ -167,7 +170,7 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
 /** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
  * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
  * C merge into A. The suggested keeper is a referenced record, then an indexed one, then the one
- * with the most formats, then the oldest. */
+ * with the most formats, then the one added to Calibre first (by its added date, then its id). */
 export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismissed = false) {
   const { pairs } = duplicatePairs(c, writableLibrary, includeDismissed);
   const parent = new Map<string, string>();
@@ -180,8 +183,14 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     for (const b of p.books) group.books.set(b.id, b);
     group.pairs.push(p); groups.set(root, group);
   }
-  const rank = (b: DuplicateBook) => [referenced(b) ? 0 : 1, b.status === "indexed" ? 0 : 1, -b.formats.length, b.calibre_id];
-  const before = (a: DuplicateBook, b: DuplicateBook) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const rank = (b: DuplicateBook) => [referenced(b) ? 0 : 1, b.status === "indexed" ? 0 : 1, -b.formats.length];
+  const before = (a: DuplicateBook, b: DuplicateBook) => {
+    const x = rank(a), y = rank(b);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    // An unknown added date sorts after a known one.
+    if (a.added !== b.added) return a.added === null ? 1 : b.added === null ? -1 : a.added < b.added ? -1 : 1;
+    return a.calibre_id - b.calibre_id;
+  };
   const result = [...groups.values()].map(g => {
     const books = [...g.books.values()].sort((a, b) => a.calibre_id - b.calibre_id);
     const suggested = [...books].sort(before)[0];
