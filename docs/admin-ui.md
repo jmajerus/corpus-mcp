@@ -372,8 +372,8 @@ The keeper's own file and cover are what survive, and older MOBI-era records oft
 carry greyscale covers; shelf memberships move to the keeper either way. Each card
 lists its public shelves and whether its cover is colour, black and white, or missing,
 and the suggested keeper says why it was chosen. When copies' EPUB or PDF files differ
-in size by 1.5× or more, the card and the preview warn that one may be incomplete, a
-sample, or another edition (not a blocker); the count above the groups says how many
+in size by 10% or more, the card and the preview warn that one may be incomplete, a
+sample, another edition or a different conversion (not a blocker); the count above the groups says how many
 groups have such a warning. Explicitly choose whether the keeper's versions should win for conflicting
 formats, then **Preview this group**. That choice only keeps the keeper's own version:
 when two duplicates have different files in a format the keeper lacks, the group stays

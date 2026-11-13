@@ -24,8 +24,17 @@ import sys
 import zipfile
 
 MAX_GROUPS = 500
-# Copies whose EPUB or PDF sizes differ by this factor or more are flagged (as in src/duplicates.ts).
-SIZE_RATIO = 1.5
+# Copies whose EPUB or PDF sizes differ by this fraction or more are flagged (as in src/duplicates.ts).
+SIZE_DIFFERENCE = 0.1
+
+
+def size_label(n):
+    return f'{round(n / 1024)} KB' if n < 1048576 else f'{n / 1048576:.1f} MB'
+
+
+def size_gap(ratio):
+    """How far apart two sizes are: a percentage under 2×, a factor from there."""
+    return f'by {round((ratio - 1) * 100)}%' if ratio < 2 else f'{ratio:.1f}×'
 
 
 class DuplicateReviewError(Exception):
@@ -224,16 +233,17 @@ class Review:
             except (ValueError, OSError, zipfile.BadZipFile) as error:
                 blockers.append('A surviving EPUB is damaged. Choose a valid keeper or repair it first: ' + str(error))
         self.blockers = blockers
-        # Not a blocker: copies of one book whose EPUB or PDF differ a lot in size suggest that one is
-        # incomplete, a sample, or another edition.
+        # Not a blocker: copies of one book whose EPUB or PDF differ in size suggest that one is
+        # incomplete, a sample, another edition or a different conversion.
         self.size_warnings = []
         members = [self.keep] + [r for r, _ in self.removes]
         for fmt in ('EPUB', 'PDF'):
             sizes = {m['id']: m['formats'][fmt]['size'] for m in members if fmt in m['formats']}
-            if len(sizes) > 1 and max(sizes.values()) >= SIZE_RATIO * max(1, min(sizes.values())):
-                self.size_warnings.append(f'{fmt} sizes differ {max(sizes.values()) / max(1, min(sizes.values())):.1f}×: '
-                                          + ', '.join(f'{i}: {n / 1048576:.1f} MiB' for i, n in sizes.items())
-                                          + '. One copy may be incomplete, a sample, or another edition.')
+            ratio = len(sizes) > 1 and max(sizes.values()) / max(1, min(sizes.values()))
+            if ratio and ratio >= 1 + SIZE_DIFFERENCE:
+                self.size_warnings.append(f'{fmt} sizes differ {size_gap(ratio)}: '
+                                          + ', '.join(f'{i}: {size_label(n)}' for i, n in sizes.items())
+                                          + '. One copy may be incomplete, a sample, another edition or a different conversion.')
         # The conflict choice is part of the review: an apply cannot discard formats the preview kept.
         self.fingerprint = hashlib.sha256(json.dumps([self.keep, [r for r, _ in self.removes], group['discard_conflicts']], sort_keys=True, default=str).encode()).hexdigest()
 

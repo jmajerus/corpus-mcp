@@ -165,7 +165,7 @@ No production book was changed.
 ## Shelf moves, 2026-11-13
 
 The helper ran the validator on calibre-web.localdomain (Calibre 8.5, as `authoring`)
-in `/mnt/Calibre/.corpus-duplicate-operator-A1sZ2sjB`, with Calibre-Web's own `shelf`,
+in `/mnt/Calibre/.corpus-duplicate-operator-K8H5UKk4`, with Calibre-Web's own `shelf`,
 `book_shelf_link` and `bookmark` columns. All 17 checks passed, including:
 
 - A preview with the duplicate on a shelf the keeper shares and on a private shelf
@@ -178,7 +178,8 @@ in `/mnt/Calibre/.corpus-duplicate-operator-A1sZ2sjB`, with Calibre-Web's own `s
   both records in place.
 - Two duplicates on a shelf the keeper lacked: the preview showed one move and one
   drop, and the keeper ended with the first duplicate's link (its order) only.
-- Copies whose PDFs differ 2× in size were flagged in the preview without a blocker.
+- Copies whose PDFs differ 2× or 12.5% in size were flagged in the preview without a
+  blocker; a 5% difference was not.
 
-Helper SHA-256: `82a7874d283e66f17cf01d67268175894f857c923cfbb0e5aec88c5a9df0e72d`.
+Helper SHA-256: `40343bd94bb805c8f0e1c1590e353a6c65b03b7f9ad966913f3a26ad5ae0cf3a`.
 No production book or shelf was changed.

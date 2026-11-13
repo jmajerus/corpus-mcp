@@ -232,7 +232,7 @@ db.close()
         assert db.execute('SELECT book_id,"order" FROM book_shelf_link WHERE book_id IN (3,4,5)').fetchall() == [(3, 11)]
     report['checks']['twoDuplicatesOnOneShelfKeepOneLink'] = True
 
-    # Copies whose PDFs differ 2× in size are flagged, without blocking.
+    # Copies whose PDFs differ 2× in size are flagged, without blocking; so is a 10% gap, and a 5% one is not.
     big = root / 'operator-big.pdf'
     seed = (root / 'seeds' / 'operator.pdf').read_bytes()
     big.write_bytes(seed + b'\n%' + b'x' * len(seed) + b'\n')
@@ -242,6 +242,15 @@ db.close()
         e = [{'id': i, 'uuid': u} for i, u in db.execute("SELECT id,uuid FROM books WHERE title='Batch E' ORDER BY id")]
     sized = review({'keep': e[0], 'remove': [e[1]], 'discard_conflicts': True})
     assert len(sized['size_warnings']) == 1 and sized['size_warnings'][0].startswith('PDF sizes differ 2.0×') and sized['blockers'] == [], sized
+    for pad, expected in ((len(seed) // 20, []), (len(seed) // 8, ['PDF sizes differ by 1'])):
+        file = root / f'operator-pad{pad}.pdf'
+        file.write_bytes(seed + b'\n%' + b'x' * pad + b'\n')
+        for copy in (root / 'seeds' / 'operator.pdf', file):
+            run(['/usr/bin/calibredb', 'add', '--duplicates', '--with-library', str(library), '--title', f'Batch F{pad}', '--authors', 'Test Writer', str(copy)])
+        with sqlite3.connect(library / 'metadata.db') as db:
+            f = [{'id': i, 'uuid': u} for i, u in db.execute('SELECT id,uuid FROM books WHERE title=? ORDER BY id', (f'Batch F{pad}',))]
+        warned = review({'keep': f[0], 'remove': [f[1]], 'discard_conflicts': True})['size_warnings']
+        assert [w[:len(e)] for w, e in zip(warned, expected)] == expected and len(warned) == len(expected), warned
     report['checks']['sizeDifferenceWarnsWithoutBlocking'] = True
 
     # Two duplicates with different EPUBs and a keeper without one: retaining "the keeper's

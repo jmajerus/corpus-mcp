@@ -188,17 +188,20 @@ function candidateBooks(c: Corpus) {
 }
 const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 
-/** Copies whose EPUB or PDF sizes differ by this factor or more are flagged (as in tools/calibre-duplicates.py). */
-export const SIZE_RATIO = 1.5;
-/** Not a blocker: copies of one book whose EPUB or PDF differ a lot in size suggest one is incomplete,
- * a sample, or another edition. */
+/** Copies whose EPUB or PDF sizes differ by this fraction or more are flagged (as in tools/calibre-duplicates.py). */
+export const SIZE_DIFFERENCE = 0.1;
+const sizeLabel = (n: number) => n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+/** How far apart two sizes are: a percentage under 2×, a factor from there. */
+export const sizeGap = (ratio: number) => ratio < 2 ? `by ${Math.round((ratio - 1) * 100)}%` : `${ratio.toFixed(1)}×`;
+/** Not a blocker: copies of one book whose EPUB or PDF differ in size suggest one is incomplete,
+ * a sample, another edition or a different conversion. */
 export function sizeWarnings(books: { id: string; sizes: Record<string, number> }[]) {
   const warnings: string[] = [];
   for (const fmt of ["EPUB", "PDF"]) {
     const sized = books.filter(b => b.sizes[fmt]);
     if (sized.length < 2) continue;
     const values = sized.map(b => b.sizes[fmt]), ratio = Math.max(...values) / Math.min(...values);
-    if (ratio >= SIZE_RATIO) warnings.push(`${fmt} sizes differ ${ratio.toFixed(1)}×: ${sized.map(b => `${b.id} ${(b.sizes[fmt] / 1048576).toFixed(1)} MiB`).join(", ")}. One copy may be incomplete, a sample, or another edition.`);
+    if (ratio >= 1 + SIZE_DIFFERENCE) warnings.push(`${fmt} sizes differ ${sizeGap(ratio)}: ${sized.map(b => `${b.id} ${sizeLabel(b.sizes[fmt])}`).join(", ")}. One copy may be incomplete, a sample, another edition or a different conversion.`);
   }
   return warnings;
 }

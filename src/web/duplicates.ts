@@ -30,7 +30,7 @@ function updateBatch(){
  const button=document.getElementById('preview-batch');button.disabled=!picked.length;
  button.textContent=picked.length?'Preview '+picked.length+' group'+(picked.length===1?'':'s')+' ('+records+' to trash)':'Preview selected';
  const sizes=groups.filter(g=>(g.size_warnings||[]).length).length;
- document.getElementById('count').textContent=shown().length+' groups shown, '+groups.length+' in all.'+(sizes?' '+sizes+' with EPUB or PDF sizes that differ a lot; check those before choosing a keeper.':'');
+ document.getElementById('count').textContent=shown().length+' groups shown, '+groups.length+' in all.'+(sizes?' '+sizes+' with EPUB or PDF sizes that differ by 10% or more; check those before choosing a keeper.':'');
 }
 function render() {
  document.getElementById('groups').innerHTML=shown().map(g=>{

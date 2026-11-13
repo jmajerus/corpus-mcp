@@ -321,9 +321,10 @@ it("prefers a colour cover, then a shelved record, and says why, without changin
  c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','k','main:2','T','now')").run();
  expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"has saved references"});
 });
-it("flags groups whose EPUB or PDF sizes differ a lot, but not small differences",()=>{
- expect(sizeWarnings([{id:"main:100",sizes:{EPUB:357*1024}},{id:"main:783",sizes:{EPUB:6617*1024}}])[0]).toMatch(/^EPUB sizes differ 18\.5×: main:100 0\.3 MiB, main:783 6\.5 MiB\./);
- expect(sizeWarnings([{id:"main:102",sizes:{EPUB:1267}},{id:"main:810",sizes:{EPUB:1698}},{id:"main:9",sizes:{PDF:5}}])).toEqual([]);
+it("flags groups whose EPUB or PDF sizes differ by 10% or more",()=>{
+ expect(sizeWarnings([{id:"main:100",sizes:{EPUB:357*1024}},{id:"main:783",sizes:{EPUB:6617*1024}}])[0]).toMatch(/^EPUB sizes differ 18\.5×: main:100 357 KB, main:783 6\.5 MB\./);
+ expect(sizeWarnings([{id:"main:98",sizes:{EPUB:447*1024}},{id:"main:661",sizes:{EPUB:381*1024}}])).toEqual([expect.stringMatching(/^EPUB sizes differ by 17%: main:98 447 KB, main:661 381 KB\./)]);
+ expect(sizeWarnings([{id:"main:106",sizes:{EPUB:1123}},{id:"main:814",sizes:{EPUB:1058}},{id:"main:9",sizes:{PDF:5}}])).toEqual([]);
  const db=new Database(path.join(root,"main/metadata.db"));
  db.exec("ALTER TABLE data ADD COLUMN uncompressed_size INTEGER; UPDATE data SET uncompressed_size=CASE book WHEN 1 THEN 1000000 ELSE 3000000 END");db.close();
  expect(duplicateGroups(c,"main").groups[0].size_warnings).toEqual([expect.stringMatching(/^PDF sizes differ 3\.0×/)]);
