@@ -16,7 +16,8 @@ const ASKPASS = path.join(root, "tools", "askpass.mjs");
 const USAGE = `Usage: npm run deploy -- [--current | --pr <number> | --main] [--skip-tests]
        npm run deploy -- [--provision | --source-setup | --source-setup-user-key | --vocabulary[=file] | --zotero]
 
-  (no flag)       build, test, install a new release, restart, health-check, roll back on failure
+  (no flag)       build, test, install a new release, restart, health-check, roll back on failure, then
+                  install the Calibre-side scripts from the same checkout (as the source was set up)
   --pr <number>   the same from an open pull request's head commit instead of this checkout: it is
                   checked out in a temporary worktree and its own deploy script runs there
   --main          the same from origin/main, to switch back after a pull request
@@ -29,7 +30,7 @@ const USAGE = `Usage: npm run deploy -- [--current | --pr <number> | --main] [--
   --source-setup-user-key
                   the same without root on calibre-web: adds the sync key to authoring's own
                   authorized_keys, forced to the same command, and points the corpus LXC's env
-                  at it. Rerun it after changing deploy/corpus-source.sh
+                  at it. Every deploy then reinstalls the scripts from the commit it deploys
   --vocabulary[=file]
                   validate the tag vocabulary (default CORPUS_VOCABULARY_SOURCE) and install it as
                   /var/lib/corpus-mcp/vocabulary.json; the server picks it up without a restart.
@@ -84,7 +85,7 @@ async function provision() {
   console.log("\nProvisioned. Next: npm run deploy -- --source-setup");
 }
 
-async function sourceSetup() {
+async function sourceSetup({ quiet = false } = {}) {
   const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
   const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
   if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
@@ -98,7 +99,7 @@ async function sourceSetup() {
     CORPUS_CONVERT_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-convert.sh")).toString("base64"),
     CORPUS_IMPORT_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-import.sh")).toString("base64"),
   });
-  console.log("\nSource ready. Next: npm run deploy");
+  if (!quiet) console.log("\nSource ready. Next: npm run deploy");
 }
 
 /** Runs a command as the login user (no sudo); resolves with its stdout. */
@@ -112,7 +113,7 @@ function runAsUser(host, command) {
   });
 }
 
-async function sourceSetupUserKey() {
+async function sourceSetupUserKey({ quiet = false } = {}) {
   const out = await runAsRoot(CORPUS_HOST, "echo \"pubkey=$(cat /var/lib/corpus-mcp/.ssh/id_ed25519.pub)\"");
   const pubkey = out.match(/^pubkey=(ssh-ed25519 \S+ \S+)$/m)?.[1];
   if (!pubkey) throw new Error("No sync key on the corpus LXC. Run --provision first.");
@@ -152,7 +153,7 @@ set_env CORPUS_LIBRARIES main
 # The source finds the library itself now; an old remote path would mislead.
 sed -i '/^CORPUS_REMOTE_PATH=/d' /etc/corpus-mcp/env
 echo "env updated"`);
-  console.log("\nSource key installed. Next: npm run deploy");
+  if (!quiet) console.log("\nSource key installed. Next: npm run deploy");
 }
 
 /** Validates a vocabulary file with the built loader, then installs it where the server reads it. */
@@ -285,8 +286,28 @@ trap - EXIT
 ls -1dt /opt/corpus-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 `;
   await runAsRoot(CORPUS_HOST, script);
+  await installSourceTools();
   if (!process.env.CORPUS_DEPLOY_NESTED) {
     await writeDeployed({ branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), commit: git(["rev-parse", "HEAD"]), local: true, dirty: git(["status", "--porcelain"]) !== "" });
+  }
+}
+
+/**
+ * Installs the Calibre-side scripts (the forced command and the helpers /admin's jobs run) from the same
+ * checkout as the app just deployed, the way the source was set up: as the shared login with
+ * --source-setup-user-key, or as corpus-sync with --source-setup. The app and these scripts share plan
+ * formats, so they must never come from different commits.
+ */
+async function installSourceTools() {
+  const out = await runAsRoot(CORPUS_HOST, "sed -n 's/^CORPUS_SOURCE=//p' /etc/corpus-mcp/env | tail -n 1");
+  const login = out.trim().split("\n").pop()?.replace(/"/g, "").split("@")[0];
+  if (!login) return console.log("No CORPUS_SOURCE in the server's env; the Calibre-side scripts were not installed.");
+  console.log(`\nInstalling the Calibre-side scripts for ${login}@ from this commit…`);
+  try {
+    if (login === SOURCE_HOST.split("@")[0]) await sourceSetupUserKey({ quiet: true });
+    else await sourceSetup({ quiet: true });
+  } catch (error) {
+    throw new Error(`The app is deployed, but the Calibre-side scripts were not updated (${error.message}). Don't run Calibre jobs until \`npm run deploy -- --current\` succeeds.`);
   }
 }
 

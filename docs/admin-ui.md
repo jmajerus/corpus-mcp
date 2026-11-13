@@ -310,8 +310,8 @@ then clear normally; other missing fields can still block a citekey.
 
 If metadata changed since the form loaded, reload and review it again. Extracted
 names remain suggestions until Apply; they do not silently become citation authors.
-The source host needs the updated named `metadata-preview` and `metadata-apply`
-commands (`deploy --source-setup` or `--source-setup-user-key`). These commands use
+The source host's named `metadata-preview` and `metadata-apply` commands are
+installed by every deploy, from the same commit as the app. These commands use
 `tools/calibre-metadata.py`; the existing tag and conversion commands are unchanged.
 
 The source writer uses `calibre-debug` from the same Calibre installation as the existing source tools. The metadata API accepts ordered author lists directly, preserving author order and comma-containing names, and recomputes title/author sort values. See the [Calibre database API](https://manual.calibre-ebook.com/db_api.html).
@@ -365,11 +365,20 @@ directly is marked **Trash**. Untick any you want to leave alone. A record that 
 matches another duplicate (A–B–C, where C does not match A) cannot merge into that
 keeper, a record with saved references can only be the keeper, and a record in
 another library than the keeper cannot be trashed into it. The suggested keeper
-is a referenced record, then an indexed one, then the one with the most formats, then
-the one added to Calibre first. Explicitly choose whether the keeper's versions should win for conflicting
+is a record with saved references, then one with a colour cover rather than a
+black-and-white or missing one, then one on a public Calibre-Web shelf, then an
+indexed one, then the one with the most formats, then the one added to Calibre first.
+The keeper's own file and cover are what survive, and older MOBI-era records often
+carry greyscale covers; shelf memberships move to the keeper either way. Each card
+lists its public shelves and whether its cover is colour, black and white, or missing,
+and the suggested keeper says why it was chosen. When copies' EPUB or PDF files differ
+in size by 10% or more, the card and the preview warn that one may be incomplete, a
+sample, another edition or a different conversion (not a blocker); the count above the groups says how many
+groups have such a warning. Explicitly choose whether the keeper's versions should win for conflicting
 formats, then **Preview this group**. That choice only keeps the keeper's own version:
 when two duplicates have different files in a format the keeper lacks, the group stays
-blocked until you make one of them the keeper or resolve one separately.
+blocked until you make one of them the keeper or resolve one separately. **Keepers’
+files win in every group**, beside the batch buttons, sets that choice for all groups.
 
 To resolve many groups at once, tick them (or **Select identical-file groups**, the
 safest set, or **Select all shown**) and choose **Preview selected**. The source
@@ -377,13 +386,21 @@ preview compares every book's files and metadata and reports each group with its
 blockers. **Apply N of M groups** resolves the groups without blockers in one job,
 after one `metadata.db` backup, and skips the others without changing them. A group
 whose sources changed since the preview is also skipped; the job then ends as failed
-and lists the skipped groups. Shelf and other reference blockers are shown together in
-the preview. Previews saved before batch resolution must be previewed again. Public shelf names are shown, while private shelf names stay hidden.
-You can instead delete an unwanted record directly in Calibre-Web: its delete
-operation cleans up shelf memberships automatically. Preserve unique formats or
-saved data first, and ensure the keeper belongs to any shelf you want to retain.
-The separate corpus-native trash operation still blocks on Calibre-Web references,
-because Calibre's API does not clean Calibre-Web's separate database. Source metadata and
+and lists the skipped groups. Previews saved before batch resolution must be
+previewed again.
+
+Calibre-Web shelf memberships do not block. The preview lists, for each duplicate,
+the shelves it is on and whether its link moves to the keeper or is dropped because
+the keeper is already there; public shelf names are shown, private ones stay hidden.
+Apply backs up Calibre-Web's `app.db` once per batch. For each group it then takes
+Calibre-Web's write lock, checks the duplicates' references one last time, moves their
+shelf links to the keeper (keeping each link's order and date added; where two
+duplicates share a shelf the keeper lacks, the first one's link moves and the other's
+is dropped, as the preview shows), marks those shelves modified, as Calibre-Web does,
+trashes the duplicates, and only then commits. If the trash fails, the shelf moves
+roll back. An
+orphaned shelf link, and any other Calibre-Web link to a duplicate (bookmarks, reading
+status, archive or download history), still blocks. Source metadata and
 file hashes must still match the reviewed plan, and previews expire after an hour.
 
 Resolution copies unique formats and supplementary files, unions tags, fills missing
@@ -397,17 +414,15 @@ Records with corpus quotes, anchors, citekeys, Zotero links or filed item UUIDs
 (including merged records), or tag proposals are held for manual reference
 resolution. quote-mcp is also checked for unanchored quotes
 when configured; an unavailable quote service blocks resolution. Calibre annotations,
-Calibre-Web shelf/bookmark/reading links, differing identifiers or populated custom
+Calibre-Web bookmark/reading/archive/download links, orphaned shelf links, differing identifiers or populated custom
 fields, conflicting supplementary files, and damaged surviving EPUBs also block
 resolution. References are not automatically reassigned to different file offsets or
 editions. Browser writes and MCP proposal/citekey writes pause while an apply runs.
 
 The source helper is `tools/calibre-duplicates.py`, invoked by `duplicates-preview`
-and `duplicates-apply`. After deploying this feature, update source helpers with:
-
-```sh
-npm run deploy -- --source-setup-user-key
-```
+and `duplicates-apply`. Every deploy (`npm run deploy`, `--main`, `--pr`, `--current`)
+installs it and the other Calibre-side scripts from the same commit as the app, so the
+two never disagree about a plan's format.
 
 See [duplicate-resolution operations](dev-briefs/duplicate-review.md) for backups,
 recovery limits and the native validation evidence.

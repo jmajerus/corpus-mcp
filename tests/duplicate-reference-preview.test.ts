@@ -8,41 +8,69 @@ let root:string,web:Database;
 beforeEach(()=>{
  root=tempDir();new Database(path.join(root,'metadata.db')).close();
  web=new Database(path.join(root,'web.db'));
- web.exec(`CREATE TABLE shelf(id INTEGER PRIMARY KEY,name TEXT,is_public INTEGER);
- CREATE TABLE book_shelf_link(shelf INTEGER,book_id INTEGER);
+ // Calibre-Web's own columns for these tables.
+ web.exec(`CREATE TABLE shelf(id INTEGER PRIMARY KEY,name TEXT,is_public INTEGER,last_modified DATETIME);
+ CREATE TABLE book_shelf_link(id INTEGER PRIMARY KEY,book_id INTEGER,"order" INTEGER,shelf INTEGER,date_added DATETIME);
  CREATE TABLE bookmark(book_id INTEGER);
- INSERT INTO shelf VALUES(1,'Main',1),(2,'Private subject',0);
- INSERT INTO book_shelf_link VALUES(1,116),(1,127),(2,127);`);
+ INSERT INTO shelf VALUES(1,'Main',1,'2026-01-01 00:00:00'),(2,'Private subject',0,'2026-01-01 00:00:00'),(3,'Peace Studies',1,'2026-01-01 00:00:00');
+ INSERT INTO book_shelf_link(book_id,"order",shelf,date_added) VALUES(116,1,1,'2025-06-09'),(127,7,1,'2026-11-12'),(127,3,2,'2026-11-12'),(127,5,3,'2026-11-12');`);
 });
 afterEach(()=>{web.close();fs.rmSync(root,{recursive:true,force:true});});
-function inspect(){
+function call(fn:string,body?:string){
  const script=`import importlib.util,json,pathlib,sys
 spec=importlib.util.spec_from_file_location('duplicates',sys.argv[1]);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-root=pathlib.Path(sys.argv[2]);print(json.dumps(module.reference_blockers(root,root/'web.db',116,127)))`;
+root=pathlib.Path(sys.argv[2])
+${body ?? `print(json.dumps(module.${fn}))`}`;
  const r=spawnSync('python3',['-B','-c',script,path.resolve('tools/calibre-duplicates.py'),root],{encoding:'utf8'});
- expect(r.status,r.stderr).toBe(0);return JSON.parse(r.stdout) as string[];
+ expect(r.status,r.stderr).toBe(0);return JSON.parse(r.stdout);
 }
-it('names public shelves and gives the correct keeper-specific action while hiding private names',()=>{
+const inspect=()=>call("reference_blockers(root,root/'web.db',116,127)") as string[];
+const links=()=>web.prepare('SELECT book_id,"order",shelf,date_added FROM book_shelf_link ORDER BY shelf,book_id').all();
+it('treats shelf links as moves, naming public shelves and hiding private names',()=>{
  const before=fs.readFileSync(path.join(root,'web.db'));
- const blockers=inspect();
- expect(blockers).toHaveLength(2);
- expect(blockers[0]).toContain('shelf “Main”');expect(blockers[0]).toContain('Keeper 116 already belongs');
- expect(blockers[0]).toContain('clean up its shelf links automatically');
- expect(blockers[0]).not.toContain('Remove only duplicate 127 from that shelf');
- expect(blockers[1]).toContain('private shelf');expect(blockers[1]).toContain('Add keeper 116');
- expect(JSON.stringify(blockers)).not.toContain('Private subject');
+ expect(inspect()).toEqual([]);
+ expect(call("shelf_plan(root/'web.db',116,[127])")).toEqual([
+  {shelf:'“Main”',duplicate:127,action:'drop'},{shelf:'a private shelf',duplicate:127,action:'move'},{shelf:'“Peace Studies”',duplicate:127,action:'move'}]);
  expect(fs.readFileSync(path.join(root,'web.db'))).toEqual(before);
 });
+const move=(removes:string)=>call('',`with module.calibre_web_write(root/'web.db') as web:
+    print(json.dumps(module.move_shelves(web,116,${removes})))`);
+it('moves the duplicate’s shelf links to the keeper in place, drops redundant ones, and touches each shelf',()=>{
+ expect(move('[127]')).toEqual([
+  {shelf:'“Main”',duplicate:127,action:'dropped'},{shelf:'a private shelf',duplicate:127,action:'moved'},{shelf:'“Peace Studies”',duplicate:127,action:'moved'}]);
+ expect(links()).toEqual([
+  {book_id:116,order:1,shelf:1,date_added:'2025-06-09'},{book_id:116,order:3,shelf:2,date_added:'2026-11-12'},{book_id:116,order:5,shelf:3,date_added:'2026-11-12'}]);
+ expect(web.prepare("SELECT count(*) FROM shelf WHERE last_modified > '2026-01-01 00:00:00'").pluck().get()).toBe(3);
+ expect(move('[127]')).toEqual([]);
+});
+it('keeps only the first of two duplicates’ links to one shelf, in the preview and the apply alike',()=>{
+ web.exec(`INSERT INTO book_shelf_link(book_id,"order",shelf,date_added) VALUES(130,9,3,'2026-11-13')`);
+ expect(call("shelf_plan(root/'web.db',116,[127,130])").filter((s:any)=>s.shelf==='“Peace Studies”')).toEqual([
+  {shelf:'“Peace Studies”',duplicate:127,action:'move'},{shelf:'“Peace Studies”',duplicate:130,action:'drop'}]);
+ expect(move('[127,130]').filter((s:any)=>s.shelf==='“Peace Studies”')).toEqual([
+  {shelf:'“Peace Studies”',duplicate:127,action:'moved'},{shelf:'“Peace Studies”',duplicate:130,action:'dropped'}]);
+ expect(web.prepare('SELECT book_id,"order" FROM book_shelf_link WHERE shelf=3').all()).toEqual([{book_id:116,order:5}]);
+});
+it('rolls the shelf moves back when the trash fails inside the lock',()=>{
+ const before=links();
+ const out=call('',`try:
+    with module.calibre_web_write(root/'web.db') as web:
+        module.move_shelves(web,116,[127])
+        raise OSError('trash failed')
+except OSError as error:
+    print(json.dumps(str(error)))`);
+ expect(out).toBe('trash failed');expect(links()).toEqual(before);
+});
 it('reports remaining references after shelf membership is cleared, including orphaned links',()=>{
- web.exec('DELETE FROM book_shelf_link; INSERT INTO book_shelf_link VALUES(99,127); INSERT INTO bookmark VALUES(127);');
+ web.exec('DELETE FROM book_shelf_link; INSERT INTO book_shelf_link(book_id,shelf) VALUES(127,99); INSERT INTO bookmark VALUES(127);');
  const blockers=inspect();expect(blockers.some(b=>b.includes('orphaned shelf'))).toBe(true);expect(blockers.some(b=>b.includes('bookmarks'))).toBe(true);
 });
 it('fails closed with an actionable blocker when the Calibre-Web database is unavailable',()=>{
  fs.renameSync(path.join(root,'web.db'),path.join(root,'held.db'));
  expect(inspect()).toEqual(['Calibre-Web reference database is unavailable. Restore access before resolving this pair.']);
 });
-it('clears blockers only when all removed-book references are resolved',()=>{
- web.exec('DELETE FROM book_shelf_link WHERE book_id=127;');expect(inspect()).toEqual([]);
+it('blocks on any other Calibre-Web link to the duplicate',()=>{
+ expect(inspect()).toEqual([]);
  web.exec('INSERT INTO bookmark VALUES(127);');expect(inspect()[0]).toContain('bookmarks');
 });
 
