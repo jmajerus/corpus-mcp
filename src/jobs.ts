@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
-import { duplicateBatchPlan, assertDuplicateUnreferenced, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
+import { duplicateBatchPlan, duplicateContents, assertDuplicateUnreferenced, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
 import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
@@ -182,7 +182,9 @@ export class JobRunner {
       }
     } else if (kind === "duplicates" && mode === "preview") {
       if (!opts.duplicates?.length) throw new ToolError("Choose a keeper on the duplicate review screen.");
-      params = { plan: duplicateBatchPlan(this.c, this.config.shelvesLibrary, opts.duplicates) };
+      // Only the plan goes to the source; `contents` is for the preview page.
+      params = { plan: duplicateBatchPlan(this.c, this.config.shelvesLibrary, opts.duplicates),
+        contents: duplicateContents(this.c, this.config.shelvesLibrary, opts.duplicates.map(s => s.keep)) };
     } else if (mode === "preview" && (kind === "tags" || kind === "cleanup")) {
       const library = this.config.shelvesLibrary;
       // A book page previews just that book (`books`); the dashboard previews every approved book.

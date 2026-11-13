@@ -14,7 +14,7 @@ import { coverColour, GREYSCALE_COVER, sizeWarnings, duplicatePairs, duplicateGr
 import { JobRunner, type JobCommands } from "../src/jobs.js";
 import { DUPLICATES_HTML } from "../src/web/duplicates.js";
 import { JOB_HTML } from "../src/web/jobs.js";
-import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
+import { makeLibrary, makePdf, makeShapedEpub, tempDir } from "./fixtures.js";
 
 let root:string,c:Corpus,config:Config;
 beforeEach(()=>{
@@ -327,6 +327,30 @@ it("flags groups whose EPUB or PDF sizes differ by 10% or more",()=>{
  expect(sizeWarnings([{id:"main:106",sizes:{EPUB:1123}},{id:"main:814",sizes:{EPUB:1058}},{id:"main:9",sizes:{PDF:5}}])).toEqual([]);
  const db=new Database(path.join(root,"main/metadata.db"));
  db.exec("ALTER TABLE data ADD COLUMN uncompressed_size INTEGER; UPDATE data SET uncompressed_size=CASE book WHEN 1 THEN 1000000 ELSE 3000000 END");db.close();
- expect(duplicateGroups(c,"main").groups[0].size_warnings).toEqual([expect.stringMatching(/^PDF sizes differ 3\.0×/)]);
+ // The fixture's PDFs are the same file, so their contents explain the recorded gap.
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({size_warnings:[],content_notes:["PDF sizes differ, but the pages, text and bookmarks match: probably different image compression."]});
  expect(pair().fingerprint).toBeDefined();
+});
+it("compares the copies' contents, prefers the more complete one as keeper, and explains it, without changing fingerprints",async()=>{
+ const db=new Database(path.join(root,"main/metadata.db"));
+ for(const id of [1,2]){
+  db.prepare("INSERT INTO data(book,format,name) VALUES(?,'EPUB','copy')").run(id);
+  fs.writeFileSync(path.join(root,`main/Ann Author/The Same Book (${id})/copy.epub`),makeShapedEpub({images:30,pages:200}));
+ }
+ db.close();
+ const before=pair().fingerprint,bookPrint=pair().books[1].fingerprint;
+ // Copy 1 loses its figures and print pages in place: the same record, a weaker file.
+ fs.writeFileSync(path.join(root,"main/Ann Author/The Same Book (1)/copy.epub"),makeShapedEpub({images:1,pages:0}));
+ const g=duplicateGroups(c,"main").groups[0];
+ expect(g).toMatchObject({suggested_keep:"main:2",suggested_because:"has the most complete contents"});
+ expect(g.content_warnings.map(w=>[w.measure,w.against])).toEqual([["page_list",["main:1"]],["images",["main:1"]]]);
+ expect(g.books.find(b=>b.id==="main:2")!.contents.EPUB).toMatchObject({images:30,page_list:200});
+ expect(g.books[0].contents.PDF).toMatchObject({pages:1});
+ expect(pair().fingerprint).toBe(before);expect(pair().books[1].fingerprint).toBe(bookPrint);
+ // The preview page gets the findings; the source gets only the plan.
+ const sent:any[]=[];
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(_command,stdin)=>{sent.push(JSON.parse(stdin!));}});
+ const job=await wait(r,r.start("duplicates","preview",{duplicates:[select("main:2",["main:1"])]}));
+ expect(job.params.contents).toEqual({2:{warnings:g.content_warnings.map(w=>w.message),notes:[]}});
+ expect(Object.keys(sent[0])).toEqual(["library","groups"]);
 });
