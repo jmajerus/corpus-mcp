@@ -47,7 +47,7 @@ export interface JobItem {
   duplicate_review?: { plan: DuplicateBatchPlan["groups"][number] & { reviewed?: string }; blockers:string[]; [key:string]: unknown };
   duplicate_skipped?: { message: string };
   duplicate_partial?: {backup:string;message:string};
-  duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean };
+  duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean; shelves?: { shelf: string; action: string }[] };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string; source_sha256?: string;
   /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */
   convert_skipped?: string;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import * as mupdf from "mupdf";
 import { type BookRow, type Corpus, ToolError } from "./tools.js";
 import { recordChanges } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
@@ -132,10 +133,44 @@ export function duplicateCandidates(books: DuplicateCandidate[]) {
   return [...matches.values()].sort((a,b) => a.i - b.i || a.j - b.j).map(({i,j,evidence}) => ({i,j,evidence:EVIDENCE.filter(reason=>evidence.has(reason))}));
 }
 
+/** How colourful a cover is (Hasler–Süsstrunk; 0 for greyscale, typically 15–150 for colour), or
+ * null without a readable cover. Cached by file identity: covers change only when Calibre replaces them. */
+const coverColours = new Map<string, number | null>();
+export function coverColour(file: string): number | null {
+  let stamp: string;
+  try { const st = fs.statSync(file); stamp = `${file}|${st.size}|${st.mtimeMs}`; } catch { return null; }
+  if (coverColours.has(stamp)) return coverColours.get(stamp)!;
+  let result: number | null = null;
+  try {
+    let pix = new mupdf.Image(fs.readFileSync(file)).toPixmap();
+    if (pix.getNumberOfComponents() - (pix.getAlpha() ? 1 : 0) === 1) result = 0;
+    else {
+      if (pix.getNumberOfComponents() - (pix.getAlpha() ? 1 : 0) !== 3) pix = pix.convertToColorSpace(mupdf.ColorSpace.DeviceRGB);
+      const w = pix.getWidth(), h = pix.getHeight(), n = pix.getNumberOfComponents(), stride = pix.getStride(), px = pix.getPixels();
+      const step = Math.max(1, Math.round(Math.sqrt((w * h) / 40000)));
+      let k = 0, srg = 0, syb = 0, qrg = 0, qyb = 0;
+      for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
+        const o = y * stride + x * n, r = px[o], g = px[o + 1], b = px[o + 2];
+        const rg = r - g, yb = (r + g) / 2 - b;
+        srg += rg; syb += yb; qrg += rg * rg; qyb += yb * yb; k++;
+      }
+      const mrg = srg / k, myb = syb / k;
+      result = Math.sqrt(Math.max(0, qrg / k - mrg * mrg) + Math.max(0, qyb / k - myb * myb)) + 0.3 * Math.hypot(mrg, myb);
+    }
+  } catch { result = null; }
+  coverColours.set(stamp, result);
+  return result;
+}
+/** Below this a cover reads as black and white. */
+export const GREYSCALE_COVER = 5;
+
 type DuplicateBook = ReturnType<typeof candidateBooks>[number];
 function candidateBooks(c: Corpus) {
-  const metadata = catalogue(c), references = allReferences(c);
-  return (c.db.prepare("SELECT * FROM books ORDER BY id").all() as BookRow[]).map(b => {
+  const metadata = catalogue(c), references = allReferences(c), shelves = new Map<string, string[]>();
+  for (const r of c.db.prepare("SELECT bs.book_id, s.name FROM book_shelves bs JOIN shelves s ON s.id = bs.shelf_id ORDER BY s.name").all() as { book_id: string; name: string }[]) {
+    shelves.set(r.book_id, [...(shelves.get(r.book_id) ?? []), r.name]);
+  }
+  return (c.db.prepare("SELECT * FROM books ORDER BY id").all() as (BookRow & { folder: string })[]).map(b => {
     const book = {
       id: b.id, uuid: b.uuid, library: b.library, calibre_id: b.calibre_id, title: b.title,
       authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,
@@ -143,12 +178,12 @@ function candidateBooks(c: Corpus) {
       formats: metadata.get(b.id)?.formats ?? (b.format ? [b.format.toUpperCase()] : []),
       references: b.uuid ? references.get(b.uuid) ?? emptyReferences() : {},
     };
-    // `added` only ranks the suggested keeper; it stays out of the fingerprints, so adding it
-    // left existing keep-both decisions valid.
-    return { ...book, added: b.added ?? null, fingerprint: hash(book) };
+    // `added`, shelves and the cover only rank the suggested keeper; they stay out of the
+    // fingerprints, so keep-both decisions hold. The cover is read only for candidates (see below).
+    return { ...book, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder, fingerprint: hash(book) };
   });
 }
-const hashed = ({ added: _added, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 const referenced = (b: DuplicateBook) => Object.values(b.references).some(n => n > 0);
 
 export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
@@ -169,8 +204,9 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
 
 /** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
  * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
- * C merge into A. The suggested keeper is a referenced record, then an indexed one, then the one
- * with the most formats, then the one added to Calibre first (by its added date, then its id). */
+ * C merge into A. The suggested keeper is a referenced record, then one with a colour cover, then
+ * one on a Calibre-Web shelf, then an indexed one, then the one with the most formats, then the one
+ * added to Calibre first (by its added date, then its id). */
 export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismissed = false) {
   const { pairs } = duplicatePairs(c, writableLibrary, includeDismissed);
   const parent = new Map<string, string>();
@@ -183,19 +219,35 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     for (const b of p.books) group.books.set(b.id, b);
     group.pairs.push(p); groups.set(root, group);
   }
-  const rank = (b: DuplicateBook) => [referenced(b) ? 0 : 1, b.status === "indexed" ? 0 : 1, -b.formats.length];
+  for (const g of groups.values()) for (const b of g.books.values()) {
+    b.cover_colour = coverColour(path.join(c.booksRoot, b.folder, "cover.jpg"));
+  }
+  const colour = (b: DuplicateBook) => b.cover_colour !== null && b.cover_colour >= GREYSCALE_COVER;
+  // Lower is better, in order. A referenced record must be the keeper. The keeper's file and cover are
+  // what survive, so a colour cover beats a black-and-white or missing one (older MOBI-era records
+  // often carry greyscale covers). Shelf links move to the keeper either way, so a shelf only breaks ties.
+  const criteria: [string, (b: DuplicateBook) => number][] = [
+    ["has saved references", b => referenced(b) ? 0 : 1],
+    ["has a colour cover", b => colour(b) ? 0 : 1],
+    ["is on a Calibre-Web shelf", b => b.shelves.length ? 0 : 1],
+    ["is indexed", b => b.status === "indexed" ? 0 : 1],
+    ["has the most formats", b => -b.formats.length],
+  ];
   const before = (a: DuplicateBook, b: DuplicateBook) => {
-    const x = rank(a), y = rank(b);
-    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    for (const [, f] of criteria) if (f(a) !== f(b)) return f(a) - f(b);
     // An unknown added date sorts after a known one.
     if (a.added !== b.added) return a.added === null ? 1 : b.added === null ? -1 : a.added < b.added ? -1 : 1;
     return a.calibre_id - b.calibre_id;
   };
+  /** The first criterion that set the suggested keeper apart from the rest. */
+  const reason = (keep: DuplicateBook, others: DuplicateBook[]) =>
+    criteria.find(([, f]) => others.every(o => f(keep) < f(o)))?.[0] ?? (others.every(o => keep.added !== null && (o.added === null || keep.added < o.added)) ? "was added to Calibre first" : "has the lowest Calibre id");
   const result = [...groups.values()].map(g => {
     const books = [...g.books.values()].sort((a, b) => a.calibre_id - b.calibre_id);
     const suggested = [...books].sort(before)[0];
     return {
       key: books.map(b => b.id).join("|"), books, pairs: g.pairs, suggested_keep: suggested.id,
+      suggested_because: reason(suggested, books.filter(b => b !== suggested)),
       identical: g.pairs.every(p => p.evidence.includes("Identical selected file")),
       writable: g.pairs.every(p => p.writable),
     };

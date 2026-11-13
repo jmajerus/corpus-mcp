@@ -20,9 +20,16 @@ Browser reloads do not trigger source synchronization. The duplicate API include
 `last_scan`, the configured Calibre-Web URL and writable library. The screen can
 start the existing authorized refresh job, wait for completion and reload candidates;
 it also reloads index data when returning from another tab or browser history.
-Calibre-Web's installed `delete_whole_book` cleans its shelf/read/download links.
-Direct deletion there does not require pre-removing shelf memberships. Corpus's
-Calibre-native trash call remains separate and retains the reference guard.
+Calibre's native trash does not touch Calibre-Web's `app.db`, so the helper moves
+each duplicate's shelf links to its keeper itself, in one `BEGIN IMMEDIATE`
+transaction per duplicate, just before the trash: a link is re-pointed (keeping its
+order and date added) or deleted where the keeper is already on that shelf, and the
+shelf's `last_modified` is set, as Calibre-Web's own shelf edits do (Kobo sync reads
+it). The apply backs up `app.db` into the batch's `.files/app.db` first. Every other
+Calibre-Web table that references the duplicate, and an orphaned shelf link, still
+blocks. Corpus ranks keepers with the public shelves it mirrors and each cover's
+colourfulness (Hasler–Süsstrunk, cached by file identity); neither is part of a
+fingerprint, so keep-both decisions survive them.
 
 ## Batches
 
@@ -150,3 +157,19 @@ batch plan format. The new checks also passed:
 
 Helper SHA-256: `cca1ab1b18850287fd1e3e1b57ce42d0636989f443e81e24afb87d6198a72f41`.
 No production book was changed.
+
+## Shelf moves, 2026-11-13
+
+The helper ran the validator on calibre-web.localdomain (Calibre 8.5, as `authoring`)
+in `/mnt/Calibre/.corpus-duplicate-operator-2TjRiQ1Y`, with Calibre-Web's own `shelf`,
+`book_shelf_link` and `bookmark` columns. All 14 checks passed, including:
+
+- A preview with the duplicate on a shelf the keeper shares and on a private shelf
+  reported a drop and a move, with no blocker and no private name.
+- A bookmark added after preview still skipped the group at apply.
+- After apply, the keeper held both links with their original order and date, the
+  duplicate held none, both shelves were marked modified, and the batch backup's
+  `app.db` still had the duplicate's links.
+
+Helper SHA-256: `a46c2181a9fa60193f36eca0277987e43a0dc35a70e672dcf6d5a10dd74270d4`.
+No production book or shelf was changed.

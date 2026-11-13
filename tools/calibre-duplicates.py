@@ -7,6 +7,10 @@ they go to Calibre's trash. A preview prints one "@@change" review per group, wi
 fingerprint of every member's metadata and file bytes. An apply sends back the reviewed groups, backs
 up metadata.db once, then resolves each group whose sources still match its review. Groups that
 changed or gained blockers are skipped without any change; the exit status is then non-zero.
+
+Calibre-Web shelf memberships are not blockers: the apply backs up Calibre-Web's app.db once, then
+moves each duplicate's shelf links to its keeper (or drops them where the keeper is already on that
+shelf) just before the duplicates go to the trash. Any other Calibre-Web link still blocks.
 """
 import argparse
 import datetime
@@ -40,8 +44,45 @@ def inside(root, relative):
     return p
 
 
+def shelf_plan(app_db, keep_id, remove_id):
+    """The duplicate's shelf links and what the apply will do with each, without private shelf names."""
+    plan = []
+    with sqlite3.connect(f'file:{app_db}?mode=ro', uri=True) as web:
+        for shelf_id, name, public in web.execute('SELECT s.id,s.name,s.is_public FROM shelf s JOIN book_shelf_link l ON l.shelf=s.id WHERE l.book_id=? ORDER BY s.id', (remove_id,)):
+            present = web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone() is not None
+            plan.append({'shelf': f'“{name}”' if public else 'a private shelf', 'duplicate': remove_id, 'action': 'drop' if present else 'move'})
+    return plan
+
+
+def move_shelves(app_db, keep_id, remove_id):
+    """In one transaction, move the duplicate's shelf links to the keeper, keeping their order and date,
+    or drop a link where the keeper is already on that shelf; touch each shelf as Calibre-Web does."""
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat(sep=' ')
+    web = sqlite3.connect(app_db, timeout=30, isolation_level=None)
+    try:
+        web.execute('BEGIN IMMEDIATE')
+        try:
+            done = []
+            for link_id, shelf_id, name, public in web.execute('SELECT l.id,s.id,s.name,s.is_public FROM book_shelf_link l JOIN shelf s ON s.id=l.shelf WHERE l.book_id=? ORDER BY s.id', (remove_id,)).fetchall():
+                if web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone():
+                    web.execute('DELETE FROM book_shelf_link WHERE id=?', (link_id,))
+                    action = 'dropped'
+                else:
+                    web.execute('UPDATE book_shelf_link SET book_id=? WHERE id=?', (keep_id, link_id))
+                    action = 'moved'
+                web.execute('UPDATE shelf SET last_modified=? WHERE id=?', (now, shelf_id))
+                done.append({'shelf': f'“{name}”' if public else 'a private shelf', 'action': action})
+            web.execute('COMMIT')
+            return done
+        except BaseException:
+            web.execute('ROLLBACK')
+            raise
+    finally:
+        web.close()
+
+
 def reference_blockers(library, app_db, keep_id, remove_id):
-    """Read references without editing Calibre-Web or exposing private shelf names."""
+    """Read references without editing Calibre-Web. Shelf links are moved, not blockers, unless orphaned."""
     blockers = []
     if not app_db.is_file():
         blockers.append('Calibre-Web reference database is unavailable. Restore access before resolving this pair.')
@@ -53,12 +94,7 @@ def reference_blockers(library, app_db, keep_id, remove_id):
                     safe = table.replace('"', '""')
                     cols = {r[1] for r in web.execute(f'PRAGMA table_info("{safe}")')}
                     if table == 'book_shelf_link' and {'book_id', 'shelf'}.issubset(cols) and 'shelf' in tables:
-                        for shelf_id, name, public in web.execute('SELECT DISTINCT s.id,s.name,s.is_public FROM shelf s JOIN book_shelf_link l ON l.shelf=s.id WHERE l.book_id=? ORDER BY s.id', (remove_id,)):
-                            keeper_present = web.execute('SELECT 1 FROM book_shelf_link WHERE shelf=? AND book_id=?', (shelf_id, keep_id)).fetchone() is not None
-                            label = f'shelf “{name}”' if public else 'a private shelf'
-                            action = f'Keeper {keep_id} already belongs to this shelf.' if keeper_present else f'Add keeper {keep_id} to this shelf first.'
-                            blockers.append(f'Calibre-Web {label} contains duplicate {remove_id}. {action} Calibre-Web can delete the duplicate and clean up its shelf links automatically. Preserve any unique files or saved data first, then refresh corpus. Corpus’s direct trash action requires these links to be resolved.')
-                        # Broken links must still block even when the shelf row is missing.
+                        # A link whose shelf is gone cannot be moved; it must be repaired first.
                         if web.execute('SELECT 1 FROM book_shelf_link l LEFT JOIN shelf s ON s.id=l.shelf WHERE l.book_id=? AND s.id IS NULL LIMIT 1', (remove_id,)).fetchone():
                             blockers.append('Calibre-Web has an orphaned shelf membership for the duplicate. Repair it before resolving this pair.')
                         continue
@@ -117,9 +153,12 @@ class Review:
         self.api, self.library, self.group = api, library, group
         self.keep, self.km = self.state(group['keep'])
         self.removes = [self.state(ref) for ref in group['remove']]
-        blockers = []
+        blockers, self.shelves = [], []
         for remove, _ in self.removes:
-            blockers += reference_blockers(library, app_db, self.keep['id'], remove['id'])
+            refs = reference_blockers(library, app_db, self.keep['id'], remove['id'])
+            blockers += refs
+            if app_db.is_file() and not refs:
+                self.shelves += shelf_plan(app_db, self.keep['id'], remove['id'])
         ki = dict(self.km.identifiers)
         merged_ids, owner_of = dict(ki), {k: self.keep['id'] for k in ki}
         formats = {fmt: (self.keep['id'], info) for fmt, info in self.keep['formats'].items()}
@@ -200,7 +239,7 @@ class Review:
 
     def summary(self):
         return {'plan': {**self.group, 'reviewed': self.fingerprint}, 'keep': self.keep, 'remove': [r for r, _ in self.removes],
-                'copy_formats': self.copy_formats, 'conflicting_formats': self.conflicts, 'blockers': self.blockers}
+                'copy_formats': self.copy_formats, 'conflicting_formats': self.conflicts, 'shelves': self.shelves, 'blockers': self.blockers}
 
 
 def event(ref, title, **fields):
@@ -263,9 +302,10 @@ def resolve(api, library, app_db, review, saved, backup):
         new_blockers = [b for r in removes for b in reference_blockers(library, app_db, keep['id'], r)]
         if new_blockers:
             raise DuplicateReviewError('; '.join(new_blockers))
+        shelves = {r: move_shelves(app_db, keep['id'], r) for r in removes}
         api.remove_books(list(removes), permanent=False)
         for remove, _ in review.removes:
-            event(keep, km.title, duplicate_resolved={'removed_id': remove['id'], 'removed_uuid': remove['uuid'], 'backup': str(backup), 'trash': True})
+            event(keep, km.title, duplicate_resolved={'removed_id': remove['id'], 'removed_uuid': remove['uuid'], 'backup': str(backup), 'trash': True, 'shelves': shelves[remove['id']]})
     except Exception:
         # Preserve the original error; never claim the trash step completed.
         event(keep, km.title, duplicate_partial={'backup': str(backup), 'message': 'Resolution interrupted; inspect keeper and trash before retrying.'})
@@ -314,7 +354,10 @@ def main():
                     src.backup(dst)
                 saved = backup.with_name(backup.name + '.files')
                 saved.mkdir(mode=0o700)
-                print(f'Backed up metadata.db to {backup}; group records go to {saved}', flush=True)
+                # Calibre-Web's database too, since shelf links move to the keepers.
+                with sqlite3.connect(f'file:{args.app_db}?mode=ro', uri=True) as src, sqlite3.connect(saved / 'app.db') as dst:
+                    src.backup(dst)
+                print(f'Backed up metadata.db to {backup}, Calibre-Web’s app.db and the group records to {saved}', flush=True)
                 for review in reviews:
                     try:
                         resolve(api, args.library, args.app_db, review, saved, backup)

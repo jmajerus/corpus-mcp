@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import * as mupdf from "mupdf";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { loadConfig, type Config } from "../src/config.js";
 import { openDatabase } from "../src/db.js";
@@ -9,7 +10,7 @@ import { scanLibraries } from "../src/indexer.js";
 import { zoteroMatch } from "../src/zotero.js";
 import { type Corpus, getBook } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
-import { duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
+import { coverColour, GREYSCALE_COVER, duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
 import { DUPLICATES_HTML } from "../src/web/duplicates.js";
 import { JOB_HTML } from "../src/web/jobs.js";
@@ -287,4 +288,36 @@ it("renders duplicate reviews saved before batch resolution on the job page",asy
   {getElementById:el,title:''},{pathname:'/admin/jobs/20'},Promise.resolve({can_write:true}),Promise.resolve(new Map()),new Map(),api,async()=>({}),String,(_:string,t:string)=>t,String,String,()=>{},()=>true,()=>{});
  await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));
  expect(el('items').innerHTML).toContain('Keep main:1; trash main:2');expect(el('items').innerHTML).toContain('Copy unique formats: EPUB.');
+});
+
+function cover(id:string,colour:boolean){
+ const folder=c.db.prepare("SELECT folder FROM books WHERE id=?").pluck().get(id) as string;
+ const pix=new mupdf.Pixmap(colour?mupdf.ColorSpace.DeviceRGB:mupdf.ColorSpace.DeviceGray,[0,0,40,60],false);
+ const px=pix.getPixels();for(let i=0;i<px.length;i++)px[i]=colour?(i%3===0?200:i%3===1?40:(i*7)%255):(i*5)%255;
+ fs.writeFileSync(path.join(root,folder,"cover.jpg"),pix.asJPEG(90,false));
+}
+it("reads black-and-white and colour covers apart",()=>{
+ cover("main:1",false);cover("main:2",true);
+ const folder=(id:string)=>path.join(root,c.db.prepare("SELECT folder FROM books WHERE id=?").pluck().get(id) as string,"cover.jpg");
+ expect(coverColour(folder("main:1"))).toBeLessThan(GREYSCALE_COVER);
+ expect(coverColour(folder("main:2"))).toBeGreaterThan(50);
+ expect(coverColour(path.join(root,"missing.jpg"))).toBeNull();
+});
+it("prefers a colour cover, then a shelved record, and says why, without changing fingerprints",()=>{
+ const before=pair().fingerprint,bookPrint=pair().books[1].fingerprint;
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:1",suggested_because:"has the lowest Calibre id"});
+ cover("main:1",false);cover("main:2",true);
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"has a colour cover"});
+// A shelf does not outweigh the colour cover (its links move to the keeper anyway)...
+ c.db.exec("INSERT INTO shelves(id,name) VALUES(3,'Peace Studies'); INSERT INTO book_shelves(book_id,shelf_id,ord) VALUES('main:1',3,1);");
+ let g=duplicateGroups(c,"main").groups[0];
+ expect(g).toMatchObject({suggested_keep:"main:2",suggested_because:"has a colour cover"});
+ expect(g.books.map(b=>b.shelves)).toEqual([["Peace Studies"],[]]);
+ // ...but breaks a tie between colour covers.
+ cover("main:1",true);
+ g=duplicateGroups(c,"main").groups[0];
+ expect(g).toMatchObject({suggested_keep:"main:1",suggested_because:"is on a Calibre-Web shelf"});
+ expect(pair().fingerprint).toBe(before);expect(pair().books[1].fingerprint).toBe(bookPrint);
+ c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','k','main:2','T','now')").run();
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"has saved references"});
 });
