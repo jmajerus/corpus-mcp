@@ -99,7 +99,7 @@ function renderActions() {
     backup: "Copy data.db (pinned citekeys, proposals, jobs, change log) to the backup directory.",
     tags: "Make Calibre match every approved category set: adds and removes vocabulary tags. Preview lists each book; apply runs that list.",
     cleanup: "Remove non-subject tags (BISAC codes, publisher names, statuses, pasted descriptions) from Calibre.",
-    convert: "Give every book with no EPUB or PDF a readable copy: an EPUB from MOBI, AZW, AZW3 or KFX, or the PDF inside a print-replica KFX. DRM-encrypted files are listed, not converted.",
+    convert: "Give every book with no EPUB or PDF a readable copy: an EPUB from MOBI, AZW, AZW3, PRC or KFX, or the PDF inside a print-replica KFX. DRM-encrypted files are listed, not converted.",
     zotero: "Fetch what changed in the Zotero library since the last sync (it also runs on its own timer), and pin the citekeys of matched books.",
   };
   document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) => kind === "duplicates"

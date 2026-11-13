@@ -70,7 +70,7 @@ async function load() {
         (it.duplicate_partial ? '<p class="status-failed">' + esc(it.duplicate_partial.message) + ' Backup: ' + esc(it.duplicate_partial.backup) + '</p>' : '') +
         (it.duplicate_resolved ? '<p>Duplicate ' + esc(it.duplicate_resolved.removed_id) + ' moved to Calibre’s trash. Backup: ' + esc(it.duplicate_resolved.backup) + '</p>' : '') +
         (it.metadata ? '<div>' + (it.metadata.partial ? '<strong>Partially applied</strong><br>' : '') + '<span class="chg del">' + esc(it.metadata.before.title) + ' · ' + esc(it.metadata.before.authors.join("; ")) + " · " + esc(it.metadata.before.year ?? "year unknown") + '</span><br><span class="chg add">' + esc(it.metadata.after.title) + ' · ' + esc(it.metadata.after.authors.join("; ")) + " · " + esc(it.metadata.after.year ?? "year unknown") + '</span></div>' : "") +
-        (it.convert_skipped ? '<span class="status-failed">Not converted: ' + esc(it.convert_skipped === "encrypted" ? "DRM-encrypted; download it again and add it through DeDRM" : it.convert_skipped + " file") + " (" + esc(String(it.source_format).toUpperCase()) + ")</span>" : "") +
+        (it.convert_skipped ? '<span class="status-failed">Not converted: ' + esc(it.convert_skipped === "encrypted" ? "DRM-encrypted; download it again and add it through DeDRM" : it.convert_skipped === "unrecognized" ? "unrecognized file" : it.convert_skipped) + (it.source_format ? " (" + esc(String(it.source_format).toUpperCase()) + ")" : "") + "</span>" : "") +
         (it.added_format ? '<span class="chg add"><b>+</b>' + esc(String(it.added_format).toUpperCase()) + " from " + esc(String(it.source_format).toUpperCase()) + "</span>" : "") +
         "</td></tr>").join("") + "</tbody></table></div>"
     : "";

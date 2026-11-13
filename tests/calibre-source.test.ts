@@ -55,7 +55,7 @@ beforeEach(() => {
   fs.mkdirSync(tools);
   // Stand-ins that report how they were called.
   fs.writeFileSync(path.join(tools, "calibre-tags.sh"), 'echo "tags $* plan=$(printf %s "$TAG_PLAN" | base64 -d)"\n');
-  fs.writeFileSync(path.join(tools, "calibre-convert.sh"), 'echo "convert $*"\n');
+  fs.writeFileSync(path.join(tools, "calibre-convert.sh"), 'echo "convert $*${CONVERT_PLAN:+ plan=$(printf %s "$CONVERT_PLAN" | base64 -d)}"\n');
   fs.writeFileSync(path.join(tools, "calibre-metadata.py"), 'import sys; print("metadata " + " ".join(sys.argv[1:]) + " plan=" + sys.stdin.read())\n');
   installed = path.join(tools, "corpus-source");
   fs.writeFileSync(installed, sourceScript.replace(/^APP_DB=.*$/m, `APP_DB="${appDb}"`).replace(/^TOOLS_DIR=.*$/m, `TOOLS_DIR="${tools}"`), { mode: 0o755 });
@@ -119,7 +119,8 @@ describe("corpus-source (forced command)", () => {
     expect(run("tags-preview", '{"books":[]}')).toBe(`tags ${lib} plan={"books":[]}`);
     expect(run("tags-apply", '{"books":[1]}')).toBe(`tags --apply ${lib} plan={"books":[1]}`);
     expect(run("convert-preview")).toBe(`convert ${lib}`);
-    expect(run("convert-apply")).toBe(`convert --apply ${lib}`);
+    expect(run("convert-apply", '{"books":[1]}')).toBe(`convert --apply ${lib} plan={"books":[1]}`);
+    expect(source("convert-apply", "")).toMatchObject({ status: 1, stderr: expect.stringMatching(/needs the previewed books/) });
     expect(run("metadata-preview", '{"books":[]}')).toBe(`metadata ${lib} plan={"books":[]}`);
     expect(run("metadata-apply", '{"books":[1]}')).toBe(`metadata --apply ${lib} plan={"books":[1]}`);
     expect(run("calibre-library")).toBe(lib);

@@ -15,7 +15,9 @@
 #
 # Without --apply it only lists the books and what each would get. With --apply it backs up metadata.db
 # first, converts each book in a temporary directory with a time limit (CONVERT_TIMEOUT seconds, default
-# 600), adds the result with --dont-replace, and keeps the source format.
+# 600), adds the result with --dont-replace, and keeps the source format. Given CONVERT_PLAN (base64 JSON,
+# {"books": [{"calibre_id", "uuid", "source_format", "added_format"}]}, from /admin's preview), it converts
+# only those books, and skips any whose record, formats or file no longer give the same conversion.
 set -euo pipefail
 
 apply=0
@@ -27,7 +29,7 @@ bin="${CALIBRE_BIN:-/usr/bin}"
 limit="${CONVERT_TIMEOUT:-600}"
 
 books=$(python3 - "$library" <<'EOF'
-import json, sqlite3, sys
+import base64, json, os, sqlite3, sys
 
 SOURCES = ('azw3', 'kfx', 'azw', 'mobi', 'prc')  # one source per book, in this order: KF8 converts best
 
@@ -50,27 +52,54 @@ def sniff(path):
 
 
 db = sqlite3.connect(f"file:{sys.argv[1]}/metadata.db?mode=ro", uri=True)
+# An apply from /admin converts only the previewed books, each from the same source to the same format.
+plan = None
+if os.environ.get('CONVERT_PLAN'):
+    plan = {b['calibre_id']: b for b in json.loads(base64.b64decode(os.environ['CONVERT_PLAN']))['books']}
 formats = {}
 for book, fmt in db.execute('SELECT book, LOWER(format) FROM data'):
     formats.setdefault(book, set()).add(fmt)
-for id_, path, title, uuid in db.execute('SELECT id, path, title, uuid FROM books ORDER BY id'):
-    have = formats.get(id_, set())
-    if 'epub' in have or 'pdf' in have:
-        continue
-    fmt = next((f for f in SOURCES if f in have), None)
-    if fmt is None:
-        continue
-    name = db.execute('SELECT name FROM data WHERE book = ? AND LOWER(format) = ?', (id_, fmt)).fetchone()[0]
-    source = f'{path}/{name}.{fmt}'
-    try:
-        kind, problem = sniff(f'{sys.argv[1]}/{source}')
-    except OSError as error:
-        kind, problem = None, f'unreadable ({error.strerror})'
-    action = problem or ('pdf' if kind == 'kfx-replica' else 'epub')
+
+
+def row(id_, source, title, action, item):
     # The last field is the change as JSON, printed as an "@@change" line for /admin's change table.
-    item = {"calibre_id": id_, "uuid": uuid, "title": title, "source_format": fmt}
-    item.update({"convert_skipped": problem} if problem else {"added_format": action})
     print(f"{id_}\t{source}\t{title}\t{action}\t{json.dumps(item)}")
+
+
+for id_, path, title, uuid in db.execute('SELECT id, path, title, uuid FROM books ORDER BY id'):
+    if plan is not None and id_ not in plan:
+        continue
+    have = formats.get(id_, set())
+    first = chosen = None
+    if 'epub' not in have and 'pdf' not in have:
+        # The first source that can be converted; a locked AZW3 must not hide a readable MOBI.
+        for fmt in (f for f in SOURCES if f in have):
+            name = db.execute('SELECT name FROM data WHERE book = ? AND LOWER(format) = ?', (id_, fmt)).fetchone()[0]
+            source = f'{path}/{name}.{fmt}'
+            try:
+                kind, problem = sniff(f'{sys.argv[1]}/{source}')
+            except OSError as error:
+                kind, problem = None, f'unreadable ({error.strerror})'
+            option = (fmt, source, problem or ('pdf' if kind == 'kfx-replica' else 'epub'), problem)
+            first = first or option
+            if not problem:
+                chosen = option
+                break
+    pick = chosen or first
+    item = {"calibre_id": id_, "uuid": uuid, "title": title}
+    if plan is not None:
+        want = plan.pop(id_)
+        if pick is None or pick[3] or uuid != want.get('uuid') or pick[0] != want.get('source_format') or pick[2] != want.get('added_format'):
+            row(id_, '-', title, 'changed', {**item, "convert_skipped": "changed since preview"})
+            continue
+    if pick is None:
+        continue
+    fmt, source, action, problem = pick
+    item["source_format"] = fmt
+    item.update({"convert_skipped": problem} if problem else {"added_format": action})
+    row(id_, source, title, action, item)
+for id_, want in (plan or {}).items():
+    row(id_, '-', f'Calibre book {id_}', 'missing', {"calibre_id": id_, "uuid": want.get('uuid'), "title": f'Calibre book {id_}', "convert_skipped": "no longer in the library"})
 EOF
 )
 
@@ -83,7 +112,10 @@ describe() {
     epub) echo "EPUB" ;;
     pdf) echo "PDF from print replica" ;;
     encrypted) echo "SKIP: DRM-encrypted; download again and add through DeDRM" ;;
-    *) echo "SKIP: $1 file" ;;
+    unrecognized) echo "SKIP: unrecognized file" ;;
+    changed) echo "SKIP: changed since preview; preview again" ;;
+    missing) echo "SKIP: no longer in the library" ;;
+    *) echo "SKIP: $1" ;;
   esac
 }
 if [ "$apply" -eq 0 ]; then
@@ -100,11 +132,13 @@ echo "Backed up metadata.db to $backup"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-ok=0 failed=0 skipped=0
+ok=0 failed=0 skipped=0 stale=0
 while IFS=$'\t' read -r id source title action item; do
   if [ "$action" != epub ] && [ "$action" != pdf ]; then
     echo "  skip    $id  $title: $(describe "$action")"
-    skipped=$((skipped + 1)); continue
+    printf '@@change %s\n' "$item"
+    case "$action" in changed|missing) stale=$((stale + 1)) ;; *) skipped=$((skipped + 1)) ;; esac
+    continue
   fi
   out=""
   if [ "$action" = pdf ]; then
@@ -133,5 +167,5 @@ while IFS=$'\t' read -r id source title action item; do
   fi
   rm -f "$work/$id.epub" "$work/$id.pdf"
 done <<< "$books"
-echo "$ok converted, $failed failed, $skipped skipped. corpus-mcp picks up the new files on its next refresh."
-[ "$failed" -eq 0 ]
+echo "$ok converted, $failed failed, $skipped skipped$( [ "$stale" -gt 0 ] && echo ", $stale changed since preview"). corpus-mcp picks up the new files on its next refresh."
+[ "$failed" -eq 0 ] && [ "$stale" -eq 0 ]

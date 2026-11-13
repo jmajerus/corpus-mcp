@@ -27,7 +27,7 @@ export const JOB_KINDS: Record<JobKind, JobSpec> = {
   backup: { title: "Back up data.db", calibre: false, previewable: false },
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
   cleanup: { title: "Remove non-subject tags from Calibre", calibre: true, previewable: true },
-  convert: { title: "Add EPUBs or PDFs for MOBI/AZW/KFX-only books", calibre: true, previewable: true },
+  convert: { title: "Convert books that have no EPUB or PDF", calibre: true, previewable: true },
   zotero: { title: "Sync from Zotero now", calibre: false, previewable: false },
 };
 
@@ -165,6 +165,12 @@ export class JobRunner {
       }
       if (Date.now() - Date.parse(preview.created_at) > 3600 * 1000) throw new ToolError("That preview is over an hour old; preview again.");
       params = preview.params;
+      if (kind === "convert") {
+        // The apply converts exactly the books the preview listed, as listed; the source rechecks each.
+        const books = preview.items.filter(it => it.added_format).map(it => ({ calibre_id: it.calibre_id, uuid: it.uuid, source_format: it.source_format, added_format: it.added_format }));
+        if (!books.length) throw new ToolError("That preview has nothing to convert.");
+        params = { plan: { books } };
+      }
       if (kind === "duplicates") {
         const review = preview.items[0]?.duplicate_review;
         if (!review || review.blockers.length) throw new ToolError("Resolve the blockers and preview again.");
@@ -311,7 +317,15 @@ export class JobRunner {
         await this.commands.calibre(mode === "apply" ? "tags-apply" : "tags-preview", JSON.stringify(plan), log);
         break;
       case "convert":
-        await this.commands.calibre(mode === "apply" ? "convert-apply" : "convert-preview", undefined, log);
+        if (mode === "preview") { await this.commands.calibre("convert-preview", undefined, log); break; }
+        try { await this.commands.calibre("convert-apply", JSON.stringify(params.plan), log); }
+        catch (error) {
+          // The script carries on past a failed book: index the ones it did convert.
+          applied();
+          log("\nRefreshing the index for the books that were converted…\n");
+          try { await this.commands.refresh(log); } catch (refreshError) { log(`Refresh also failed: ${(refreshError as Error).message}\n`); }
+          throw error;
+        }
         break;
     }
     if (mode === "apply") {

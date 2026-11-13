@@ -62,9 +62,33 @@ it("extracts print-replica PDFs, falls back to EPUB when none comes out, and fai
   expect(r.status).toBe(1);
   expect(fs.readFileSync(path.join(root, "added.log"), "utf8").trim().split("\n")).toEqual(["1 epub", "4 pdf", "5 epub", "9 epub"]);
   const applied = items(r.stdout);
-  expect(applied.map(i => [i.calibre_id, i.added_format])).toEqual([[1, "epub"], [4, "pdf"], [5, "epub"], [9, "epub"]]);
+  expect(applied.filter(i => i.added_format).map(i => [i.calibre_id, i.added_format])).toEqual([[1, "epub"], [4, "pdf"], [5, "epub"], [9, "epub"]]);
+  expect(applied.filter(i => i.convert_skipped).map(i => i.calibre_id)).toEqual([2, 3, 8]);
   expect(r.stdout).toContain("9  no print-replica PDF; converting to EPUB instead");
   expect(r.stdout).toMatch(/FAILED\s+10\s+Replica That Hangs/);
   expect(r.stdout).toContain("4 converted, 1 failed, 3 skipped");
   expect(fs.readdirSync(library).some(f => f.startsWith("metadata.db.before-epub-"))).toBe(true);
+});
+
+it("prefers a readable lower-priority source to a locked preferred one", () => {
+  makeLibrary(root, "other", [{ id: 1, title: "Mixed", files: { azw3: mobi(2), mobi: mobi(0) } }]);
+  const r = spawnSync("bash", [script, path.join(root, "other")], { encoding: "utf8", env: { ...process.env, CALIBRE_BIN: bin } });
+  expect(items(r.stdout)).toEqual([{ calibre_id: 1, uuid: "uuid-1", title: "Mixed", source_format: "mobi", added_format: "epub" }]);
+});
+
+it("applies only the previewed books, skipping any that changed since", () => {
+  const plan = { books: [
+    { calibre_id: 1, uuid: "uuid-1", source_format: "mobi", added_format: "epub" },
+    { calibre_id: 4, uuid: "uuid-4", source_format: "kfx", added_format: "pdf" },
+    { calibre_id: 5, uuid: "other-uuid", source_format: "kfx", added_format: "epub" },
+    { calibre_id: 7, uuid: "uuid-7", source_format: "mobi", added_format: "epub" },
+    { calibre_id: 99, uuid: "uuid-99", source_format: "mobi", added_format: "epub" },
+  ] };
+  const r = spawnSync("bash", [script, "--apply", library], { encoding: "utf8",
+    env: { ...process.env, CALIBRE_BIN: bin, CONVERT_PLAN: Buffer.from(JSON.stringify(plan)).toString("base64") } });
+  expect(r.status).toBe(1);
+  expect(fs.readFileSync(path.join(root, "added.log"), "utf8").trim().split("\n")).toEqual(["1 epub", "4 pdf"]);
+  expect(Object.fromEntries(items(r.stdout).map(i => [i.calibre_id, i.added_format ?? i.convert_skipped]))).toEqual({
+    1: "epub", 4: "pdf", 5: "changed since preview", 7: "changed since preview", 99: "no longer in the library" });
+  expect(r.stdout).toContain("2 converted, 0 failed, 0 skipped, 3 changed since preview");
 });

@@ -66,7 +66,7 @@ Amber and red numbers are the ones that need attention.
 | Back up data.db | Run at once |
 | Apply approved tags to Calibre | Preview, then apply |
 | Remove non-subject tags from Calibre | Preview, then apply; type extra tags to remove in the box |
-| Add EPUBs or PDFs for MOBI/AZW/KFX-only books | Preview, then apply |
+| Convert books that have no EPUB or PDF | Preview, then apply |
 | Sync from Zotero now | Run at once; normally every 30 minutes |
 
 The convert job covers books with neither an EPUB nor a PDF. It reads each file
@@ -76,7 +76,8 @@ publisher's PDF) gets that PDF through KFX Input's command line, and an EPUB if
 no PDF comes out. DRM-encrypted files (a KFX `DRMION` container, even one named
 `.azw`, or an encrypted MOBI) are listed as not converted: download them again
 and add them through DeDRM. Each conversion stops after `CONVERT_TIMEOUT`
-seconds (default 600). Its card links to **Books with no readable file**, the
+seconds (default 600). Apply converts only the books the preview listed, and
+skips any whose record, formats or file changed since. Its card links to **Books with no readable file**, the
 Books page filtered to `problem=no_file`.
 
 Starting a job opens its page. Below the actions are the recent jobs and the
