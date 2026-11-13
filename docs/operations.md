@@ -108,7 +108,10 @@ matched to, and a strong ETag, so a poll that finds nothing new is a 304. A book
 whose text prints ISBNs that aren't its valid Calibre ISBN also has
 `isbn_candidates` (ISBN-13s, front matter first), for holdings-mcp to flag
 likely missed matches; never to match on, because editions print each other's
-ISBNs. It is served on the LAN only; through the tunnel it is a 403, whoever
+ISBNs. A book whose Calibre metadata blocks no citekey also has
+`proposed_citekey`, the key `cite_passage` would file it under, for quote-mcp
+to cite an unfiled book by; it's never a key to resolve. `POST /api/verify`
+names its book the same way. It is served on the LAN only; through the tunnel it is a 403, whoever
 signs in.
 
 quote-mcp's quotes are checked and anchored here, on the LAN only in the same

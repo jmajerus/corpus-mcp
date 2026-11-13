@@ -54,7 +54,7 @@ it("sends every book but the private ones, with real keys and confirmed matches 
   expect(networks).toEqual({
     calibre_uuid: "uuid-1", book_id: "main:1", library: "main", title: "Networks", authors: ["Ann Author"], year: 2001,
     formats: ["pdf"], has_text: true, isbns: ["9780306406157"], isbn_candidates: ["9781402894626"],
-    citekey: "author2001networks", citekey_source: "pinned", zotero: null,
+    citekey: "author2001networks", citekey_source: "pinned", proposed_citekey: "author2001networks", zotero: null,
   });
   // Printed ISBNs are ISBN-13 candidates, never matches; the printed ISBN-10 of Calibre's own ISBN isn't one.
   // A book that prints none has no isbn_candidates field.
@@ -63,7 +63,17 @@ it("sends every book but the private ones, with real keys and confirmed matches 
   expect([crowds.isbns, patterns.isbns]).toEqual([[], []]);
   expect(crowds).toMatchObject({ citekey: "writer1999crowds", citekey_source: "zotero", zotero: { library: "users/1", key: "ITEM2", matched_by: "calibre_uuid" } });
   // A candidate isn't a match, and a proposed citekey isn't a key.
-  expect(patterns).toMatchObject({ has_text: false, citekey: null, citekey_source: null, zotero: null });
+  expect(patterns).toMatchObject({ has_text: false, citekey: null, citekey_source: null, zotero: null, proposed_citekey: "maker2010patterns" });
+});
+
+it("sends a proposed citekey only when Calibre's metadata blocks nothing, as cite_passage does", () => {
+  const before = c.db.prepare("SELECT citekey_blockers FROM books WHERE id = 'main:4'").pluck().get();
+  c.db.prepare(`UPDATE books SET citekey_blockers = '["no_year"]' WHERE id = 'main:4'`).run();
+  try {
+    expect(holdingsBooks(c, o).books.find((b) => b.book_id === "main:4")).not.toHaveProperty("proposed_citekey");
+  } finally {
+    c.db.prepare("UPDATE books SET citekey_blockers = ? WHERE id = 'main:4'").run(before);
+  }
 });
 
 it("has no Zotero items without a mirrored library", () => {

@@ -37,6 +37,11 @@ export interface HoldingsBook {
   isbn_candidates?: string[];
   citekey: string | null;
   citekey_source: "calibre" | "pinned" | "zotero" | null;
+  /**
+   * The citekey corpus-mcp proposes, as cite_passage's BibTeX uses it: only when Calibre's metadata blocks
+   * nothing; absent otherwise. A fallback for citing an unfiled book, never a key to resolve or match by.
+   */
+  proposed_citekey?: string;
   zotero: { library: string; key: string; matched_by: string } | null;
 }
 
@@ -71,7 +76,9 @@ export function holdingsBook(c: Corpus, b: BookRow, zoteroLibrary?: string): Hol
     has_text: hasText(b),
     isbns: isbn ? [isbn] : [],
     ...(candidates.length ? { isbn_candidates: candidates } : {}),
-    citekey, citekey_source, zotero,
+    citekey, citekey_source,
+    ...(b.proposed_citekey && !(JSON.parse(b.citekey_blockers) as string[]).length ? { proposed_citekey: b.proposed_citekey } : {}),
+    zotero,
   };
 }
 
