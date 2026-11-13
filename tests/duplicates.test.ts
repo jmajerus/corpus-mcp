@@ -9,7 +9,7 @@ import { scanLibraries } from "../src/indexer.js";
 import { zoteroMatch } from "../src/zotero.js";
 import { type Corpus, getBook } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
-import { duplicatePairs, duplicatePlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
+import { duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
 import { DUPLICATES_HTML } from "../src/web/duplicates.js";
 import { JOB_HTML } from "../src/web/jobs.js";
@@ -30,7 +30,8 @@ beforeEach(()=>{
 });
 afterEach(()=>{vi.restoreAllMocks();c.db.close();c.data.close();fs.rmSync(root,{recursive:true,force:true});});
 function pair(){return duplicatePairs(c,"main").pairs.find(p=>p.books[0].id==="main:1"&&p.books[1].id==="main:2")!;}
-function select(){return {keep:"main:1",remove:"main:2",fingerprint:pair().fingerprint};}
+function select(keep="main:1",remove=["main:2"]){const books=duplicatePairs(c,"main").pairs.flatMap(p=>p.books);return {keep,remove,fingerprints:Object.fromEntries(books.map(b=>[b.id,b.fingerprint]))};}
+const plan=(s=select())=>duplicateBatchPlan(c,"main",[s]);
 it("reports exact selected files, metadata evidence, edition warnings and all available formats",()=>{
  const p=pair();expect(p.evidence).toEqual(["Identical selected file","Matching title and authors"]);
  expect(p.edition_warning).toContain("years differ");expect(p.books[0].formats).toEqual(["PDF"]);expect(p.writable).toBe(true);
@@ -43,17 +44,17 @@ it("finds matching ASINs despite different titles and damaged, non-identical byt
  expect(p.evidence).toEqual(["Matching identifier"]);expect(p.books[1].status).toBe("failed");
 });
 it("persists keep-both decisions, supports reopening, and invalidates them when a record changes",()=>{
- let p=pair();dismissDuplicate(c,"main",p.books.map(b=>b.id),p.fingerprint,false,"reviewer");
+ const before=select();let p=pair();dismissDuplicate(c,"main",p.books.map(b=>b.id),p.fingerprint,false,"reviewer");
  expect(duplicatePairs(c,"main").total).toBe(0);expect(duplicatePairs(c,"main",true).pairs[0].dismissed).toBe(true);
  dismissDuplicate(c,"main",p.books.map(b=>b.id),p.fingerprint,true);expect(duplicatePairs(c,"main").total).toBe(1);
  dismissDuplicate(c,"main",p.books.map(b=>b.id),p.fingerprint,false);
  c.db.prepare("UPDATE books SET year=2022 WHERE id='main:2'").run();expect(duplicatePairs(c,"main").total).toBe(1);
- expect(()=>duplicatePlan(c,"main",{...select(),fingerprint:p.fingerprint})).toThrow(/changed/);
+ expect(()=>duplicateBatchPlan(c,"main",[before])).toThrow(/changed/);
 });
 it("blocks referenced records and cross-library resolution without moving any links",()=>{
  const p=pair();c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','saved2021book','main:2','The Same Book','now')").run();
- expect(()=>duplicatePlan(c,"main",{...select()})).toThrow(/saved references/);
- expect(()=>duplicatePlan(c,"other",{...select()})).toThrow(/writable/);
+ expect(()=>plan()).toThrow(/saved references/);
+ expect(()=>duplicateBatchPlan(c,"other",[select()])).toThrow(/writable/);
  expect(c.data.prepare("SELECT count(*) FROM citekeys").pluck().get()).toBe(1);
  expect(()=>dismissDuplicate(c,"main",["main:1","main:3"],p.fingerprint,false)).toThrow(/changed/);
 });
@@ -62,29 +63,29 @@ it("applies the source-reviewed plan, audits resolution, refreshes and releases 
  let refreshes=0;const calls:any[]=[];
  const commands:JobCommands={refresh:async()=>{refreshes++;},calibre:async(command,stdin,log)=>{
   const plan=JSON.parse(stdin!);calls.push({command,plan});
-  if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_review:{plan:{...plan,reviewed:"source-hash"},blockers:[]}})+'\n');
+  if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_review:{plan:{...plan.groups[0],reviewed:"source-hash"},blockers:[]}})+'\n');
   else {expect(c.writesPaused).toBeTruthy();log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_resolved:{removed_id:2,removed_uuid:"uuid-2",trash:true,backup:"saved.db"}})+'\n');}
  }};
  const r=new JobRunner(c,config,commands);
  expect(()=>r.start("duplicates","apply")).toThrow(/Preview first/);
- const preview=await wait(r,r.start("duplicates","preview",{duplicate:select()}));
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
  const result=await wait(r,r.start("duplicates","apply",{previewOf:preview.id}));
- expect(result.status).toBe("succeeded");expect(calls[1].plan.reviewed).toBe("source-hash");expect(refreshes).toBe(1);expect(c.writesPaused).toBeUndefined();
+ expect(result.status).toBe("succeeded");expect(calls[1].plan.groups[0].reviewed).toBe("source-hash");expect(refreshes).toBe(1);expect(c.writesPaused).toBeUndefined();
  expect(c.data.prepare("SELECT count(*) FROM changes WHERE kind='duplicate_resolved'").pluck().get()).toBe(1);
 });
 it("refuses newly referenced duplicates after preview and previews with source blockers",async()=>{
- const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...JSON.parse(stdin!),reviewed:"source"},blockers:[]}})+'\n');}});
- const preview=await wait(r,r.start("duplicates","preview",{duplicate:select()}));
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:"source"},blockers:[]}})+'\n');}});
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
  c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','newkey','main:2','Book','now')").run();
  expect(()=>r.start("duplicates","apply",{previewOf:preview.id})).toThrow(/saved references/);
 });
 it("refreshes after a failed source write and keeps the job failed",async()=>{
  let refreshed=0;
  const r=new JobRunner(c,config,{refresh:async()=>{refreshed++;},calibre:async(cmd,stdin,log)=>{
-  if(cmd==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...JSON.parse(stdin!),reviewed:"source"},blockers:[]}})+'\n');
+  if(cmd==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:"source"},blockers:[]}})+'\n');
   else {log('@@change '+JSON.stringify({calibre_id:1,title:"Book",added_format:"EPUB",source_format:"duplicate"})+'\n');throw new Error("Injected write failure");}
  }});
- const preview=await wait(r,r.start("duplicates","preview",{duplicate:select()}));
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
  const result=await wait(r,r.start("duplicates","apply",{previewOf:preview.id}));
  expect(result.status).toBe("failed");expect(refreshed).toBe(1);expect(c.writesPaused).toBeUndefined();expect(result.items[0].added_format).toBe("EPUB");
 });
@@ -114,15 +115,15 @@ it.each([false,true])("blocks a Zotero UUID without an explicit link, including 
  expect(zoteroMatch(c,getBook(c,'main:2')).match).toMatchObject({key:merged?'SURVIVOR':'FILED',matched_by:'calibre_uuid'});
  expect(duplicateReferences(c,'uuid-2').zotero_items).toBe(1);
  expect(pair().books[1].references.zotero_items).toBe(1);
- expect(()=>duplicatePlan(c,'main',select())).toThrow(/saved references/);
+ expect(()=>plan()).toThrow(/saved references/);
 });
 
 it("rechecks Zotero UUID references added after a successful source preview",async()=>{
  const calls:string[]=[];
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
-  calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!),reviewed:'source'},blockers:[]}})+'\n');
+  calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:'source'},blockers:[]}})+'\n');
  }});
- const preview=await wait(r,r.start('duplicates','preview',{duplicate:select()}));
+ const preview=await wait(r,r.start('duplicates','preview',{duplicates:[select()]}));
  c.data.prepare("INSERT INTO zotero_items(key,version,item_type,calibre_uuid,synced_at) VALUES('NEW',1,'book','uuid-2','now')").run();
  expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/saved references/);
  expect(calls).toEqual(['duplicates-preview']);
@@ -185,11 +186,11 @@ it("reuses unchanged catalogue scans, invalidates on WAL updates and atomic repl
 it("keeps a blocked source preview reviewable and refuses to apply it",async()=>{
  const calls:string[]=[];
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
-  calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!),reviewed:'source'},blockers:['Calibre-Web shelf Main contains the duplicate. Remove its membership first.','Retain the keeper format.']}})+'\n');
+  calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:'source'},blockers:['Calibre-Web shelf Main contains the duplicate. Remove its membership first.','Retain the keeper format.']}})+'\n');
  }});
- const preview=await wait(r,r.start('duplicates','preview',{duplicate:select()}));
+ const preview=await wait(r,r.start('duplicates','preview',{duplicates:[select()]}));
  expect(preview.status).toBe('succeeded');expect(preview.items[0].duplicate_review?.blockers).toHaveLength(2);
- expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/Resolve the blockers/);
+ expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/Every group in that preview has blockers/);
  expect(calls).toEqual(['duplicates-preview']);
 });
 
@@ -208,18 +209,53 @@ it.each(['succeeded','failed'])("the source refresh action waits for %s and relo
  const document={getElementById:element,addEventListener(){},hidden:false};
  let completed=false,polls=0,loads=0;const posts:any[]=[];
  const api=async(url:string)=>{
-  if(url.startsWith('/api/duplicates')){loads++;return {pairs:completed?[]:[pair()],last_scan:'2026-11-07T20:00:00Z',calibre_web_url:'http://calibre.test/',writable_library:'main'};}
+  if(url.startsWith('/api/duplicates')){loads++;return {groups:completed?[]:duplicateGroups(c,'main').groups,last_scan:'2026-11-07T20:00:00Z',calibre_web_url:'http://calibre.test/',writable_library:'main'};}
   polls++;if(polls===1)return {status:'running'};completed=terminal==='succeeded';return {status:terminal};
  };
  const post=async(url:string,body:any)=>{posts.push({url,body});return {id:42};};
  const script=[...DUPLICATES_HTML.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].at(-1)![1];
  new Function('document','window','ME','api','post','esc','bookLink','when','setTimeout','toast',script)(document,{addEventListener(){}},Promise.resolve({can_write:true}),api,post,String,(_id:string,title:string)=>title,String,(fn:()=>void)=>fn(),()=>{});
  await new Promise(resolve=>setTimeout(resolve,0));
- expect(element('pairs').innerHTML).toContain('http://calibre.test/book/1');
+ expect(element('groups').innerHTML).toContain('http://calibre.test/book/1');
  expect(element('freshness').textContent).toContain('Reloading this page does not pull');
  await element('refresh-source').listeners.click();
  expect(posts).toEqual([{url:'/api/admin/jobs',body:{kind:'refresh',mode:'apply'}}]);
  expect(polls).toBe(2);expect(loads).toBe(2);expect(element('refresh-source').disabled).toBe(false);
  expect(element('refresh-status').innerHTML).toContain(terminal==='succeeded'?'Catalogue updated':'Refresh did not complete');
- expect(element('pairs').innerHTML.includes('The Same Book')).toBe(terminal!=='succeeded');
+ expect(element('groups').innerHTML.includes('The Same Book')).toBe(terminal!=='succeeded');
+});
+
+it("groups linked records, suggests a keeper, and plans a batch of disjoint groups",()=>{
+ const db=new Database(path.join(root,"main/metadata.db"));
+ db.prepare("INSERT INTO identifiers(book,type,val) VALUES(?,?,?)").run(2,"mobi-asin","B000XYZ");
+ db.prepare("INSERT INTO identifiers(book,type,val) VALUES(?,?,?)").run(3,"bookid","urn:asin:B000XYZ");db.close();
+ const {groups}=duplicateGroups(c,"main");
+ expect(groups).toHaveLength(1);expect(groups[0].books.map(b=>b.id)).toEqual(["main:1","main:2","main:3"]);
+ expect(groups[0].suggested_keep).toBe("main:1");expect(groups[0].identical).toBe(false);
+ // main:3 matches main:2 only, so it cannot merge into main:1.
+ expect(()=>plan(select("main:1",["main:2","main:3"]))).toThrow(/not a duplicate candidate of keeper main:1/);
+ expect(plan(select("main:2",["main:1","main:3"]))).toMatchObject({library:"main",groups:[{keep:{id:2},remove:[{id:1},{id:3}],discard_conflicts:false}]});
+ expect(()=>duplicateBatchPlan(c,"main",[select("main:2",["main:3"]),select("main:1",["main:2"])])).toThrow(/more than one group/);
+ expect(()=>plan(select("main:2",[]))).toThrow(/at least one record/);
+ expect(()=>duplicateBatchPlan(c,"main",[])).toThrow(/at least one duplicate group/);
+});
+it("prefers a referenced keeper and refuses to trash it",()=>{
+ c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','saved2021book','main:2','The Same Book','now')").run();
+ expect(duplicateGroups(c,"main").groups[0].suggested_keep).toBe("main:2");
+ expect(()=>plan()).toThrow(/main:2 has saved references/);
+ expect(plan(select("main:2",["main:1"])).groups[0].remove).toEqual([{id:1,uuid:"uuid-1"}]);
+});
+it("applies only the groups the source reviewed without blockers",async()=>{
+ const sent:any[]=[];
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  const p=JSON.parse(stdin!);sent.push({command,p});
+  if(command==="duplicates-preview"){
+   log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
+   log('@@change '+JSON.stringify({calibre_id:9,title:"Blocked",duplicate_review:{plan:{keep:{id:9,uuid:"u9"},remove:[{id:8,uuid:"u8"}],discard_conflicts:false,reviewed:"x"},blockers:["Shelf"]}})+'\n');
+  } else log('@@change '+JSON.stringify({calibre_id:9,title:"Blocked",duplicate_skipped:{message:"changed"}})+'\n');
+ }});
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
+ const applied=await wait(r,r.start("duplicates","apply",{previewOf:preview.id}));
+ expect(sent[1].p).toEqual({library:"main",groups:[{keep:{id:1,uuid:"uuid-1"},remove:[{id:2,uuid:"uuid-2"}],discard_conflicts:false,reviewed:"ok"}]});
+ expect(applied.items[0].duplicate_skipped?.message).toBe("changed");
 });

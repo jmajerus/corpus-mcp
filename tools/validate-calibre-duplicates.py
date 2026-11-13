@@ -37,11 +37,18 @@ def native(code):
     return run(['/usr/bin/calibre-debug', '-e', str(file), '--', str(library)])
 
 
-def review(plan, apply=False, expected=0):
-    r = run(['/usr/bin/calibre-debug', '-e', str(helper), '--', str(library), str(web), *(['--apply'] if apply else [])], plan, expected)
-    if apply:
-        return r
-    return json.loads(next(line[9:] for line in r.stdout.splitlines() if line.startswith('@@change ')))['duplicate_review']
+def changes(r):
+    return [json.loads(line[9:]) for line in r.stdout.splitlines() if line.startswith('@@change ')]
+
+
+def batch(groups, apply=False, expected=0):
+    """Preview returns each group's review; apply returns the process result."""
+    r = run(['/usr/bin/calibre-debug', '-e', str(helper), '--', str(library), str(web), *(['--apply'] if apply else [])], {'groups': groups}, expected)
+    return r if apply else [c['duplicate_review'] for c in changes(r)]
+
+
+def review(group, apply=False, expected=0):
+    return batch([group], apply, expected) if apply else batch([group])[0]
 
 
 try:
@@ -66,10 +73,10 @@ print(json.dumps([{'id':i,'uuid':api.get_metadata(i).uuid} for i in [1,2]]));db.
         pdf_name = db.execute("SELECT name FROM data WHERE book=2 AND format='PDF'").fetchone()[0]
     (library / folders[2] / (pdf_name + '.pdf')).open('ab').write(b'\n% different synthetic copy\n')
     (library / folders[2] / 'supplement.txt').write_text('Unique supplementary content')
-    plan = {'keep': refs[0], 'remove': refs[1], 'discard_conflicts': False}
+    plan = {'keep': refs[0], 'remove': [refs[1]], 'discard_conflicts': False}
     before = review(plan)
-    assert before['blockers'] and before['conflicting_formats'] == ['PDF']
-    assert before['copy_formats'] == ['EPUB']
+    assert before['blockers'] and before['conflicting_formats'] == [{'format': 'PDF', 'from': 2}]
+    assert before['copy_formats'] == [{'format': 'EPUB', 'from': 2}]
     report['checks']['explicitFormatConflictReview'] = True
     plan['discard_conflicts'] = True
     preview = review(plan)
@@ -80,8 +87,8 @@ print(json.dumps([{'id':i,'uuid':api.get_metadata(i).uuid} for i in [1,2]]));db.
     assert any('conflicting formats' in item for item in blocked['blockers'])
     report['checks']['previewShowsShelfAndFormatBlockersTogether'] = True
     failed = review(preview['plan'], True, expected=None)
-    assert failed.returncode != 0 and 'Calibre-Web' in failed.stderr
-    assert 'Traceback' not in failed.stderr
+    assert failed.returncode != 0 and 'Calibre-Web' in failed.stderr and '0 of 1 groups resolved' in failed.stderr
+    assert 'Traceback' not in failed.stderr and any('duplicate_skipped' in c for c in changes(failed))
     with sqlite3.connect(web) as db:
         db.execute('DELETE FROM book_shelf_link WHERE book_id=2')
     report['checks']['newShelfReferencePreventsApply'] = True
@@ -111,7 +118,7 @@ def fail(self,*args,**kwargs):
 Cache.add_format=fail
 script=sys.argv[1];sys.argv=sys.argv[1:];runpy.run_path(script,run_name='__main__')
 ''')
-    failed = run(['/usr/bin/calibre-debug','-e',str(fault),'--',str(helper),str(library),str(web),'--apply'],preview['plan'],expected=None)
+    failed = run(['/usr/bin/calibre-debug','-e',str(fault),'--',str(helper),str(library),str(web),'--apply'],{'groups':[preview['plan']]},expected=None)
     assert failed.returncode != 0 and 'duplicate_partial' in failed.stdout
     assert 'Traceback' in failed.stderr and 'OSError: Injected failure after format copy' in failed.stderr
     with sqlite3.connect(library / 'metadata.db') as db:
@@ -137,6 +144,46 @@ db.close()
     report['checks']['formatsTagsMetadataCoverExtrasPreservedAndTrashRestorable'] = True
     assert len(list(library.glob('metadata.db.before-duplicates-*.files'))) == 2
     report['checks']['bothRecordBackupsRetained'] = True
+
+    # A batch: keeper 3 with an identical copy 4 and an EPUB-only 5; keeper 6 with 7; and 8/9,
+    # which changes after preview and must be skipped while the others resolve.
+    for title, files in [('Batch A', ['operator.pdf']), ('Batch A', ['operator.pdf']), ('Batch A', ['operator.epub']),
+                         ('Batch B', ['operator.pdf']), ('Batch B', ['operator.pdf']), ('Batch C', ['operator.pdf']), ('Batch C', ['operator.pdf'])]:
+        run(['/usr/bin/calibredb', 'add', '--duplicates', '--with-library', str(library), '--title', title, '--authors', 'Test Writer', *[str(root / 'seeds' / f) for f in files]])
+    native("import sys\nfrom calibre.db.legacy import LibraryDatabase\ndb=LibraryDatabase(sys.argv[1]);db.new_api.set_field('tags',{5:['from-five'],7:['from-seven']});db.close()\n")
+    with sqlite3.connect(library / 'metadata.db') as db:
+        ref = {i: {'id': i, 'uuid': u} for i, u in db.execute('SELECT id,uuid FROM books WHERE id>=3')}
+    assert sorted(ref) == [3, 4, 5, 6, 7, 8, 9], sorted(ref)
+    groups = [{'keep': ref[3], 'remove': [ref[4], ref[5]], 'discard_conflicts': False},
+              {'keep': ref[6], 'remove': [ref[7]], 'discard_conflicts': False},
+              {'keep': ref[8], 'remove': [ref[9]], 'discard_conflicts': False}]
+    reviews = batch(groups)
+    assert [r['blockers'] for r in reviews] == [[], [], []], reviews
+    assert reviews[0]['copy_formats'] == [{'format': 'EPUB', 'from': 5}] and reviews[0]['conflicting_formats'] == []
+    report['checks']['batchPreviewReviewsEachGroup'] = True
+    native("import sys\nfrom calibre.db.legacy import LibraryDatabase\ndb=LibraryDatabase(sys.argv[1]);db.new_api.set_field('rating',{9:6});db.close()\n")
+    backups = set(library.glob('metadata.db.before-duplicates-*'))
+    result = batch([r['plan'] for r in reviews], True, expected=None)
+    assert result.returncode == 1 and '2 of 3 groups resolved; 1 skipped' in result.stderr and 'Traceback' not in result.stderr, result.stderr
+    events = changes(result)
+    assert sorted(e['duplicate_resolved']['removed_id'] for e in events if 'duplicate_resolved' in e) == [4, 5, 7]
+    assert [e['calibre_id'] for e in events if 'duplicate_skipped' in e] == [8]
+    new_backups = set(library.glob('metadata.db.before-duplicates-*')) - backups
+    assert len([b for b in new_backups if not b.name.endswith('.files')]) == 1
+    saved = next(b for b in new_backups if b.name.endswith('.files'))
+    assert sorted(p.name for p in saved.iterdir()) == ['3', '6'] and (saved / '3' / '5').is_dir()
+    native('''import sys
+from calibre.db.legacy import LibraryDatabase
+db=LibraryDatabase(sys.argv[1]);api=db.new_api
+assert {3,6,8,9} <= set(api.all_book_ids()) and not ({4,5,7} & set(api.all_book_ids()))
+assert set(api.formats(3))=={'PDF','EPUB'}
+assert set(api.field_for('tags',3))=={'from-five'} and set(api.field_for('tags',6))=={'from-seven'}
+for i in (4,5,7):
+    api.move_book_from_trash(i)
+assert {4,5,7} <= set(api.all_book_ids())
+db.close()
+''')
+    report['checks']['batchResolvesCleanGroupsSkipsStaleOneWithOneBackup'] = True
     report['scriptSha256'] = hashlib.sha256(helper.read_bytes()).hexdigest()
     report['pass'] = True
 finally:

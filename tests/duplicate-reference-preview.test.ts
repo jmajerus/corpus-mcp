@@ -46,9 +46,11 @@ it('clears blockers only when all removed-book references are resolved',()=>{
  web.exec('INSERT INTO bookmark VALUES(127);');expect(inspect()[0]).toContain('bookmarks');
 });
 
-it.each(['{}','null','{"discard_conflicts":true}', '{"discard_conflicts":true,"keep":null}', 'not JSON'])('reports an invalid review plan concisely: %s',input=>{
+const g=(keep:number,remove:number[])=>({keep:{id:keep,uuid:'u'+keep},remove:remove.map(id=>({id,uuid:'u'+id})),discard_conflicts:false});
+it.each(['{}','null','{"groups":[]}','{"groups":[{"discard_conflicts":true}]}','{"groups":[{"discard_conflicts":true,"keep":null,"remove":[]}]}',
+ JSON.stringify({groups:[{...g(1,[]),remove:[]}]}),JSON.stringify({groups:[g(1,[2]),g(3,[2])]}),JSON.stringify({groups:[g(1,[1])]}),'not JSON'])('reports an invalid review plan concisely: %s',input=>{
  const result=spawnSync('python3',['-B',path.resolve('tools/calibre-duplicates.py'),root,path.join(root,'web.db')],{input,encoding:'utf8'});
- expect(result.status).toBe(1);expect(result.stderr.trim()).toMatch(/Review conflicting formats|Invalid book identity|valid JSON/);
+ expect(result.status).toBe(1);expect(result.stderr.trim()).toMatch(/at least one duplicate group|Review conflicting formats|Invalid book identity|only once in a batch|valid JSON/);
  expect(result.stderr).not.toContain('Traceback');
 });
 

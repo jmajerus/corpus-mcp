@@ -55,7 +55,10 @@ async function load() {
   const plan = j.params && j.params.plan;
   const nothing = j.status === "succeeded" && (plan?.books ? plan.books.length === 0 : items.length === 0);
   const actions = [];
-  if (j.mode === "preview" && j.status === "succeeded" && !nothing && !items.some(it => it.duplicate_review?.blockers.length)) actions.push('<button type="button" class="primary" id="apply"' + (canWrite ? "" : " disabled") + ">Apply this preview</button>");
+  const reviews = items.filter(it => it.duplicate_review), clean = reviews.filter(it => !it.duplicate_review.blockers.length);
+  const applicable = reviews.length ? clean.length > 0 : !nothing;
+  if (j.mode === "preview" && j.status === "succeeded" && applicable) actions.push('<button type="button" class="primary" id="apply"' + (canWrite ? "" : " disabled") + ">" + (reviews.length > 1 ? "Apply " + num(clean.length) + " of " + num(reviews.length) + " groups" : "Apply this preview") + "</button>" + (reviews.length && clean.length < reviews.length ? ' <span class="note">Groups with blockers are skipped.</span>' : ""));
+  if (j.mode === "preview" && j.status === "succeeded" && reviews.length && !clean.length) actions.push('<span class="note">Every group has blockers; resolve them and preview again.</span>');
   if (j.mode === "preview" && nothing) actions.push('<span class="note">Nothing to apply.</span>');
   if (j.mode === "apply" && items.length) actions.push('<a href="/admin/changes?job=' + j.id + '&range=all">These changes in the change log</a>');
   document.getElementById("actions").innerHTML = actions.join(" ");
@@ -66,7 +69,8 @@ async function load() {
       items.map((it) => "<tr><td>" + bookLink(library + ":" + it.calibre_id, it.title) + '<br><span class="note">' + esc(library + ":" + it.calibre_id) + "</span></td><td>" +
         (it.added || []).map((t) => '<span class="chg add" title="' + esc(t) + '"><b>+</b>' + esc(LABELS.get(t) || t) + "</span>").join("") +
         (it.removed || []).map((t) => '<span class="chg del" title="' + esc(t) + '"><b>−</b>' + esc(LABELS.get(t) || t) + "</span>").join("") +
-        (it.duplicate_review ? '<div><strong>Keep ' + esc(library + ':' + it.duplicate_review.plan.keep.id) + '; trash ' + esc(library + ':' + it.duplicate_review.plan.remove.id) + '</strong><p>'+calibreLink(it.duplicate_review.plan.keep.id,'Open keeper in Calibre-Web')+' · '+calibreLink(it.duplicate_review.plan.remove.id,'Open duplicate in Calibre-Web')+'</p><p>Copy unique formats: ' + esc(it.duplicate_review.copy_formats.join(', ') || 'none') + '. Keep keeper’s conflicting formats: ' + esc(it.duplicate_review.conflicting_formats.join(', ') || 'none') + '.</p><p>Unique tags and missing descriptive metadata are preserved. Both records and files are backed up before the duplicate enters Calibre’s trash.</p>' + it.duplicate_review.blockers.map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') + '<details><summary>Compare source metadata and formats</summary><div class="scroll"><table><thead><tr><th>Field</th><th>Keeper</th><th>Duplicate</th></tr></thead><tbody>' + ['title','authors','pubdate','publisher','comments','series','languages','rating','tags','identifiers'].map(k => '<tr><th>' + esc(k) + '</th><td>' + esc(JSON.stringify(it.duplicate_review.keep.values[k] ?? '')) + '</td><td>' + esc(JSON.stringify(it.duplicate_review.remove.values[k] ?? '')) + '</td></tr>').join('') + '</tbody></table></div><p>The keeper’s populated fields take precedence. Missing descriptive fields and identifiers are copied.</p></details></div>' : '') +
+        (it.duplicate_review ? duplicateReview(it.duplicate_review, library, calibreLink) : '') +
+        (it.duplicate_skipped ? '<p class="status-failed">Skipped without changes: ' + esc(it.duplicate_skipped.message) + '</p>' : '') +
         (it.duplicate_partial ? '<p class="status-failed">' + esc(it.duplicate_partial.message) + ' Backup: ' + esc(it.duplicate_partial.backup) + '</p>' : '') +
         (it.duplicate_resolved ? '<p>Duplicate ' + esc(it.duplicate_resolved.removed_id) + ' moved to Calibre’s trash. Backup: ' + esc(it.duplicate_resolved.backup) + '</p>' : '') +
         (it.metadata ? '<div>' + (it.metadata.partial ? '<strong>Partially applied</strong><br>' : '') + '<span class="chg del">' + esc(it.metadata.before.title) + ' · ' + esc(it.metadata.before.authors.join("; ")) + " · " + esc(it.metadata.before.year ?? "year unknown") + '</span><br><span class="chg add">' + esc(it.metadata.after.title) + ' · ' + esc(it.metadata.after.authors.join("; ")) + " · " + esc(it.metadata.after.year ?? "year unknown") + '</span></div>' : "") +
@@ -80,10 +84,19 @@ async function load() {
   if (j.status === "running") setTimeout(load, 1500);
 }
 
+function duplicateReview(r, library, calibreLink) {
+  const removes = r.plan.remove.map(x => x.id), members = [r.keep, ...(r.remove || [])].filter(Boolean);
+  const fmt = list => list.map(c => c.format + ' from ' + c.from).join(', ') || 'none';
+  return '<div><strong>Keep ' + esc(library + ':' + r.plan.keep.id) + '; trash ' + esc(removes.map(id => library + ':' + id).join(', ')) + '</strong><p>' + calibreLink(r.plan.keep.id, 'Open keeper in Calibre-Web') + removes.map(id => ' · ' + calibreLink(id, 'Open ' + id + ' in Calibre-Web')).join('') + '</p>' +
+    (r.keep ? '<p>Copy unique formats: ' + esc(fmt(r.copy_formats)) + '. Keep keeper’s conflicting formats: ' + esc(fmt(r.conflicting_formats)) + '.</p><p>Unique tags and missing descriptive metadata are preserved. Every record and its files are backed up before the duplicates enter Calibre’s trash.</p>' : '') +
+    r.blockers.map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +
+    (members.length > 1 ? '<details><summary>Compare source metadata and formats</summary><div class="scroll"><table><thead><tr><th>Field</th>' + members.map((m, i) => '<th>' + (i ? 'Duplicate ' : 'Keeper ') + esc(m.id) + '</th>').join('') + '</tr></thead><tbody>' + ['title','authors','pubdate','publisher','comments','series','languages','rating','tags','identifiers'].map(k => '<tr><th>' + esc(k) + '</th>' + members.map(m => '<td>' + esc(JSON.stringify(m.values[k] ?? '')) + '</td>').join('') + '</tr>').join('') + '<tr><th>formats</th>' + members.map(m => '<td>' + esc(Object.keys(m.formats).join(', ')) + '</td>').join('') + '</tr></tbody></table></div><p>The keeper’s populated fields take precedence. Missing descriptive fields and identifiers are copied from the first duplicate that has them.</p></details>' : '') + '</div>';
+}
+
 document.getElementById("actions").addEventListener("click", async (e) => {
   if (e.target.id !== "apply") return;
   const j = await api("/api/admin/jobs/" + id);
-  if (!confirm(j.kind === "duplicates" ? "Merge this reviewed pair and move the duplicate to Calibre’s trash? Both records and files are backed up first." : "Apply preview #" + id + " to Calibre? metadata.db is backed up first, and the index refreshes afterwards.")) return;
+  if (!confirm(j.kind === "duplicates" ? "Merge the reviewed groups without blockers and move their duplicates to Calibre’s trash? metadata.db and every record’s files are backed up first." : "Apply preview #" + id + " to Calibre? metadata.db is backed up first, and the index refreshes afterwards.")) return;
   try {
     const out = await post("/api/admin/jobs", { kind: j.kind, mode: "apply", preview_of: id });
     location.href = "/admin/jobs/" + out.id;

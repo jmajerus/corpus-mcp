@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
-import { duplicatePairs, dismissDuplicate } from "./duplicates.js";
+import { duplicateGroups, dismissDuplicate, type DuplicateGroupSelection } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
 import { metadataCitekeyPreview } from "./metadata-repair.js";
 import { adminMetrics } from "./admin.js";
@@ -444,7 +444,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     }
     else if (req.method === "GET" && /^\/admin\/jobs\/\d+$/.test(path)) html(JOB_HTML);
     else if (req.method === "GET" && path === "/api/duplicates") sendJson(res, 200, {
-      ...duplicatePairs(c, config.shelvesLibrary, url.searchParams.get("dismissed") === "1"),
+      ...duplicateGroups(c, config.shelvesLibrary, url.searchParams.get("dismissed") === "1"),
       last_scan: c.db.prepare("SELECT value FROM meta WHERE key='last_scan'").pluck().get() ?? null,
       calibre_web_url: admin.calibreWebUrl ?? null, writable_library: config.shelvesLibrary,
     });
@@ -456,9 +456,11 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     }
     else if (req.method === "POST" && path === "/api/duplicates/preview") {
       const by = await writer(); if (by === null) return;
-      const body = await readJson(req) as {keep:string;remove:string;fingerprint:string;discard_conflicts?:boolean};
-      if (!body || typeof body.keep !== "string" || typeof body.remove !== "string" || typeof body.fingerprint !== "string") throw new ToolError("Choose a keeper and review the pair first.");
-      sendJson(res,202,{id:runner.start("duplicates","preview",{duplicate:body},by)});
+      const body = await readJson(req) as {groups?:unknown};
+      const valid = (g: any) => g && typeof g.keep === "string" && Array.isArray(g.remove) && g.remove.every((x: unknown) => typeof x === "string")
+        && g.fingerprints && typeof g.fingerprints === "object" && (g.discard_conflicts === undefined || typeof g.discard_conflicts === "boolean");
+      if (!body || !Array.isArray(body.groups) || !body.groups.length || !body.groups.every(valid)) throw new ToolError("Choose a keeper and the records to trash first.");
+      sendJson(res,202,{id:runner.start("duplicates","preview",{duplicates:body.groups as DuplicateGroupSelection[]},by)});
     }
     else if (req.method === "GET" && path === "/api/books") {
       const p = url.searchParams;
