@@ -1,13 +1,23 @@
 #!/bin/bash
-# Adds an EPUB to every book in a Calibre library that has MOBI, AZW3, or KFX but no EPUB, so corpus-mcp
-# can cite it by chapter (MuPDF reads no outline from MOBI, and the indexer cannot read KFX at all).
-# KFX needs calibre's KFX Input plugin, installed for the library's owner. Runs on the Calibre host, as the
-# library's owner, with the same ebook-convert + calibredb add_format calls Calibre-Web makes.
+# Adds a readable format to every book in a Calibre library that has neither an EPUB nor a PDF, only
+# MOBI, AZW, AZW3, PRC, or KFX, so corpus-mcp can index and cite it (MuPDF reads no outline from MOBI,
+# and the indexer cannot read KFX at all). Runs on the Calibre host, as the library's owner, whose
+# calibre has the KFX Input plugin.
 #
 #   calibre-convert.sh [--apply] [library]     (default: Calibre-Web's library)
 #
-# Without --apply it only lists the books. With --apply it backs up metadata.db first, converts
-# each book in a temporary directory, adds the EPUB with --dont-replace, and keeps the source format.
+#   - MOBI, AZW, AZW3, PRC and reflowable KFX become an EPUB, with the same ebook-convert call
+#     Calibre-Web makes.
+#   - Print-replica KFX (fixed-layout textbooks that wrap a publisher's PDF) gives up that PDF, through
+#     KFX Input's own command line; ebook-convert hangs on these. If no PDF comes out, it falls back to EPUB.
+#   - DRM-encrypted files (a KFX "DRMION" container, or a MOBI with an encryption type) are listed but
+#     never attempted: download the book again and add it through DeDRM.
+#
+# Without --apply it only lists the books and what each would get. With --apply it backs up metadata.db
+# first, converts each book in a temporary directory with a time limit (CONVERT_TIMEOUT seconds, default
+# 600), adds the result with --dont-replace, and keeps the source format. Given CONVERT_PLAN (base64 JSON,
+# {"books": [{"calibre_id", "uuid", "source_format", "source_sha256", "added_format"}]}, from /admin's
+# preview), it converts only those books, and skips any whose record, formats or file bytes changed.
 set -euo pipefail
 
 apply=0
@@ -16,32 +26,115 @@ apply=0
 # installed beside this script); refused if Calibre-Web keeps the library split.
 library="${1:-$(SSH_ORIGINAL_COMMAND=calibre-library "$(dirname "$0")/corpus-source")}"
 bin="${CALIBRE_BIN:-/usr/bin}"
+limit="${CONVERT_TIMEOUT:-600}"
 
 books=$(python3 - "$library" <<'EOF'
-import json, sqlite3, sys
+import base64, hashlib, json, os, sqlite3, sys
+
+SOURCES = ('azw3', 'kfx', 'azw', 'mobi', 'prc')  # one source per book, in this order: KF8 converts best
+
+
+def sniff(path):
+    """What the file really is, whatever its extension: (kind, problem)."""
+    with open(path, 'rb') as f:
+        head = f.read(128)
+        if head.startswith(b'\xeaDRMION\xee'):
+            return 'kfx', 'encrypted'
+        if head.startswith(b'CONT'):
+            data = head + f.read()
+            replica = b'%PDF-' in data and (b'yj_textbook' in data or b'yj_fixed_layout' in data)
+            return ('kfx-replica' if replica else 'kfx'), None
+        if head[60:68] in (b'BOOKMOBI', b'TEXtREAd'):
+            f.seek(int.from_bytes(head[78:82], 'big'))  # record 0: the PalmDOC header
+            record = f.read(16)
+            return 'mobi', ('encrypted' if int.from_bytes(record[12:14], 'big') else None)
+    return None, 'unrecognized'
+
+
 db = sqlite3.connect(f"file:{sys.argv[1]}/metadata.db?mode=ro", uri=True)
-rows = db.execute("""
-  SELECT b.id, b.path, d.name, LOWER(d.format), b.title, b.uuid FROM books b JOIN data d ON d.book = b.id
-  WHERE LOWER(d.format) IN ('mobi', 'azw3', 'kfx')
-    AND NOT EXISTS (SELECT 1 FROM data e WHERE e.book = b.id AND LOWER(e.format) = 'epub')
-  ORDER BY b.id, CASE LOWER(d.format) WHEN 'azw3' THEN 0 WHEN 'kfx' THEN 1 ELSE 2 END""")
-seen = set()
-for id_, path, name, fmt, title, uuid in rows:
-    if id_ in seen:
-        continue  # one source per book; AZW3 (KF8) converts best, then KFX, then old MOBI
-    seen.add(id_)
+# An apply from /admin converts only the previewed books, each from the same source to the same format.
+plan = None
+if os.environ.get('CONVERT_PLAN'):
+    plan = {b['calibre_id']: b for b in json.loads(base64.b64decode(os.environ['CONVERT_PLAN']))['books']}
+formats = {}
+for book, fmt in db.execute('SELECT book, LOWER(format) FROM data'):
+    formats.setdefault(book, set()).add(fmt)
+
+
+def digest(file):
+    h = hashlib.sha256()
+    with open(file, 'rb') as stream:
+        for part in iter(lambda: stream.read(1 << 20), b''):
+            h.update(part)
+    return h.hexdigest()
+
+
+def row(id_, source, title, action, item):
     # The last field is the change as JSON, printed as an "@@change" line for /admin's change table.
-    item = json.dumps({"calibre_id": id_, "uuid": uuid, "title": title, "added_format": "epub", "source_format": fmt})
-    print(f"{id_}\t{path}/{name}.{fmt}\t{title}\t{item}")
+    print(f"{id_}\t{source}\t{title}\t{action}\t{json.dumps(item)}")
+
+
+for id_, path, title, uuid in db.execute('SELECT id, path, title, uuid FROM books ORDER BY id'):
+    if plan is not None and id_ not in plan:
+        continue
+    have = formats.get(id_, set())
+    first = chosen = None
+    if 'epub' not in have and 'pdf' not in have:
+        # The first source that can be converted; a locked AZW3 must not hide a readable MOBI.
+        for fmt in (f for f in SOURCES if f in have):
+            name = db.execute('SELECT name FROM data WHERE book = ? AND LOWER(format) = ?', (id_, fmt)).fetchone()[0]
+            source = f'{path}/{name}.{fmt}'
+            try:
+                kind, problem = sniff(f'{sys.argv[1]}/{source}')
+            except OSError as error:
+                kind, problem = None, f'unreadable ({error.strerror})'
+            option = (fmt, source, problem or ('pdf' if kind == 'kfx-replica' else 'epub'), problem)
+            first = first or option
+            if not problem:
+                chosen = option
+                break
+    pick = chosen or first
+    item = {"calibre_id": id_, "uuid": uuid, "title": title}
+    if plan is not None:
+        want = plan.pop(id_)
+        # The same record, source, conversion and file bytes as previewed, or nothing.
+        if (pick is None or pick[3] or uuid != want.get('uuid') or pick[0] != want.get('source_format') or pick[2] != want.get('added_format')
+                or digest(f'{sys.argv[1]}/{pick[1]}') != want.get('source_sha256')):
+            row(id_, '-', title, 'changed', {**item, "convert_skipped": "changed since preview"})
+            continue
+    if pick is None:
+        continue
+    fmt, source, action, problem = pick
+    item["source_format"] = fmt
+    if not problem:
+        item["source_sha256"] = digest(f'{sys.argv[1]}/{source}')
+    item.update({"convert_skipped": problem} if problem else {"added_format": action})
+    row(id_, source, title, action, item)
+for id_, want in (plan or {}).items():
+    row(id_, '-', f'Calibre book {id_}', 'missing', {"calibre_id": id_, "uuid": want.get('uuid'), "title": f'Calibre book {id_}', "convert_skipped": "no longer in the library"})
 EOF
 )
 
 count=$(printf '%s' "$books" | grep -c . || true)
-echo "$count book(s) in $library have MOBI, AZW3, or KFX but no EPUB."
+todo=$(printf '%s' "$books" | awk -F'\t' '$4 == "epub" || $4 == "pdf"' | grep -c . || true)
+echo "$count book(s) in $library have no EPUB or PDF, only MOBI, AZW, AZW3, PRC, or KFX; $todo can be converted."
 [ "$count" -eq 0 ] && exit 0
+describe() {
+  case "$1" in
+    epub) echo "EPUB" ;;
+    pdf) echo "PDF from print replica" ;;
+    encrypted) echo "SKIP: DRM-encrypted; download again and add through DeDRM" ;;
+    unrecognized) echo "SKIP: unrecognized file" ;;
+    changed) echo "SKIP: changed since preview; preview again" ;;
+    missing) echo "SKIP: no longer in the library" ;;
+    *) echo "SKIP: $1" ;;
+  esac
+}
 if [ "$apply" -eq 0 ]; then
-  printf '%s\n' "$books" | awk -F'\t' '{ printf "  %5s  %s\n@@change %s\n", $1, $3, $4 }'
-  echo "Run again with --apply to convert them."
+  while IFS=$'\t' read -r id source title action item; do
+    printf '  %5s  %s → %s\n@@change %s\n' "$id" "$title" "$(describe "$action")" "$item"
+  done <<< "$books"
+  [ "$todo" -gt 0 ] && echo "Run again with --apply to convert them."
   exit 0
 fi
 
@@ -51,20 +144,40 @@ echo "Backed up metadata.db to $backup"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-ok=0 failed=0
-while IFS=$'\t' read -r id source title item; do
-  out="$work/$id.epub"
-  if "$bin/ebook-convert" "$library/$source" "$out" > "$work/$id.log" 2>&1 \
-     && "$bin/calibredb" add_format --dont-replace --with-library "$library" "$id" "$out" >> "$work/$id.log" 2>&1; then
-    echo "  ok      $id  $title"
-    echo "@@change $item"
+ok=0 failed=0 skipped=0 stale=0
+while IFS=$'\t' read -r id source title action item; do
+  if [ "$action" != epub ] && [ "$action" != pdf ]; then
+    echo "  skip    $id  $title: $(describe "$action")"
+    printf '@@change %s\n' "$item"
+    case "$action" in changed|missing) stale=$((stale + 1)) ;; *) skipped=$((skipped + 1)) ;; esac
+    continue
+  fi
+  out=""
+  if [ "$action" = pdf ]; then
+    # KFX Input writes <name>.pdf beside its input and exits 0 even when the book has no PDF to give.
+    # A timeout or crash is a failure, not a reason to try EPUB, which hangs on these books.
+    rc=0
+    { mkdir "$work/$id" && cp -- "$library/$source" "$work/$id/book.kfx" &&
+      timeout "$limit" "$bin/calibre-debug" -r "KFX Input" -- -p "$work/$id/book.kfx" "$work/$id.pdf"; } > "$work/$id.log" 2>&1 || rc=$?
+    rm -rf "$work/$id"
+    if [ "$rc" -eq 0 ] && [ -s "$work/$id.pdf" ]; then out="$work/$id.pdf"
+    elif [ "$rc" -eq 0 ]; then action=epub; echo "  note    $id  no print-replica PDF; converting to EPUB instead"
+    else action=failed; fi
+  fi
+  if [ "$action" = epub ]; then
+    out="$work/$id.epub"
+    timeout "$limit" "$bin/ebook-convert" "$library/$source" "$out" >> "$work/$id.log" 2>&1 || out=""
+  fi
+  if [ -n "$out" ] && [ -s "$out" ] && "$bin/calibredb" add_format --dont-replace --with-library "$library" "$id" "$out" >> "$work/$id.log" 2>&1; then
+    echo "  ok      $id  $title → ${action^^}"
+    printf '@@change %s\n' "$(printf '%s' "$item" | sed "s/\"added_format\": \"[a-z]*\"/\"added_format\": \"$action\"/")"
     ok=$((ok + 1))
   else
-    echo "  FAILED  $id  $title"
+    echo "  FAILED  $id  $title (${action}; time limit ${limit}s)"
     tail -3 "$work/$id.log" | sed 's/^/          /'
     failed=$((failed + 1))
   fi
-  rm -f "$out"
+  rm -f "$work/$id.epub" "$work/$id.pdf"
 done <<< "$books"
-echo "$ok converted, $failed failed. corpus-mcp picks up the EPUBs on its next refresh."
-[ "$failed" -eq 0 ]
+echo "$ok converted, $failed failed, $skipped skipped$( [ "$stale" -gt 0 ] && echo ", $stale changed since preview"). corpus-mcp picks up the new files on its next refresh."
+[ "$failed" -eq 0 ] && [ "$stale" -eq 0 ]

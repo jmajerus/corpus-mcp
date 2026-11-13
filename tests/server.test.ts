@@ -82,6 +82,16 @@ beforeAll(async () => {
         calibreCalls.push({ command, stdin });
         log(`ran ${command}\n`);
         if (command === "metadata-preview") return;
+        if (command === "convert-preview") {
+          log("@@change " + JSON.stringify({ calibre_id: 1, uuid: "uuid-1", title: "Networks", source_format: "kfx", source_sha256: "abc", added_format: "pdf" }) + "\n");
+          log("@@change " + JSON.stringify({ calibre_id: 2, uuid: "uuid-2", title: "Locked", source_format: "azw", convert_skipped: "encrypted" }) + "\n");
+          return;
+        }
+        if (command === "convert-apply") {
+          // One book converted, then a later one failed: the script exits non-zero.
+          log("@@change " + JSON.stringify({ ...JSON.parse(stdin!).books[0], title: "Networks" }) + "\n");
+          throw new Error("1 converted, 1 failed");
+        }
         if (command === "metadata-apply") {
           const book = JSON.parse(stdin!).books[0];
           const actual=failMetadataWrite ? {...book.before,title:book.after.title} : book.after;
@@ -238,6 +248,17 @@ it("runs jobs: local ones directly, Calibre changes only as an apply of their ow
   const jobs = await (await fetch(`${base}/api/admin/jobs`)).json();
   expect(jobs.jobs.map((j: { kind: string; mode: string }) => `${j.kind}:${j.mode}`).slice(0, 4))
     .toEqual(["convert:preview", "tags:apply", "tags:preview", "backup:apply"]);
+});
+
+it("converts exactly the previewed books and indexes a partial apply", async () => {
+  const preview = await waitForJob((await (await startJob({ kind: "convert", mode: "preview" })).json()).id);
+  const before = refreshes;
+  const apply = await waitForJob((await (await startJob({ kind: "convert", mode: "apply", preview_of: preview.id })).json()).id);
+  expect(calibreCalls.at(-1)).toEqual({ command: "convert-apply", stdin: JSON.stringify({ books: [{ calibre_id: 1, uuid: "uuid-1", source_format: "kfx", source_sha256: "abc", added_format: "pdf" }] }) });
+  expect(apply.status).toBe("failed");
+  expect(refreshes).toBe(before + 1);
+  const logged = await (await fetch(`${base}/api/changes?job=${apply.id}`)).json();
+  expect(logged.rows.map((r: { kind: string; detail: string }) => [r.kind, r.detail])).toEqual([["format_added", "kfx → pdf"]]);
 });
 
 it("reports Zotero as unconfigured, and refuses its job", async () => {

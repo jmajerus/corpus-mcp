@@ -8,7 +8,8 @@
 #   - "shelves": Calibre-Web's public shelves and their book ids as JSON, read from app.db
 #     read-only, so the corpus LXC never copies app.db (which also holds password hashes)
 #   - "tags-preview" / "tags-apply": calibre-tags.sh with a plan on stdin (/admin's tag jobs)
-#   - "convert-preview" / "convert-apply": calibre-convert.sh (/admin's EPUB job)
+#   - "convert-preview" / "convert-apply": calibre-convert.sh (/admin's convert job); the apply
+#     takes the previewed books as JSON on stdin
 # Metadata corrections use metadata-preview / metadata-apply with JSON on stdin.
 # The write scripts back up metadata.db before every apply. Installed by tools/deploy.mjs
 # (--source-setup or --source-setup-user-key), which sets TOOLS_DIR.
@@ -152,6 +153,9 @@ EOF
     ;;
   convert-apply)
     require_unsplit
+    CONVERT_PLAN="$(base64 -w0)"
+    [ -n "$CONVERT_PLAN" ] || { echo "corpus-source: convert-apply needs the previewed books on stdin" >&2; exit 1; }
+    export CONVERT_PLAN
     exec bash "$TOOLS_DIR/calibre-convert.sh" --apply "$LIBRARY"
     ;;
   *)
