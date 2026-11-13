@@ -131,7 +131,7 @@ and never touches other tags.
 
 Bulk imports are not a job. The library's owner runs
 `calibre-import.sh [--apply] [--tags kindle] <folder>` on the Calibre-Web
-host, which `--source-setup` installs beside the job scripts. Without
+host, which every deploy installs beside the job scripts. Without
 `--apply` it lists the files. With it, it backs up `metadata.db`, adds one
 file at a time, and sorts each into `_done/`, `_duplicates/`, or `_failed/`
 inside the folder. Kindle `.kfx-zip` archives need calibre's DeDRM plugin,
