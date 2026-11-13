@@ -77,7 +77,7 @@ no PDF comes out. DRM-encrypted files (a KFX `DRMION` container, even one named
 `.azw`, or an encrypted MOBI) are listed as not converted: download them again
 and add them through DeDRM. Each conversion stops after `CONVERT_TIMEOUT`
 seconds (default 600). Apply converts only the books the preview listed, and
-skips any whose record, formats or file changed since. Its card links to **Books with no readable file**, the
+skips any whose record, formats or file bytes changed since. Its card links to **Books with no readable file**, the
 Books page filtered to `problem=no_file`.
 
 Starting a job opens its page. Below the actions are the recent jobs and the

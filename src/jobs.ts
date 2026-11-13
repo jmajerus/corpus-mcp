@@ -47,7 +47,7 @@ export interface JobItem {
   duplicate_review?: { plan: { keep: {id:number;uuid:string}; remove: {id:number;uuid:string}; discard_conflicts:boolean; reviewed:string }; blockers:string[]; [key:string]: unknown };
   duplicate_partial?: {backup:string;message:string};
   duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean };
-  added?: string[]; removed?: string[]; added_format?: string; source_format?: string;
+  added?: string[]; removed?: string[]; added_format?: string; source_format?: string; source_sha256?: string;
   /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */
   convert_skipped?: string;
 }
@@ -167,7 +167,7 @@ export class JobRunner {
       params = preview.params;
       if (kind === "convert") {
         // The apply converts exactly the books the preview listed, as listed; the source rechecks each.
-        const books = preview.items.filter(it => it.added_format).map(it => ({ calibre_id: it.calibre_id, uuid: it.uuid, source_format: it.source_format, added_format: it.added_format }));
+        const books = preview.items.filter(it => it.added_format).map(it => ({ calibre_id: it.calibre_id, uuid: it.uuid, source_format: it.source_format, source_sha256: it.source_sha256, added_format: it.added_format }));
         if (!books.length) throw new ToolError("That preview has nothing to convert.");
         params = { plan: { books } };
       }

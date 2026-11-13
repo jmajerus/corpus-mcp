@@ -16,8 +16,8 @@
 # Without --apply it only lists the books and what each would get. With --apply it backs up metadata.db
 # first, converts each book in a temporary directory with a time limit (CONVERT_TIMEOUT seconds, default
 # 600), adds the result with --dont-replace, and keeps the source format. Given CONVERT_PLAN (base64 JSON,
-# {"books": [{"calibre_id", "uuid", "source_format", "added_format"}]}, from /admin's preview), it converts
-# only those books, and skips any whose record, formats or file no longer give the same conversion.
+# {"books": [{"calibre_id", "uuid", "source_format", "source_sha256", "added_format"}]}, from /admin's
+# preview), it converts only those books, and skips any whose record, formats or file bytes changed.
 set -euo pipefail
 
 apply=0
@@ -29,7 +29,7 @@ bin="${CALIBRE_BIN:-/usr/bin}"
 limit="${CONVERT_TIMEOUT:-600}"
 
 books=$(python3 - "$library" <<'EOF'
-import base64, json, os, sqlite3, sys
+import base64, hashlib, json, os, sqlite3, sys
 
 SOURCES = ('azw3', 'kfx', 'azw', 'mobi', 'prc')  # one source per book, in this order: KF8 converts best
 
@@ -61,6 +61,14 @@ for book, fmt in db.execute('SELECT book, LOWER(format) FROM data'):
     formats.setdefault(book, set()).add(fmt)
 
 
+def digest(file):
+    h = hashlib.sha256()
+    with open(file, 'rb') as stream:
+        for part in iter(lambda: stream.read(1 << 20), b''):
+            h.update(part)
+    return h.hexdigest()
+
+
 def row(id_, source, title, action, item):
     # The last field is the change as JSON, printed as an "@@change" line for /admin's change table.
     print(f"{id_}\t{source}\t{title}\t{action}\t{json.dumps(item)}")
@@ -89,13 +97,17 @@ for id_, path, title, uuid in db.execute('SELECT id, path, title, uuid FROM book
     item = {"calibre_id": id_, "uuid": uuid, "title": title}
     if plan is not None:
         want = plan.pop(id_)
-        if pick is None or pick[3] or uuid != want.get('uuid') or pick[0] != want.get('source_format') or pick[2] != want.get('added_format'):
+        # The same record, source, conversion and file bytes as previewed, or nothing.
+        if (pick is None or pick[3] or uuid != want.get('uuid') or pick[0] != want.get('source_format') or pick[2] != want.get('added_format')
+                or digest(f'{sys.argv[1]}/{pick[1]}') != want.get('source_sha256')):
             row(id_, '-', title, 'changed', {**item, "convert_skipped": "changed since preview"})
             continue
     if pick is None:
         continue
     fmt, source, action, problem = pick
     item["source_format"] = fmt
+    if not problem:
+        item["source_sha256"] = digest(f'{sys.argv[1]}/{source}')
     item.update({"convert_skipped": problem} if problem else {"added_format": action})
     row(id_, source, title, action, item)
 for id_, want in (plan or {}).items():

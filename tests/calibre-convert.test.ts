@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { makeLibrary, tempDir } from "./fixtures.js";
 
@@ -73,22 +74,28 @@ it("extracts print-replica PDFs, falls back to EPUB when none comes out, and fai
 it("prefers a readable lower-priority source to a locked preferred one", () => {
   makeLibrary(root, "other", [{ id: 1, title: "Mixed", files: { azw3: mobi(2), mobi: mobi(0) } }]);
   const r = spawnSync("bash", [script, path.join(root, "other")], { encoding: "utf8", env: { ...process.env, CALIBRE_BIN: bin } });
-  expect(items(r.stdout)).toEqual([{ calibre_id: 1, uuid: "uuid-1", title: "Mixed", source_format: "mobi", added_format: "epub" }]);
+  expect(items(r.stdout)).toEqual([{ calibre_id: 1, uuid: "uuid-1", title: "Mixed", source_format: "mobi", added_format: "epub",
+    source_sha256: createHash("sha256").update(mobi(0)).digest("hex") }]);
 });
 
 it("applies only the previewed books, skipping any that changed since", () => {
+  // The preview's own plan, then changes: a new UUID (5), a PDF added (7), a file replaced in place (9), a book gone (99).
+  const previewed = Object.fromEntries(items(run().stdout).filter(i => i.added_format).map(i => [i.calibre_id, i]));
+  expect(previewed[1].source_sha256).toMatch(/^[0-9a-f]{64}$/);
+  const pick = ({ calibre_id, uuid, source_format, source_sha256, added_format }: any) => ({ calibre_id, uuid, source_format, source_sha256, added_format });
+  const replaced = path.join(library, "Unknown/Replica Without Pdf (9)/Replica Without Pdf - Unknown.kfx");
+  fs.writeFileSync(replaced, kfx("yj_textbook %PDF- nopdf, but another copy"));
   const plan = { books: [
-    { calibre_id: 1, uuid: "uuid-1", source_format: "mobi", added_format: "epub" },
-    { calibre_id: 4, uuid: "uuid-4", source_format: "kfx", added_format: "pdf" },
-    { calibre_id: 5, uuid: "other-uuid", source_format: "kfx", added_format: "epub" },
-    { calibre_id: 7, uuid: "uuid-7", source_format: "mobi", added_format: "epub" },
-    { calibre_id: 99, uuid: "uuid-99", source_format: "mobi", added_format: "epub" },
+    pick(previewed[1]), pick(previewed[4]), { ...pick(previewed[5]), uuid: "other-uuid" },
+    { calibre_id: 7, uuid: "uuid-7", source_format: "mobi", source_sha256: previewed[1].source_sha256, added_format: "epub" },
+    pick(previewed[9]),
+    { calibre_id: 99, uuid: "uuid-99", source_format: "mobi", source_sha256: "0", added_format: "epub" },
   ] };
   const r = spawnSync("bash", [script, "--apply", library], { encoding: "utf8",
     env: { ...process.env, CALIBRE_BIN: bin, CONVERT_PLAN: Buffer.from(JSON.stringify(plan)).toString("base64") } });
   expect(r.status).toBe(1);
   expect(fs.readFileSync(path.join(root, "added.log"), "utf8").trim().split("\n")).toEqual(["1 epub", "4 pdf"]);
   expect(Object.fromEntries(items(r.stdout).map(i => [i.calibre_id, i.added_format ?? i.convert_skipped]))).toEqual({
-    1: "epub", 4: "pdf", 5: "changed since preview", 7: "changed since preview", 99: "no longer in the library" });
-  expect(r.stdout).toContain("2 converted, 0 failed, 0 skipped, 3 changed since preview");
+    1: "epub", 4: "pdf", 5: "changed since preview", 7: "changed since preview", 9: "changed since preview", 99: "no longer in the library" });
+  expect(r.stdout).toContain("2 converted, 0 failed, 0 skipped, 4 changed since preview");
 });
