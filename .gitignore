@@ -8,3 +8,4 @@ dist/
 drafts
 worker/.wrangler/
 worker/.dev.vars
+__pycache__/

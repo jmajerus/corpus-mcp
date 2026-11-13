@@ -2,13 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { type BookRow, type Corpus, ToolError, getBook } from "./tools.js";
+import { type BookRow, type Corpus, ToolError } from "./tools.js";
 import { recordChanges } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
 
 const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
-export interface DuplicateSelection { keep: string; remove: string; fingerprint: string; discard_conflicts?: boolean }
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
 const emptyReferences = () => Object.fromEntries(REFERENCE_TABLES.map(table => [table, 0]));
@@ -133,20 +132,32 @@ export function duplicateCandidates(books: DuplicateCandidate[]) {
   return [...matches.values()].sort((a,b) => a.i - b.i || a.j - b.j).map(({i,j,evidence}) => ({i,j,evidence:EVIDENCE.filter(reason=>evidence.has(reason))}));
 }
 
-export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
+type DuplicateBook = ReturnType<typeof candidateBooks>[number];
+function candidateBooks(c: Corpus) {
   const metadata = catalogue(c), references = allReferences(c);
-  const books = (c.db.prepare("SELECT * FROM books ORDER BY id").all() as BookRow[]).map(b => ({
-    id: b.id, uuid: b.uuid, library: b.library, calibre_id: b.calibre_id, title: b.title,
-    authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,
-    error: b.error, sha256: b.sha256, file_size: b.file_size, identifiers: metadata.get(b.id)?.identifiers ?? {},
-    formats: metadata.get(b.id)?.formats ?? (b.format ? [b.format.toUpperCase()] : []),
-    references: b.uuid ? references.get(b.uuid) ?? emptyReferences() : {},
-  }));
+  return (c.db.prepare("SELECT * FROM books ORDER BY id").all() as BookRow[]).map(b => {
+    const book = {
+      id: b.id, uuid: b.uuid, library: b.library, calibre_id: b.calibre_id, title: b.title,
+      authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,
+      error: b.error, sha256: b.sha256, file_size: b.file_size, identifiers: metadata.get(b.id)?.identifiers ?? {},
+      formats: metadata.get(b.id)?.formats ?? (b.format ? [b.format.toUpperCase()] : []),
+      references: b.uuid ? references.get(b.uuid) ?? emptyReferences() : {},
+    };
+    // `added` only ranks the suggested keeper; it stays out of the fingerprints, so adding it
+    // left existing keep-both decisions valid.
+    return { ...book, added: b.added ?? null, fingerprint: hash(book) };
+  });
+}
+const hashed = ({ added: _added, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const referenced = (b: DuplicateBook) => Object.values(b.references).some(n => n > 0);
+
+export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
+  const books = candidateBooks(c);
   const decisions = new Map((c.data.prepare("SELECT pair_key,fingerprint FROM duplicate_decisions").all() as {pair_key:string;fingerprint:string}[]).map(r => [r.pair_key,r.fingerprint]));
   const pairs = [];
   for (const {i,j,evidence} of duplicateCandidates(books)) {
     const a = books[i], b = books[j];
-    const key = JSON.stringify([a.id, b.id]), fingerprint = hash([a, b]);
+    const key = JSON.stringify([a.id, b.id]), fingerprint = hash([hashed(a), hashed(b)]);
     const dismissed = decisions.get(key) === fingerprint;
     if (dismissed && !includeDismissed) continue;
     pairs.push({ key, fingerprint, books: [a,b], evidence, dismissed,
@@ -156,17 +167,79 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
   return { pairs, total: pairs.length };
 }
 
-export function duplicatePlan(c: Corpus, library: string, selection: DuplicateSelection) {
-  const pair = duplicatePairs(c, library).pairs.find(p => p.books.some(b => b.id === selection.keep) && p.books.some(b => b.id === selection.remove) && selection.keep !== selection.remove);
-  if (!pair || pair.fingerprint !== selection.fingerprint) throw new ToolError("This duplicate review changed. Reload and review again.");
-  if (!pair.writable) throw new ToolError("Resolve duplicates within the writable Calibre library only.");
-  const keep = getBook(c, selection.keep), remove = getBook(c, selection.remove);
-  assertDuplicateUnreferenced(c, remove.uuid!);
-  return { library, keep: { id: keep.calibre_id, uuid: keep.uuid }, remove: { id: remove.calibre_id, uuid: remove.uuid }, discard_conflicts: selection.discard_conflicts === true };
+/** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
+ * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
+ * C merge into A. The suggested keeper is a referenced record, then an indexed one, then the one
+ * with the most formats, then the one added to Calibre first (by its added date, then its id). */
+export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismissed = false) {
+  const { pairs } = duplicatePairs(c, writableLibrary, includeDismissed);
+  const parent = new Map<string, string>();
+  const find = (id: string): string => { const p = parent.get(id) ?? id; if (p === id) return id; const root = find(p); parent.set(id, root); return root; };
+  for (const p of pairs) parent.set(find(p.books[0].id), find(p.books[1].id));
+  type Group = { books: Map<string, DuplicateBook>; pairs: typeof pairs };
+  const groups = new Map<string, Group>();
+  for (const p of pairs) {
+    const root = find(p.books[0].id), group: Group = groups.get(root) ?? { books: new Map(), pairs: [] };
+    for (const b of p.books) group.books.set(b.id, b);
+    group.pairs.push(p); groups.set(root, group);
+  }
+  const rank = (b: DuplicateBook) => [referenced(b) ? 0 : 1, b.status === "indexed" ? 0 : 1, -b.formats.length];
+  const before = (a: DuplicateBook, b: DuplicateBook) => {
+    const x = rank(a), y = rank(b);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    // An unknown added date sorts after a known one.
+    if (a.added !== b.added) return a.added === null ? 1 : b.added === null ? -1 : a.added < b.added ? -1 : 1;
+    return a.calibre_id - b.calibre_id;
+  };
+  const result = [...groups.values()].map(g => {
+    const books = [...g.books.values()].sort((a, b) => a.calibre_id - b.calibre_id);
+    const suggested = [...books].sort(before)[0];
+    return {
+      key: books.map(b => b.id).join("|"), books, pairs: g.pairs, suggested_keep: suggested.id,
+      identical: g.pairs.every(p => p.evidence.includes("Identical selected file")),
+      writable: g.pairs.every(p => p.writable),
+    };
+  }).sort((a, b) => a.books[0].calibre_id - b.books[0].calibre_id);
+  return { groups: result, pairs: pairs.length };
 }
-export function assertDuplicateUnreferenced(c: Corpus, uuid: string) {
+
+export interface DuplicateGroupSelection { keep: string; remove: string[]; fingerprints: Record<string, string>; discard_conflicts?: boolean }
+export interface DuplicateBatchPlan { library: string; groups: { keep: { id: number; uuid: string }; remove: { id: number; uuid: string }[]; discard_conflicts: boolean }[] }
+
+/** Checks a batch of reviewed groups against the current index: each book unchanged since the
+ * page showed it, in one group only, writable, and each trashed record unreferenced and paired
+ * directly with its keeper. */
+export function duplicateBatchPlan(c: Corpus, library: string, selections: DuplicateGroupSelection[]): DuplicateBatchPlan {
+  if (!selections.length) throw new ToolError("Choose at least one duplicate group.");
+  const { pairs } = duplicatePairs(c, library);
+  const books = new Map(pairs.flatMap(p => p.books.map(b => [b.id, b] as const)));
+  const paired = new Map(pairs.map(p => [[p.books[0].id, p.books[1].id].sort().join("|"), p]));
+  const used = new Set<string>();
+  const groups = selections.map(s => {
+    const ids = [s.keep, ...s.remove];
+    if (!s.remove.length) throw new ToolError(`Choose at least one record to trash beside keeper ${s.keep}.`);
+    for (const id of ids) {
+      if (used.has(id)) throw new ToolError(`${id} appears in more than one group. Choose it once.`);
+      used.add(id);
+      const book = books.get(id);
+      if (!book || s.fingerprints[id] !== book.fingerprint) throw new ToolError(`${id} changed or is no longer a duplicate candidate. Reload and review again.`);
+    }
+    const keep = books.get(s.keep)!;
+    const remove = s.remove.map(id => {
+      const pair = paired.get([s.keep, id].sort().join("|"));
+      if (!pair) throw new ToolError(`${id} is not a duplicate candidate of keeper ${s.keep}. Choose a keeper it matches directly.`);
+      if (!pair.writable) throw new ToolError("Resolve duplicates within the writable Calibre library only.");
+      const book = books.get(id)!;
+      assertDuplicateUnreferenced(c, book.uuid!, id);
+      return { id: book.calibre_id, uuid: book.uuid! };
+    });
+    return { keep: { id: keep.calibre_id, uuid: keep.uuid! }, remove, discard_conflicts: s.discard_conflicts === true };
+  });
+  return { library, groups };
+}
+export function assertDuplicateUnreferenced(c: Corpus, uuid: string, label = "The record to trash") {
   const refs = duplicateReferences(c, uuid);
-  if (Object.values(refs).some(n => n > 0)) throw new ToolError("The record to trash has saved references or a tag proposal. Resolve those links before trashing it.");
+  if (Object.values(refs).some(n => n > 0)) throw new ToolError(`${label} has saved references or a tag proposal. Resolve those links before trashing it.`);
 }
 export function dismissDuplicate(c: Corpus, library: string, ids: string[], fingerprint: string, reopen: boolean, actor?: string) {
   const pair = duplicatePairs(c, library, true).pairs.find(p => p.books.map(b => b.id).every(id => ids.includes(id)) && ids.length === 2);

@@ -324,9 +324,12 @@ mirrors; they are retained on the source host until an operator removes them.
 
 ### Reviewing duplicates
 
-**Duplicates** (`/admin/duplicates`, also linked from the dashboard) lists pairs
-with identical selected-file hashes, matching identifiers, or matching normalized
-titles and authors. It shows covers, formats, file sizes, index health, identifiers,
+**Duplicates** (`/admin/duplicates`, also linked from the dashboard) lists groups of
+records linked by identical selected-file hashes, matching identifiers, or matching
+normalized titles and authors. An ASIN matches whether Calibre holds it as `asin`,
+`mobi-asin`, or a Kindle upload's `bookid: urn:asin:…`; ISBNs match across `isbn`,
+`EbookISBN`, `isbn-id` and `urn:isbn:` in ISBN-10 or ISBN-13 form. Each group lists
+its individual matches. It shows covers, formats, file sizes, index health, identifiers,
 years, and saved corpus references. Different publication years are highlighted as
 possible editions. Matching metadata is a review candidate, not proof of identical
 content; the hash evidence covers the format selected for indexing.
@@ -338,20 +341,33 @@ link both the keeper and duplicate.
 Browser reloads read the existing corpus index; they do not pull changes from
 Calibre. The screen shows the last catalogue refresh time. After deleting books in
 Calibre-Web, choose **Refresh from Calibre**: the existing authenticated refresh job
-pulls and indexes the library, then the screen reloads its pairs. A failed job is
+pulls and indexes the library, then the screen reloads its groups. A failed job is
 reported with a link to its log. The normal timer also refreshes automatically
 (10 minutes after the previous run finishes in the supplied deployment).
 
-Choose **Keep both / different editions** to dismiss a pair. Include reviewed pairs
-to reopen it. A changed fingerprint (including metadata, indexed-file hash, available
+Under a group's matches, choose **Keep both** to dismiss one pair (another edition,
+say). Include reviewed pairs to reopen it. A changed fingerprint (including metadata, indexed-file hash, available
 formats, or reference counts) makes the pair appear again automatically.
 
-To resolve a pair, select the keeper, explicitly choose whether its versions should
-win for conflicting formats, and select **Preview resolution**. The source preview
-compares all book files and metadata. On the resulting job, review the format changes,
-metadata comparison and blockers, then **Apply this preview**. Shelf and other
-reference blockers are shown together in the preview; Apply stays unavailable while
-any remain. Public shelf names are shown, while private shelf names stay hidden.
+To resolve a group, choose its **Keep** record; every record that matches the keeper
+directly is marked **Trash**. Untick any you want to leave alone. A record that only
+matches another duplicate (A–B–C, where C does not match A) cannot merge into that
+keeper, a record with saved references can only be the keeper, and a record in
+another library than the keeper cannot be trashed into it. The suggested keeper
+is a referenced record, then an indexed one, then the one with the most formats, then
+the one added to Calibre first. Explicitly choose whether the keeper's versions should win for conflicting
+formats, then **Preview this group**. That choice only keeps the keeper's own version:
+when two duplicates have different files in a format the keeper lacks, the group stays
+blocked until you make one of them the keeper or resolve one separately.
+
+To resolve many groups at once, tick them (or **Select identical-file groups**, the
+safest set, or **Select all shown**) and choose **Preview selected**. The source
+preview compares every book's files and metadata and reports each group with its
+blockers. **Apply N of M groups** resolves the groups without blockers in one job,
+after one `metadata.db` backup, and skips the others without changing them. A group
+whose sources changed since the preview is also skipped; the job then ends as failed
+and lists the skipped groups. Shelf and other reference blockers are shown together in
+the preview. Previews saved before batch resolution must be previewed again. Public shelf names are shown, while private shelf names stay hidden.
 You can instead delete an unwanted record directly in Calibre-Web: its delete
 operation cleans up shelf memberships automatically. Preserve unique formats or
 saved data first, and ensure the keeper belongs to any shelf you want to retain.
@@ -361,7 +377,8 @@ file hashes must still match the reviewed plan, and previews expire after an hou
 
 Resolution copies unique formats and supplementary files, unions tags, fills missing
 identifiers/descriptive fields and a missing cover, verifies file hashes, then moves
-the duplicate to Calibre's trash. The keeper's UUID and existing formats remain stable.
+the duplicates to Calibre's trash. With several duplicates in a group, a missing format
+or field comes from the first that has it. The keeper's UUID and existing formats remain stable.
 The index refreshes after success or a partial failure. The change log records review
 choices, format/tag changes, resolutions, and interrupted resolutions.
 

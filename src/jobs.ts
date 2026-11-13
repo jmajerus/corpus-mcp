@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
-import { duplicatePlan, assertDuplicateUnreferenced, type DuplicateSelection } from "./duplicates.js";
+import { duplicateBatchPlan, assertDuplicateUnreferenced, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
 import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
@@ -21,7 +21,7 @@ export type JobMode = "preview" | "apply";
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
-  duplicates: { title: "Resolve reviewed duplicate books", calibre: true, previewable: true },
+  duplicates: { title: "Resolve reviewed duplicate groups", calibre: true, previewable: true },
   metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
   backup: { title: "Back up data.db", calibre: false, previewable: false },
@@ -44,7 +44,8 @@ export interface JobRow {
 export interface JobItem {
   calibre_id: number; uuid?: string; title: string;
   metadata?: { before: MetadataValues; after: MetadataValues; partial?: boolean };
-  duplicate_review?: { plan: { keep: {id:number;uuid:string}; remove: {id:number;uuid:string}; discard_conflicts:boolean; reviewed:string }; blockers:string[]; [key:string]: unknown };
+  duplicate_review?: { plan: DuplicateBatchPlan["groups"][number] & { reviewed?: string }; blockers:string[]; [key:string]: unknown };
+  duplicate_skipped?: { message: string };
   duplicate_partial?: {backup:string;message:string};
   duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string;
@@ -143,7 +144,7 @@ export class JobRunner {
   }
 
   /** Starts a job and returns its id at once; the job runs in the background. */
-  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection; duplicate?: DuplicateSelection } = {}, requestedBy?: string): number {
+  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection; duplicates?: DuplicateGroupSelection[] } = {}, requestedBy?: string): number {
     if (mode !== "preview" && mode !== "apply") throw new ToolError("Choose preview or apply.");
     const spec = JOB_KINDS[kind];
     if (!spec) throw new ToolError(`Unknown job "${kind}".`);
@@ -164,14 +165,16 @@ export class JobRunner {
       if (Date.now() - Date.parse(preview.created_at) > 3600 * 1000) throw new ToolError("That preview is over an hour old; preview again.");
       params = preview.params;
       if (kind === "duplicates") {
-        const review = preview.items[0]?.duplicate_review;
-        if (!review || review.blockers.length) throw new ToolError("Resolve the blockers and preview again.");
-        assertDuplicateUnreferenced(this.c, review.plan.remove.uuid);
-        params = { plan: review.plan };
+        // Apply the groups the source reviewed without blockers; blocked groups stay as they are.
+        if (preview.items.some(it => it.duplicate_review && !Array.isArray(it.duplicate_review.plan.remove))) throw new ToolError("That preview predates batch resolution. Preview again.");
+        const groups = preview.items.flatMap(it => it.duplicate_review && !it.duplicate_review.blockers.length && it.duplicate_review.plan.reviewed ? [it.duplicate_review.plan] : []);
+        if (!groups.length) throw new ToolError("Every group in that preview has blockers. Resolve them and preview again.");
+        for (const g of groups) for (const r of g.remove) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);
+        params = { plan: { library: (preview.params.plan as DuplicateBatchPlan).library, groups } };
       }
     } else if (kind === "duplicates" && mode === "preview") {
-      if (!opts.duplicate) throw new ToolError("Choose a keeper on the duplicate review screen.");
-      params = { plan: duplicatePlan(this.c, this.config.shelvesLibrary, opts.duplicate) };
+      if (!opts.duplicates?.length) throw new ToolError("Choose a keeper on the duplicate review screen.");
+      params = { plan: duplicateBatchPlan(this.c, this.config.shelvesLibrary, opts.duplicates) };
     } else if (mode === "preview" && (kind === "tags" || kind === "cleanup")) {
       const library = this.config.shelvesLibrary;
       // A book page previews just that book (`books`); the dashboard previews every approved book.
@@ -273,9 +276,9 @@ export class JobRunner {
         log(`Backed up to ${await backupDataStore(this.c.data, this.config.backupDir)}\n`);
         return;
       case "duplicates": {
-        const p = params.plan as {remove:{uuid:string}};
-        assertDuplicateUnreferenced(this.c, p.remove.uuid);
-        if (this.config.admin?.quoteMcpUrl) await assertNoBookQuotes(this.config.admin.quoteMcpUrl, p.remove.uuid);
+        const removes = (params.plan as DuplicateBatchPlan).groups.flatMap(g => g.remove);
+        for (const r of removes) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);
+        if (this.config.admin?.quoteMcpUrl) for (const r of removes) await assertNoBookQuotes(this.config.admin.quoteMcpUrl, r.uuid);
         try { await this.commands.calibre(mode === "apply" ? "duplicates-apply" : "duplicates-preview", JSON.stringify(params.plan), log); }
         catch (error) {
           if (mode === "apply") {

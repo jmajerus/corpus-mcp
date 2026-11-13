@@ -440,7 +440,7 @@ it("records and refreshes actual partial corrections while keeping the job faile
 
 it("serves duplicate review and protects its write routes with Access identity",async()=>{
  expect((await fetch(`${base}/admin/duplicates`)).status).toBe(200);
- expect(await(await fetch(`${base}/api/duplicates`)).json()).toMatchObject({pairs:[],total:0,last_scan:expect.any(String),calibre_web_url:"http://calibre-web.localdomain:8083",writable_library:"main"});
+ expect(await(await fetch(`${base}/api/duplicates`)).json()).toMatchObject({groups:[],pairs:0,last_scan:expect.any(String),calibre_web_url:"http://calibre-web.localdomain:8083",writable_library:"main"});
  for(const route of ["preview","review"]){
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);
