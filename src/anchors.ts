@@ -85,6 +85,63 @@ function labels(db: DB, bookId: string) {
   return (n: number) => page.get(bookId, n);
 }
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** What may come before a heading's title in its paragraph: a number, "Chapter 3:", "IV." and the like. */
+const NUMBERING = /^\s*(?:(?:chapter|part|section|book)\s+)?(?:\d+|[ivxlcdm]+)?\s*[.:)\-–—]?\s*$/i;
+
+/**
+ * Where a heading's title is printed in a page's text, at or after `from`: only where it starts a paragraph,
+ * after at most its numbering, since prose often names a section before or after its heading. Tried as
+ * written, then without a numbering prefix ("Chapter 3: ", "IV. ") the outline has and the page may print
+ * differently. Whole words only, so punctuation, case, and spacing don't matter but "Part" never matches
+ * "Particle". Its paragraph's start, and where the title ends (the next search starts there, so two headings
+ * with one title find two places); null when it isn't found.
+ */
+function titleOffset(text: string, title: string, from: number): { start: number; end: number } | null {
+  const variants = [title, title.replace(/^.*?:\s+/, ""), title.replace(/^(?:(?:chapter|part|section|book)\s+)?(?:\d+|[ivxlcdm]+)\b[.:)]?\s+/i, "")];
+  for (const variant of [...new Set(variants)]) {
+    const words = variant.match(/[\p{L}\p{N}]+/gu);
+    if (!words) continue;
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${words.map(escapeRegExp).join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "giu");
+    pattern.lastIndex = from;
+    for (let m = pattern.exec(text); m; m = pattern.exec(text)) {
+      const paragraphStart = text.lastIndexOf("\n", m.index - 1) + 1;
+      if (NUMBERING.test(text.slice(paragraphStart, m.index))) return { start: paragraphStart, end: m.index + m[0].length };
+    }
+  }
+  return null;
+}
+
+/**
+ * The outline path in effect at an offset on a page. A page's section_path is the deepest heading starting
+ * at or before the page, so a passage before a heading that starts partway down the page (common in a
+ * reading location) would get that later heading. Headings starting on this page are found in its text by
+ * their titles, in outline order; a passage before one keeps the section it was in. A heading whose title
+ * isn't found counts as starting where the one before it did (the top of the page for the first), as before.
+ */
+export function sectionAt(db: DB, bookId: string, pageIndex: number, offset: number): string | null {
+  const entries = db.prepare("SELECT title, path, start_page FROM outline WHERE book_id = ? AND start_page IS NOT NULL AND start_page <= ? ORDER BY start_page, ord")
+    .all(bookId, pageIndex) as { title: string; path: string; start_page: number }[];
+  const onPage = entries.filter((e) => e.start_page === pageIndex);
+  let current = entries.filter((e) => e.start_page < pageIndex).at(-1)?.path ?? null;
+  if (!onPage.length) return current;
+  const text = (db.prepare("SELECT text FROM pages WHERE book_id = ? AND page_index = ?").pluck().get(bookId, pageIndex) as string | undefined) ?? "";
+  let from = 0;
+  let previous = 0;
+  for (const entry of onPage) {
+    const at = titleOffset(text, entry.title, from);
+    // Not found: where the heading before it was, as before this was looked up.
+    if ((at?.start ?? previous) > offset) break;
+    current = entry.path;
+    if (at) {
+      previous = at.start;
+      from = at.end;
+    }
+  }
+  return current;
+}
+
 /** A printed page or range ("p. 211–212"); null without printed page labels (an EPUB's locations). */
 function locator(start: string | null, end: string | null): string | null {
   return start ? `p. ${start}${end && end !== start ? `–${end}` : ""}` : null;
@@ -97,7 +154,7 @@ function anchorOf(c: Corpus, book: BookRow, a: QuoteAnchor): Anchor {
   return {
     calibre_uuid: book.uuid!, sha256: book.sha256,
     start_page: a.start_page, start_offset: a.start_offset, end_page: a.end_page, end_offset: a.end_offset,
-    page_label: s?.label ?? null, end_page_label: e?.label ?? null, section: s?.section_path ?? null,
+    page_label: s?.label ?? null, end_page_label: e?.label ?? null, section: s ? sectionAt(c.db, book.id, a.start_page, a.start_offset) : null,
     prefix: a.prefix, suffix: a.suffix, text: a.text,
   };
 }
@@ -274,7 +331,19 @@ export function reanchorAnchors(db: DB, data: DataStore): { reanchored: number; 
   const counts = { reanchored: 0, orphaned: 0, found: 0 };
   for (const r of data.prepare("SELECT * FROM anchors").all() as AnchorRow[]) {
     const book = byUuid.get(r.calibre_uuid);
-    if (book && book.sha256 === r.sha256) continue;
+    if (book && book.sha256 === r.sha256) {
+      // Same file, same place; only the section may be out of date (one stored before sectionAt).
+      if (r.status !== "verified") continue;
+      const section = sectionAt(db, book.id, r.start_page, r.start_offset);
+      if (section === r.section_path) continue;
+      const at = new Date().toISOString();
+      data.transaction(() => {
+        data.prepare("UPDATE anchors SET section_path = ?, updated_at = ? WHERE quote_id = ?").run(section, at, r.quote_id);
+        recordChange(data, r.quote_id, "reanchored", "verified", { ...fromRow(r), section }, at);
+      })();
+      counts.reanchored++;
+      continue;
+    }
     if (!book && r.status === "orphaned") continue;
     // Its own pages first, so words the book repeats keep the place they had; then nearby, then anywhere.
     const hit = book

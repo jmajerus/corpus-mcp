@@ -24,6 +24,15 @@ beforeAll(() => {
     { id: 3, title: "Twins", authors: ["Cy Twin"], citekey: "twin2000book", files: { pdf: makePdf({ pages: [["The first copy of the twin text."]] }) } },
     { id: 4, title: "Twins", authors: ["Cy Twin"], citekey: "twin2000book", files: { pdf: makePdf({ pages: [["The second copy of the twin text."]] }) } },
     { id: 6, title: "Handbook", authors: ["Eve Isbn"], isbn: "9780306406157", files: { pdf: makePdf({ pages: [["Every handbook has an index at the back."]] }) } },
+    // A heading partway down page 2, and its title mentioned in the prose before it.
+    { id: 7, title: "Parts", authors: ["Pat Part"], files: { pdf: makePdf({
+      pages: [["The first part begins."], ["Closing words of the first part, before the Second Part begins.", "Second Part", "Opening words of the second part."],
+        ["The last of the second part.", "3 Reconciliation", "Making peace comes third."],
+        // "Part" opening a paragraph as the start of another word, then two headings with one title.
+        ["Particles drift before any heading.", "Part", "Between the two notes.", "Notes", "First notes.", "Notes", "Second notes."]],
+      outline: [{ title: "Chapter 1: First Part", page: 1 }, { title: "Second Part", page: 2 }, { title: "Chapter 3: Reconciliation", page: 3 },
+        { title: "Part", page: 4 }, { title: "Notes", page: 4, children: [{ title: "Notes", page: 4 }] }],
+    }) } },
     { id: 5, title: "Diary", authors: ["Dee Self"], tags: ["private"], files: { pdf: makePdf({ pages: [["Not for anyone at all."]] }) } },
   ]);
   const vocabularyPath = path.join(import.meta.dirname, "vocabulary.json");
@@ -186,5 +195,36 @@ describe("anchors", () => {
     // Quote-mcp can store the anchor it's sent now.
     const now = kinds(before).at(-1)!.anchor;
     expect(storeAnchor(c, o, { quote_id: 7, anchor: now }).status).toBe(200);
+  });
+});
+
+describe("sections", () => {
+  const section = (text: string) => (verify({ book: "main:7", text }).body as { anchor: Anchor }).anchor.section;
+  it("gives a passage before a heading that starts partway down its page the section it is in", () => {
+    expect(section("Closing words of the first part")).toBe("Chapter 1: First Part");
+    expect(section("Opening words of the second part.")).toBe("Second Part");
+    expect(section("The first part begins.")).toBe("Chapter 1: First Part");
+    // The heading prints its number differently from the outline's title.
+    expect(section("The last of the second part.")).toBe("Second Part");
+    expect(section("Making peace comes third.")).toBe("Chapter 3: Reconciliation");
+    expect(section("Particles drift before any heading.")).toBe("Chapter 3: Reconciliation");
+    expect(section("Between the two notes.")).toBe("Part");
+    // The nested "Notes" is the second heading of that title, not the first one again.
+    expect(section("First notes.")).toBe("Notes");
+    expect(section("Second notes.")).toBe("Notes › Notes");
+  });
+
+  it("corrects the section of an anchor stored before, at the next rescan", () => {
+    const { anchor } = verify({ book: "main:7", text: "Closing words of the first part" }).body as { anchor: Anchor };
+    expect(storeAnchor(c, o, { quote_id: 701, anchor }).status).toBe(201);
+    // As an anchor stored before sectionAt was: the page's section.
+    c.data.prepare("UPDATE anchors SET section_path = 'Second Part' WHERE quote_id = 701").run();
+    const before = anchorChanges(c, "0").body as { last: number };
+    expect(reanchorAnchors(c.db, c.data).reanchored).toBe(1);
+    expect(c.data.prepare("SELECT section_path FROM anchors WHERE quote_id = 701").pluck().get()).toBe("Chapter 1: First Part");
+    const changes = (anchorChanges(c, String(before.last)).body as { changes: { quote_id: number; kind: string; anchor: Anchor }[] }).changes;
+    expect(changes.map((ch) => [ch.quote_id, ch.kind, ch.anchor.section])).toEqual([[701, "reanchored", "Chapter 1: First Part"]]);
+    expect(reanchorAnchors(c.db, c.data).reanchored).toBe(0);
+    deleteAnchor(c, 701);
   });
 });
