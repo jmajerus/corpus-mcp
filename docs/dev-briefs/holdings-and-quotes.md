@@ -113,8 +113,8 @@ Then the anchors become corpus-mcp's only quote data:
 
 In this order:
 
-1. **The skill.** Once quote-mcp has `add_quote`, `skills/cited-article`
-   calls it instead of `save_quote`, and quote-mcp's `cite_quote` instead of
+1. **The skill.** Once quote-mcp has `add_quote`, the cited-article skill
+   (now in the sibling `authoring-skills` repository) calls it instead of `save_quote`, and quote-mcp's `cite_quote` instead of
    this one. This is the step that matters soonest: it stops new quotes
    landing here.
 2. **The five quotes.** quote-mcp imports them (origin `corpus`, status

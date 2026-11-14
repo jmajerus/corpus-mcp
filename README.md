@@ -47,14 +47,16 @@ data, and Calibre changes go through a job a person previews and applies.
 
 ## Skills and examples
 
-- **[cited-article](skills/cited-article/SKILL.md)**, a Claude skill that writes an
-  article or book chapter quoting books in the corpus. It saves each passage as a
-  checked quote, files new books in Zotero, and hands over an editable Markdown source
-  with a formatted copy to read. To use it in Claude Code, link the folder into
-  `~/.claude/skills/`.
-- **Example:** [On Curiosity](examples/cited-article/on-curiosity/on-curiosity.formatted.md),
-  a short essay quoting the Brothers Grimm, Thich Nhat Hanh, and Diana Montalion. Its
-  [folder](examples/cited-article/on-curiosity/) also has the source, and HTML and Word copies.
+- **cited-article**, a Claude skill that writes an article or book chapter quoting
+  books in the corpus. It saves each passage as a checked quote, files new books in
+  Zotero, and hands over an editable Markdown source with a formatted copy to read.
+  It now lives in the sibling `authoring-skills` repository, with the other authoring
+  skills and their shared draft checker. To use it in Claude Code, link its folder
+  there into `~/.claude/skills/`.
+- **Example:** *On Curiosity*, a short essay quoting the Brothers Grimm, Thich Nhat
+  Hanh, and Diana Montalion, is in `authoring-skills` too
+  (`examples/cited-article/on-curiosity/`), with its source, HTML and Word copies, and
+  the test that checks it.
 
 ## Quick start
 
