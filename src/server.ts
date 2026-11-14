@@ -12,6 +12,8 @@ import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
 import { duplicateGroups, dismissDuplicate, type DuplicateGroupSelection } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
+import { MAX_UPLOAD_BYTES, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
+import { UPLOAD_HTML } from "./web/upload.js";
 import { metadataCitekeyPreview } from "./metadata-repair.js";
 import { adminMetrics } from "./admin.js";
 import { adminBook, adminBooks, adminCategories, adminCitekeys, oneOf } from "./adminQueries.js";
@@ -333,6 +335,17 @@ async function readJson(req: http.IncomingMessage, limit = 64 * 1024): Promise<u
   }
 }
 
+async function readBytes(req: http.IncomingMessage, limit = MAX_UPLOAD_BYTES): Promise<Buffer> {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) throw new ToolError("Uploaded file exceeds the 250 MB limit.");
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 export interface WebOptions {
   requestAccess?: RequestAccessConfig;
   /** Access signing keys (tests); production fetches the team's keys. */
@@ -380,11 +393,12 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     if (req.method !== "GET" && c.writesPaused) throw new ToolError(c.writesPaused);
     const path = url.pathname;
     const pages: Record<string, string> = {
-      "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
+      "/admin/upload": UPLOAD_HTML, "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes|\/metadata|\/metadata-preview|\/cover)?$/);
+    const uploadItemPath = path.match(/^\/api\/upload\/files\/([^/]+)(\/remove)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
@@ -459,6 +473,50 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         && g.fingerprints && typeof g.fingerprints === "object" && (g.discard_conflicts === undefined || typeof g.discard_conflicts === "boolean");
       if (!body || !Array.isArray(body.groups) || !body.groups.length || !body.groups.every(valid)) throw new ToolError("Choose a keeper and the records to trash first.");
       sendJson(res,202,{id:runner.start("duplicates","preview",{duplicates:body.groups as DuplicateGroupSelection[]},by)});
+    }
+    else if (req.method === "GET" && path === "/api/upload") {
+      sendJson(res, 200, listStagedUploads(c, config));
+    }
+    else if (req.method === "POST" && path === "/api/upload/files") {
+      const auth = await accessIdentity(req, admin.access, web.options.accessKeys);
+      if ("error" in auth) { sendJson(res, auth.status, { error: auth.error }); return; }
+      const by = auth.identity.email ?? auth.identity.subject;
+      const contentType = String(req.headers["content-type"] ?? "");
+      if (contentType.startsWith("application/octet-stream")) {
+        const rawHeader = req.headers["x-upload-filename"];
+        if (typeof rawHeader !== "string" || !rawHeader.trim()) throw new ToolError("Send the file name in the x-upload-filename header.");
+        let filename: string;
+        try { filename = decodeURIComponent(rawHeader); } catch { filename = rawHeader; }
+        const data = await readBytes(req);
+        sendJson(res, 201, stageUpload(c, config, filename, data, by));
+      } else if (contentType.startsWith("application/json")) {
+        const body = (await readJson(req, 16 * 1024 * 1024)) as { filename?: unknown; data_base64?: unknown };
+        if (typeof body.filename !== "string" || typeof body.data_base64 !== "string") throw new ToolError("Send filename and data_base64.");
+        sendJson(res, 201, stageUpload(c, config, body.filename, Buffer.from(body.data_base64, "base64"), by));
+      } else {
+        sendJson(res, 400, { error: "Send application/octet-stream or application/json." });
+      }
+    }
+    else if (req.method === "POST" && uploadItemPath && !uploadItemPath[2]) {
+      const by = await writer(); if (by === null) return;
+      const body = (await readJson(req)) as Record<string, unknown>;
+      sendJson(res, 200, updateStagedUpload(c, config, decodeURIComponent(uploadItemPath[1]), body));
+    }
+    else if (req.method === "POST" && uploadItemPath?.[2] === "/remove") {
+      const by = await writer(); if (by === null) return;
+      await readJson(req);
+      sendJson(res, 200, removeStagedUpload(config, decodeURIComponent(uploadItemPath[1])));
+    }
+    else if (req.method === "POST" && path === "/api/upload/clear") {
+      const by = await writer(); if (by === null) return;
+      await readJson(req);
+      sendJson(res, 200, clearStagedUploads(config));
+    }
+    else if (req.method === "POST" && path === "/api/upload/preview") {
+      const by = await writer(); if (by === null) return;
+      const body = (await readJson(req)) as { items?: unknown };
+      if (!body || !Array.isArray(body.items) || !body.items.length) throw new ToolError("Select at least one staged file to upload.");
+      sendJson(res, 202, { id: runner.start("upload", "preview", { upload: body.items as UploadSelection[] }, by) });
     }
     else if (req.method === "GET" && path === "/api/books") {
       const p = url.searchParams;

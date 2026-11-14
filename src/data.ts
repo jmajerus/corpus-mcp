@@ -283,10 +283,12 @@ export function notYetLogged(data: DataStore, changes: Change[]): Change[] {
   const sameChange = data.prepare(`
     SELECT 1 FROM changes WHERE source = 'admin-job' AND book_id = ? AND kind = ? AND COALESCE(detail, '') = COALESCE(?, '') AND at >= ? LIMIT 1`);
   const formatAdded = data.prepare("SELECT 1 FROM changes WHERE source = 'admin-job' AND kind = 'format_added' AND book_id = ? AND at >= ? LIMIT 1");
+  const bookAdded = data.prepare("SELECT 1 FROM changes WHERE source = 'admin-job' AND kind = 'book_added' AND book_id = ? AND at >= ? LIMIT 1");
   return changes.filter((c) => {
     if (!c.book_id) return true;
     if (c.kind === "tag_added" || c.kind === "tag_removed") return !sameChange.get(c.book_id, c.kind, c.detail ?? null, since);
     if (c.kind === "book_reextracted" && c.detail?.includes("→")) return !formatAdded.get(c.book_id, since);
+    if (c.kind === "book_added") return !bookAdded.get(c.book_id, since);
     return true;
   });
 }

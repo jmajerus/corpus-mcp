@@ -272,7 +272,7 @@ it("reports Zotero as unconfigured, and refuses its job", async () => {
 });
 
 it("serves page scripts that parse, with no escapes lost to the TypeScript template literal", async () => {
-  for (const page of ["admin", "admin/books", "admin/books/main:1", "admin/categories", "admin/citekeys", "admin/proposals", "admin/shelves",
+  for (const page of ["admin", "admin/books", "admin/books/main:1", "admin/upload", "admin/duplicates", "admin/categories", "admin/citekeys", "admin/proposals", "admin/shelves",
     "admin/jobs", "admin/jobs/1", "admin/changes", "admin/books/main:1/read", "admin/zotero"]) {
     const html = await (await fetch(`${base}/${page}`)).text();
     expect(html).toContain('aria-label="Admin pages"');
@@ -478,13 +478,26 @@ it("records and refreshes actual partial corrections while keeping the job faile
  }finally{failMetadataWrite=false;}
 });
 
-it("serves duplicate review and protects its write routes with Access identity",async()=>{
+it("serves duplicate review and upload pages and protects their write routes with Access identity",async()=>{
  expect((await fetch(`${base}/admin/duplicates`)).status).toBe(200);
+ expect((await fetch(`${base}/admin/upload`)).status).toBe(200);
+ expect(await (await fetch(`${base}/admin/books`)).text()).toContain('href="/admin/upload"');
  expect(await(await fetch(`${base}/api/duplicates`)).json()).toMatchObject({groups:[],pairs:0,last_scan:expect.any(String),calibre_web_url:"http://calibre-web.localdomain:8083",writable_library:"main"});
+ expect(await(await fetch(`${base}/api/upload`)).json()).toMatchObject({items:[],last_scan:expect.any(String),calibre_web_url:"http://calibre-web.localdomain:8083",writable_library:"main"});
  for(const route of ["preview","review"]){
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
   expect((await fetch(`${base}/api/duplicates/${route}`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);
  }
+ for(const route of ["files","clear","preview"]){
+  expect((await fetch(`${base}/api/upload/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
+ }
+ expect((await fetch(`${base}/api/upload/files`,{method:"POST",headers:{"content-type":"application/octet-stream","x-upload-filename":"Networks.pdf","cf-access-jwt-assertion":token},body:makePdf({pages:[["Weak ties carry novel information"]]})})).status).toBe(201);
+ const staged = await (await fetch(`${base}/api/upload`)).json();
+ expect(staged.items).toHaveLength(1);
+ expect(staged.items[0].exact_matches).toEqual([expect.objectContaining({ id: "main:1", matched_format: "PDF" })]);
+ expect(staged.items[0].blockers[0]).toContain("Identical file is already in Calibre");
+ expect(staged.items[0].draft.action).toBe("skip");
+ expect((await fetch(`${base}/api/upload/clear`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(200);
 });
 
 

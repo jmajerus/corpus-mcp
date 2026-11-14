@@ -128,7 +128,7 @@ describe("corpus-source (forced command)", () => {
 
   it("refuses the Calibre write commands when Calibre-Web keeps the library split", () => {
     splitLibrary();
-    for (const command of ["tags-apply", "convert-apply", "metadata-preview", "duplicates-apply", "calibre-library"]) {
+    for (const command of ["tags-apply", "convert-apply", "metadata-preview", "duplicates-apply", "upload-preview", "upload-apply", "calibre-library"]) {
       const out = source(command, "{}");
       expect(out.status, command).toBe(1);
       expect(out.stdout).toBe("");

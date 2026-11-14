@@ -163,8 +163,7 @@ inside the folder. Kindle `.kfx-zip` archives need calibre's DeDRM plugin,
 with the account's keyfile imported, and KFX Input; one still encrypted after
 the add is removed again and counts as failed. The convert job then gives
 every book without an EPUB or PDF one: an EPUB from MOBI, AZW, AZW3, PRC or KFX
-(for chapter locators), or the PDF inside a print-replica KFX. Calibre-Web's
-own upload page adds files as they are, so run the convert job after uploads too.
+(for chapter locators), or the PDF inside a print-replica KFX. For browser uploads, use `/admin/upload` (`upload-preview` / `upload-apply`, backed by `tools/calibre-upload.py`), which checks for duplicates first, attaches missing formats to existing records, and converts MOBI/AZW/KFX files automatically.
 
 ## Configuration
 

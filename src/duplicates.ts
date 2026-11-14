@@ -8,7 +8,7 @@ import { recordChanges } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 
-const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+export const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
@@ -167,8 +167,8 @@ export function coverColour(file: string): number | null {
 /** Below this a cover reads as black and white. */
 export const GREYSCALE_COVER = 5;
 
-type DuplicateBook = ReturnType<typeof candidateBooks>[number];
-function candidateBooks(c: Corpus) {
+export type DuplicateBook = ReturnType<typeof candidateBooks>[number];
+export function candidateBooks(c: Corpus) {
   const metadata = catalogue(c), references = allReferences(c), shelves = new Map<string, string[]>();
   for (const r of c.db.prepare("SELECT bs.book_id, s.name FROM book_shelves bs JOIN shelves s ON s.id = bs.shelf_id ORDER BY s.name").all() as { book_id: string; name: string }[]) {
     shelves.set(r.book_id, [...(shelves.get(r.book_id) ?? []), r.name]);
