@@ -44,7 +44,7 @@ let kinds = {}, canWrite = false;
 
 async function load() {
   let j;
-  try { j = await api("/api/admin/jobs/" + id); } catch (e) { document.getElementById("title").textContent = e.message; return; }
+  try { j = await api("/api/admin/jobs/" + id); } catch (e) { document.getElementById("title").textContent = e.message; setTimeout(load, 2000); return; }
   const title = (kinds[j.kind] || {}).title || j.kind;
   document.title = "#" + j.id + " " + title + " · Corpus Admin";
   document.getElementById("title").textContent = "#" + j.id + " " + title + (j.mode === "preview" ? " — preview" : "");
