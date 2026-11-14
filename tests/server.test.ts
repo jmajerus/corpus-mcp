@@ -392,6 +392,28 @@ it("verifies and anchors quote-mcp's quotes on the LAN only", async () => {
   expect((await post("/api/verify", { book: "main:1", text: "Weak ties" }, tunnel)).status).toBe(403);
   expect((await post("/api/anchors", { quote_id: 42, anchor }, tunnel)).status).toBe(403);
   expect((await fetch(`${base}/api/anchors/changes`, { headers: tunnel })).status).toBe(403);
+  // The hint is file_page; page, its old name, still works, and the two must agree.
+  const byFilePage = await (await post("/api/verify", { book: "main:1", text: "Weak ties carry novel information", file_page: 1 })).json();
+  expect(byFilePage).toMatchObject({ match: true, file_page: anchor.start_page + 1, end_file_page: anchor.end_page + 1 });
+  expect((await post("/api/verify", { book: "main:1", text: "Weak ties", page: 1 })).status).toBe(200);
+  expect((await post("/api/verify", { book: "main:1", text: "Weak ties", file_page: 1, page: 2 })).status).toBe(400);
+});
+
+it("serves a book's CSL item on the LAN only", async () => {
+  const csl = await fetch(`${base}/api/csl?book=main:1`);
+  expect(csl.status).toBe(200);
+  const { item, warnings } = await csl.json();
+  expect(item).toMatchObject({ type: "book", title: "Networks" });
+  expect(item).not.toHaveProperty("locator");
+  expect(Array.isArray(warnings)).toBe(true);
+  // By citekey or Calibre UUID too.
+  const { books } = await (await fetch(`${base}/api/holdings/books`)).json();
+  expect((await (await fetch(`${base}/api/csl?book=${encodeURIComponent(books[0].calibre_uuid)}`)).json()).item).toEqual(item);
+  if (item["citation-key"]) expect((await (await fetch(`${base}/api/csl?book=${item["citation-key"]}`)).json()).item).toEqual(item);
+  expect((await fetch(`${base}/api/csl?book=main:999`)).status).toBe(404);
+  expect((await fetch(`${base}/api/csl`)).status).toBe(400);
+  const tunnel = { Host: "public.example", "cf-ray": "test", "cf-access-jwt-assertion": token };
+  expect((await fetch(`${base}/api/csl?book=main:1`, { headers: tunnel })).status).toBe(403);
 });
 
 it("applies reviewed metadata in one authenticated job using identical preview/apply plans", async () => {

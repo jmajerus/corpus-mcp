@@ -16,9 +16,10 @@ import type { TerminologyFollower } from "./taxonomy/terminology.js";
 export { validIsbn };
 
 /**
- * Tool implementations over the index. Pages are 1-based in every input and output.
- * For PDFs a page is a physical page and `page_label` is its printed number. For EPUB and
- * MOBI a page is a location in the service's fixed layout: stable, but not citable.
+ * Tool implementations over the index. A page has two names. `file_page` is its 1-based position in the
+ * file: a physical page of a PDF, or for EPUB and MOBI a reading location in the service's fixed layout,
+ * stable but nothing to cite. `page_label` is the number printed on a PDF page, the one to cite. `page`,
+ * the old name for `file_page`, is still accepted and returned for one release.
  * Every tool that takes a book id also takes a citekey.
  */
 
@@ -89,8 +90,38 @@ function getIndexedBook(c: Corpus, idOrCitekey: string): BookRow & { page_count:
 
 function checkPage(book: { id: string; page_count: number }, page: number): void {
   if (!Number.isInteger(page) || page < 1 || page > book.page_count) {
-    throw new ToolError(`Page ${page} is outside ${book.id}, which has pages 1–${book.page_count}.`);
+    throw new ToolError(`file_page ${page} is outside ${book.id}, which has file pages 1–${book.page_count}.`);
   }
+}
+
+/** A file page from its name and its deprecated alias (`page`, `start_page`, `end_page`); both given must agree. */
+export function filePageArg(value: number | undefined, alias: number | undefined, name: string, aliasName: string): number | undefined {
+  if (value !== undefined && alias !== undefined && value !== alias) {
+    throw new ToolError(`${name} ${value} and ${aliasName} ${alias} disagree. ${aliasName} is the deprecated name for ${name}; pass ${name} only.`);
+  }
+  return value ?? alias;
+}
+
+/**
+ * The file page a printed page number names, in a PDF. Labels are matched as printed, then ignoring case
+ * ("xiv" for "XIV"). A label on more than one page (a book that restarts its numbering) is refused.
+ */
+export function filePageForLabel(c: Corpus, book: BookRow & { page_count: number }, label: string): number {
+  if (book.reflowable) {
+    throw new ToolError(`${book.id} is ${book.format?.toUpperCase()}, which has reading locations, not printed page numbers, so there is no page_label to resolve. Cite it by chapter.`);
+  }
+  const wanted = label.trim();
+  const exact = c.db.prepare("SELECT page_index FROM pages WHERE book_id = ? AND label = ? ORDER BY page_index").pluck().all(book.id, wanted) as number[];
+  const found = exact.length ? exact
+    : c.db.prepare("SELECT page_index FROM pages WHERE book_id = ? AND label = ? COLLATE NOCASE ORDER BY page_index").pluck().all(book.id, wanted) as number[];
+  if (found.length === 1) return found[0] + 1;
+  if (found.length > 1) {
+    throw new ToolError(`page_label "${wanted}" is printed on ${found.length} pages of ${book.id} (file_page ${found.map((i) => i + 1).join(", ")}). Pass file_page instead.`);
+  }
+  const labelled = c.db.prepare("SELECT COUNT(*) FROM pages WHERE book_id = ? AND label IS NOT NULL").pluck().get(book.id) as number;
+  throw new ToolError(labelled
+    ? `No page of ${book.id} is labelled "${wanted}". Pass file_page instead, or check the label with read_book.`
+    : `${book.id} has no printed page labels, so page_label "${wanted}" can't be resolved. Pass file_page.`);
 }
 
 /** The key that identifies the book in Zotero: Calibre's identifier overrides a pinned key. */
@@ -234,10 +265,12 @@ export function searchCorpus(c: Corpus, args: SearchArgs) {
       title: row.title,
       authors: JSON.parse(row.authors) as string[],
       year: row.year,
-      page: row.page_index + 1,
+      file_page: row.page_index + 1,
       // "location" pages are positions in a reflowable book, not citable page numbers.
       page_kind: row.reflowable ? "location" : "pdf_page",
       page_label: row.label,
+      /** Deprecated: file_page's old name, for one release. */
+      page: row.page_index + 1,
       section: row.section_path,
       snippet: row.snippet,
     });
@@ -292,8 +325,10 @@ export function getBookOutline(c: Corpus, bookId: string) {
     outline: outline.map((o) => ({
       level: o.level,
       title: o.title,
-      page: o.start_page === null ? null : o.start_page + 1,
+      file_page: o.start_page === null ? null : o.start_page + 1,
       ...(book.reflowable ? {} : { page_label: o.label }),
+      // Deprecated: file_page's old name, for one release.
+      page: o.start_page === null ? null : o.start_page + 1,
     })),
     ...(outline.length ? {} : { note: "This book has no outline. Read it by page range, or search within it with search_corpus." }),
   };
@@ -362,7 +397,11 @@ export function listTags(c: Corpus, args: ListTagsArgs = {}) {
   };
 }
 
-export interface ReadArgs { book_id: string; start_page?: number; end_page?: number; section?: string; max_chars?: number }
+export interface ReadArgs {
+  book_id: string; file_page?: number; end_file_page?: number; section?: string; max_chars?: number;
+  /** Deprecated names for file_page and end_file_page, for one release. */
+  start_page?: number; end_page?: number;
+}
 
 export function readBook(c: Corpus, args: ReadArgs) {
   const book = getIndexedBook(c, args.book_id);
@@ -383,12 +422,12 @@ export function readBook(c: Corpus, args: ReadArgs) {
     start = entry.start_page + 1;
     end = next ? next.start_page : book.page_count;
   } else {
-    start = args.start_page ?? 1;
-    end = args.end_page ?? start;
+    start = filePageArg(args.file_page, args.start_page, "file_page", "start_page") ?? 1;
+    end = filePageArg(args.end_file_page, args.end_page, "end_file_page", "end_page") ?? start;
   }
   checkPage(book, start);
   checkPage(book, end);
-  if (end < start) throw new ToolError(`end_page ${end} is before start_page ${start}.`);
+  if (end < start) throw new ToolError(`end_file_page ${end} is before file_page ${start}.`);
 
   const pages = c.db.prepare(
     "SELECT page_index, label, section_path, text FROM pages WHERE book_id = ? AND page_index BETWEEN ? AND ? ORDER BY page_index",
@@ -399,8 +438,10 @@ export function readBook(c: Corpus, args: ReadArgs) {
   let lastRead = start - 1;
   let truncated = false;
   for (const page of pages) {
-    const kind = book.reflowable ? "location" : "page";
-    const header = `--- ${kind} ${page.page_index + 1}${page.label ? ` (printed ${page.label})` : ""}${page.section_path ? ` · ${page.section_path}` : ""} ---`;
+    const where = book.reflowable
+      ? `file_page ${page.page_index + 1} (reading location)`
+      : `file_page ${page.page_index + 1}${page.label ? ` · page_label ${page.label}` : ""}`;
+    const header = `--- ${where}${page.section_path ? ` · ${page.section_path}` : ""} ---`;
     const block = `${header}\n${page.text}`;
     if (used + block.length > maxChars && parts.length) {
       truncated = true;
@@ -411,28 +452,37 @@ export function readBook(c: Corpus, args: ReadArgs) {
     lastRead = page.page_index + 1;
   }
   const continuation = truncated || lastRead < end
-    ? `\n\n[Read pages ${start}–${lastRead} of ${start}–${end}. Continue with start_page ${lastRead + 1}.]`
+    ? `\n\n[Read file pages ${start}–${lastRead} of ${start}–${end}. Continue with file_page ${lastRead + 1}.]`
     : "";
   const note = book.reflowable
-    ? `\n[${book.format?.toUpperCase()}: these are reading locations, not page numbers; cite this book by chapter.]`
-    : "";
+    ? `\n[${book.format?.toUpperCase()}: file_page numbers here are reading locations, not page numbers; cite this book by chapter.]`
+    : "\n[file_page is the position in the PDF; page_label is the printed number to cite.]";
   return `${book.title} (${book.id})${note}\n\n${parts.join("\n\n")}${continuation}`;
 }
 
-export interface RenderArgs { book_id: string; page: number; scale?: number }
+export interface RenderArgs {
+  book_id: string; file_page?: number; scale?: number;
+  /** Deprecated name for file_page, for one release. */
+  page?: number;
+}
 
-export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: number; height: number } {
+export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: number; height: number; file_page: number; page_label: string | null } {
   const book = getIndexedBook(c, args.book_id);
   if (book.reflowable) throw new ToolError(`${book.id} is ${book.format?.toUpperCase()}, which has no fixed pages to render. Use read_book.`);
-  checkPage(book, args.page);
+  const filePage = filePageArg(args.file_page, args.page, "file_page", "page");
+  if (filePage === undefined) throw new ToolError("Pass file_page: the page's position in the PDF.");
+  checkPage(book, filePage);
+  const label = c.db.prepare("SELECT label FROM pages WHERE book_id = ? AND page_index = ?").pluck().get(book.id, filePage - 1) as string | null | undefined;
   const scale = Math.min(Math.max(args.scale ?? 1.5, 0.5), 3);
   const file = path.join(c.booksRoot, book.file_path!);
   if (!fs.existsSync(file)) throw new ToolError(`The file for ${book.id} is missing on disk. The index may be out of date.`);
   const doc = openBook(fs.readFileSync(file), book.format!);
   try {
-    const page = doc.loadPage(args.page - 1);
+    const page = doc.loadPage(filePage - 1);
     const pixmap = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true);
-    const result = { png: Buffer.from(pixmap.asPNG()).toString("base64"), width: pixmap.getWidth(), height: pixmap.getHeight() };
+    const result = {
+      png: Buffer.from(pixmap.asPNG()).toString("base64"), width: pixmap.getWidth(), height: pixmap.getHeight(), file_page: filePage, page_label: label ?? null,
+    };
     pixmap.destroy();
     page.destroy();
     return result;
@@ -513,7 +563,41 @@ export function printedIsbns(book: BookRow): IsbnCandidate[] {
   return book.printed_isbns ? (JSON.parse(book.printed_isbns) as IsbnCandidate[]) : [];
 }
 
-export interface CiteArgs { book_id: string; page?: number; end_page?: number }
+export interface CiteArgs {
+  book_id: string;
+  file_page?: number; end_file_page?: number;
+  /** Printed page numbers (PDF), resolved to file pages; refused when a label is on more than one page. */
+  page_label?: string; end_page_label?: string;
+  /** Deprecated names for file_page and end_file_page, for one release. */
+  page?: number; end_page?: number;
+}
+
+/** The file pages a citation names, from file_page (or its alias page) or page_label; null when it names none. */
+function citedFilePages(c: Corpus, book: BookRow, args: CiteArgs): { from: number; to: number } | null {
+  let from = filePageArg(args.file_page, args.page, "file_page", "page");
+  let to = filePageArg(args.end_file_page, args.end_page, "end_file_page", "end_page");
+  if (args.page_label === undefined && args.end_page_label === undefined) {
+    if (from === undefined && to !== undefined) throw new ToolError("end_file_page needs file_page.");
+    return from === undefined ? null : { from, to: to ?? from };
+  }
+  const indexed = getIndexedBook(c, book.id);
+  if (args.page_label !== undefined) {
+    const resolved = filePageForLabel(c, indexed, args.page_label);
+    if (from !== undefined && from !== resolved) {
+      throw new ToolError(`page_label "${args.page_label}" is file_page ${resolved}, not ${from}. Pass one of them.`);
+    }
+    from = resolved;
+  }
+  if (args.end_page_label !== undefined) {
+    const resolved = filePageForLabel(c, indexed, args.end_page_label);
+    if (to !== undefined && to !== resolved) {
+      throw new ToolError(`end_page_label "${args.end_page_label}" is file_page ${resolved}, not ${to}. Pass one of them.`);
+    }
+    to = resolved;
+  }
+  if (from === undefined) throw new ToolError("end_page_label needs page_label or file_page.");
+  return { from, to: to ?? from };
+}
 
 /**
  * A book's citation as a CSL JSON item, with a CSL locator for a page range (null when the pages are
@@ -538,26 +622,30 @@ export function citePassage(c: Corpus, args: CiteArgs) {
   let locator: { label: "page"; locator: string } | null = null;
   let position: Record<string, unknown> | null = null;
   const warnings: string[] = [];
-  if (args.page !== undefined) {
+  const cited = citedFilePages(c, book, args);
+  if (cited) {
     const indexed = getIndexedBook(c, book.id);
-    const end = args.end_page ?? args.page;
-    checkPage(indexed, args.page);
+    const { from, to: end } = cited;
+    checkPage(indexed, from);
     checkPage(indexed, end);
+    if (end < from) throw new ToolError(`The cited range ends (file_page ${end}) before it starts (file_page ${from}).`);
     const pageRow = c.db.prepare<[string, number], PageRow>("SELECT * FROM pages WHERE book_id = ? AND page_index = ?");
-    const first = pageRow.get(book.id, args.page - 1)!;
+    const first = pageRow.get(book.id, from - 1)!;
     const last = pageRow.get(book.id, end - 1)!;
     if (!book.reflowable) {
-      const a = first.label ?? String(args.page);
+      const a = first.label ?? String(from);
       const b = last.label ?? String(end);
       locator = { label: "page", locator: a === b ? a : `${a}-${b}` };
       citation.pages = locator.locator;
-      if (!first.label) warnings.push("This PDF has no printed page labels; pages are physical page numbers.");
+      if (!first.label) warnings.push("This PDF has no printed page labels; the locator is the file page.");
     } else {
       warnings.push("EPUB and MOBI locations are not page numbers, so there is no locator. Name the chapter (position.section) in the text if it matters.");
     }
     position = {
-      page: args.page, end_page: end, page_kind: book.reflowable ? "location" : "page", section: first.section_path,
+      file_page: from, end_file_page: end, page_kind: book.reflowable ? "location" : "page", section: first.section_path,
       ...(book.reflowable ? {} : { page_label: first.label, end_page_label: last.label }),
+      // Deprecated: file_page's old names, for one release.
+      page: from, end_page: end,
     };
   }
   if (!book.publisher) warnings.push("Calibre has no publisher for this book.");
@@ -572,10 +660,10 @@ export function citePassage(c: Corpus, args: CiteArgs) {
   const printed = yearSource === "printed" ? printedYears(book).find((y) => y.year === year && y.kind !== "reprint") : undefined;
   const result = {
     csl, locator, position, ...keys, bibtex, isbn, isbn_candidates: isbnCandidates, year_source: yearSource,
-    ...(printed ? { year_evidence: { page: printed.page, page_label: printed.page_label, context: printed.context } } : {}), citation,
+    ...(printed ? { year_evidence: { file_page: printed.page, page_label: printed.page_label, context: printed.context, page: printed.page } } : {}), citation,
   };
   if (printed) {
-    warnings.push(`Calibre has no publication year; ${year} is from the book's own text (${printed.position === "back" ? "back page" : "page"} ${printed.page}: "${printed.context}"). Check it, and add it in Calibre.`);
+    warnings.push(`Calibre has no publication year; ${year} is from the book's own text (${printed.position === "back" ? "back " : ""}file_page ${printed.page}${printed.page_label ? `, page_label ${printed.page_label}` : ""}: "${printed.context}"). Check it, and add it in Calibre.`);
   }
   if (keys.citekey_source === "pinned") return { ...result, warnings };
 

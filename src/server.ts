@@ -42,9 +42,9 @@ import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
 import { etagMatches, holdingsBooksResponse } from "./holdings.js";
-import { anchorChanges, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
+import { anchorChanges, cslAnswer, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
-import { ZoteroSync, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
+import { ZoteroSync, commitPin, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import {
   type BookRow, type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
   getBook, searchCorpus, tagCleanupPlan, unpinCitekey,
@@ -53,12 +53,14 @@ import {
 const VERSION = "0.2.0";
 
 const INSTRUCTIONS = `Search, read, and cite books in the Calibre libraries (books that are not Zotero attachments; use the Zotero server for those).
-Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). Pages are 1-based. For PDFs a page is a physical page and page_label is the printed number to cite. For EPUB and MOBI a page is a stable reading location, not a citable page number; cite those by chapter (the section path).
-Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey.
+Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). A page has two names: file_page is its 1-based position in the file, and page_label is the number printed on a PDF page, the one to cite. Never pass a printed number as file_page; cite_passage takes page_label too. For EPUB and MOBI, file_page is a stable reading location with no printed number; cite those by chapter (the section path). page, the old name for file_page, still works for one release.
+Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey, which then checks Zotero and says whether the book is matched there.
 Quotes are kept in quote-mcp: save one with its add_quote (work = a book id or citekey from here), which checks the words against the book here, and cite it with its cite_quote. This server has no quote tools.`;
 
 const bookId = z.string().describe('Book id from search_corpus or list_books (e.g. "main:42"), or the book\'s citekey');
 const page = z.number().int().min(1);
+const filePage = (what: string) => page.optional().describe(`${what}: its 1-based position in the file (a physical PDF page; for EPUB and MOBI a reading location, nothing to cite). Not the printed page number`);
+const deprecatedPage = (of: string) => page.optional().describe(`Deprecated name for ${of}, kept for one release; pass ${of}`);
 
 function json(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -86,6 +88,11 @@ async function runAsync(body: () => Promise<CallToolResult>): Promise<CallToolRe
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
+export interface ServerOptions {
+  /** The HTTP server's Zotero sync, which pin_citekey runs to commit a filing. */
+  zotero?: ZoteroSync | null;
+}
+
 /** Adds the Zotero mirror's view of the book to a citation: its item, or a warning before filing a copy. */
 function withZotero<T extends { warnings: string[] }>(c: Corpus, bookId: string, cite: T) {
   const info = zoteroCiteInfo(c, getBook(c, bookId));
@@ -93,12 +100,12 @@ function withZotero<T extends { warnings: string[] }>(c: Corpus, bookId: string,
   return { ...cite, zotero: info.zotero, zotero_synced_at: info.synced_at, warnings: info.note ? [...cite.warnings, info.note] : cite.warnings };
 }
 
-export function createServer(c: Corpus): McpServer {
+export function createServer(c: Corpus, options: ServerOptions = {}): McpServer {
   const server = new McpServer({ name: "corpus-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
 
   server.registerTool("search_corpus", {
     title: "Search book text",
-    description: "Full-text search over the text of every indexed book. Returns ranked passages with book id, page, page_kind (\"pdf_page\", or \"location\" for EPUB/MOBI, which is not a citable page number), printed page label (PDF), section, and a snippet with matches in «». Words are ANDed; put a phrase in double quotes; end a word with * for a prefix match.",
+    description: "Full-text search over the text of every indexed book. Returns ranked passages with book id, file_page (the position in the file, for read_book and cite_passage), page_kind (\"pdf_page\", or \"location\" for EPUB/MOBI, whose file_page is a reading location and nothing to cite), page_label (the printed page number to cite, PDF only), section, and a snippet with matches in «». page repeats file_page under its old name, for one release. Words are ANDed; put a phrase in double quotes; end a word with * for a prefix match.",
     inputSchema: {
       query: z.string().min(1).describe('Words or "quoted phrases" to find'),
       book_id: bookId.optional().describe("Search within one book"),
@@ -207,18 +214,20 @@ export function createServer(c: Corpus): McpServer {
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",
-    description: "Metadata and table of contents with the page where each section starts. Read this before reading a long book.",
+    description: "Metadata and table of contents with where each section starts: file_page (the position in the file, for read_book) and, for PDFs, page_label (the printed number). page repeats file_page under its old name, for one release. Read this before reading a long book.",
     inputSchema: { book_id: bookId },
     annotations: { title: "Get book outline", ...readOnly },
   }, ({ book_id }) => run(() => json(getBookOutline(c, book_id))));
 
   server.registerTool("read_book", {
     title: "Read book text",
-    description: "Contiguous text for a page range or one outline section, with a header per page. Stops at max_chars on a page boundary and says where to continue.",
+    description: "Contiguous text for a range of file pages or one outline section, with a header per page naming its file_page and, for PDFs, its page_label (the printed number to cite). Stops at max_chars on a page boundary and says where to continue.",
     inputSchema: {
       book_id: bookId,
-      start_page: page.optional().describe("First page (default 1)"),
-      end_page: page.optional().describe("Last page, inclusive (default start_page)"),
+      file_page: filePage("First page to read (default 1)"),
+      end_file_page: filePage("Last page to read, inclusive (default file_page)"),
+      start_page: deprecatedPage("file_page"),
+      end_page: deprecatedPage("end_file_page"),
       section: z.string().optional().describe("Outline section title to read instead of a page range"),
       max_chars: z.number().int().min(500).max(40000).optional().describe("Default 12000"),
     },
@@ -230,7 +239,8 @@ export function createServer(c: Corpus): McpServer {
     description: "A PNG image of one PDF page, for figures, tables, and equations that text extraction garbles. PDF only.",
     inputSchema: {
       book_id: bookId,
-      page: page.describe("Physical page number"),
+      file_page: filePage("The page to render"),
+      page: deprecatedPage("file_page"),
       scale: z.number().min(0.5).max(3).optional().describe("Zoom factor (default 1.5)"),
     },
     annotations: { title: "Render PDF page", ...readOnly },
@@ -239,36 +249,36 @@ export function createServer(c: Corpus): McpServer {
     return {
       content: [
         { type: "image", data: image.png, mimeType: "image/png" },
-        { type: "text", text: `${args.book_id} page ${args.page} (${image.width}×${image.height})` },
+        { type: "text", text: `${args.book_id} file_page ${image.file_page}${image.page_label ? `, page_label ${image.page_label}` : ""} (${image.width}×${image.height})` },
       ],
     };
   }));
 
   server.registerTool("cite_passage", {
     title: "Cite a book",
-    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position. PDF locators use printed page labels; EPUB and MOBI locations are not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. When Calibre has no publication year, the year printed on the book's copyright page is used, with year_source \"printed\" and year_evidence (page and line); confirm it before relying on it. The legacy citation field remains for one release.",
+    description: "A book's citation as a CSL JSON item (csl), with a CSL locator ({ label: \"page\", locator }) for an optional page range and the reading position (file_page and, for PDFs, page_label). Name the pages by file_page (from search_corpus or read_book) or by page_label (the printed number); a label printed on more than one page is refused. PDF locators use printed page labels; EPUB and MOBI file pages are reading locations, not pages, so their locator is null (position.section names the chapter). Also returns the citekey and plain filing data: a BibTeX entry built from Calibre's metadata (bibtex), a check-digit-valid ISBN (isbn), and ISBNs printed in the book (isbn_candidates) when Calibre has none, plus warnings about missing metadata. When Calibre has no publication year, the year printed on the book's copyright page is used, with year_source \"printed\" and year_evidence (page and line); confirm it before relying on it. The legacy citation field remains for one release.",
     inputSchema: {
       book_id: bookId,
-      page: page.optional().describe("Page of the cited passage"),
-      end_page: page.optional().describe("Last page, if the passage spans pages"),
+      file_page: filePage("Where the cited passage starts"),
+      end_file_page: filePage("Where it ends, if it spans pages"),
+      page_label: z.string().min(1).optional().describe("The printed page number where the passage starts (PDF only), instead of file_page"),
+      end_page_label: z.string().min(1).optional().describe("The printed page number where it ends, if it spans pages"),
+      page: deprecatedPage("file_page"),
+      end_page: deprecatedPage("end_file_page"),
     },
     annotations: { title: "Cite a book", ...readOnly },
   }, (args) => run(() => json(withZotero(c, args.book_id, citePassage(c, args)))));
 
   server.registerTool("pin_citekey", {
     title: "Pin a book's citekey",
-    description: "Record a citekey assigned elsewhere, such as by the reference manager the book was filed in. Pinned keys are stored by Calibre UUID, never change on their own, and are then accepted anywhere a book id is. Any BibTeX-safe key is accepted; a key that doesn't follow this server's rule gets a warning.",
+    description: "Record a citekey assigned elsewhere, such as by the reference manager the book was filed in; the last step of filing a book. Pinned keys are stored by Calibre UUID, never change on their own, and are then accepted anywhere a book id is. Any BibTeX-safe key is accepted; a key that doesn't follow this server's rule gets a warning. Then it refreshes the Zotero mirror (through holdings-mcp) and answers with the book's Zotero match: zotero ({ library, key, citekey, matched_by } or null), zotero_state (matched, citekey_differs, not_matched, or not_checked), and zotero_note saying why when it isn't matched. A failed or slow refresh never undoes the pin. Calling it again with the same key re-checks the match.",
     inputSchema: {
       book_id: bookId,
       citekey: z.string().min(1).describe("The citekey the book was given"),
       replace: z.boolean().optional().describe("Replace a different key already pinned to this book"),
     },
     annotations: { title: "Pin a book's citekey", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, (args, extra) => run(() => {
-    // Set by Cloudflare Access; informational only, because LAN requests bypass Access.
-    const email = extra.requestInfo?.headers["cf-access-authenticated-user-email"];
-    return json(pinCitekey(c, args, typeof email === "string" ? email : undefined));
-  }));
+  }, (args, extra) => runAsync(async () => json(await commitPin(c, args, options.zotero, accessEmail(extra)))));
 
   server.registerTool("status", {
     title: "Corpus status",
@@ -513,6 +523,10 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       if (answer.status === 204) res.writeHead(204, { "cache-control": "no-store" }).end();
       else sendJson(res, answer.status, answer.body);
     }
+    else if (req.method === "GET" && path === "/api/csl") {
+      const answer = cslAnswer(c, { excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library }, url.searchParams.get("book"));
+      sendJson(res, answer.status, answer.body);
+    }
     else if (req.method === "GET" && path === "/api/holdings/books") {
       const { body, etag } = holdingsBooksResponse(c, { excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library });
       const headers = { "content-type": "application/json", "cache-control": "no-cache", etag };
@@ -731,7 +745,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
       return;
     }
     // Feeds for the other LAN services: never through the tunnel, whoever signs in.
-    if (/^\/api\/(?:holdings\/|verify$|anchors(?:\/|$))/.test(url.pathname) && via !== "lan") {
+    if (/^\/api\/(?:holdings\/|verify$|csl$|anchors(?:\/|$))/.test(url.pathname) && via !== "lan") {
       res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ error: "This feed is served on the LAN only." }));
       return;
     }
@@ -756,7 +770,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
       }));
       return;
     }
-    const server = createServer(corpus);
+    const server = createServer(corpus, { zotero });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => {
       void transport.close();

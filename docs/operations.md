@@ -114,10 +114,28 @@ to cite an unfiled book by; it's never a key to resolve. `POST /api/verify`
 names its book the same way. It is served on the LAN only; through the tunnel it is a 403, whoever
 signs in.
 
+`GET /api/csl?book=<book id, Calibre UUID, or citekey>` answers
+`{ "item": <CSL JSON item>, "warnings": [...] }`: the item `cite_passage`
+returns, without a locator, for iasp-mcp to build bibliographies with for books
+holdings-mcp reports as not filed in Zotero. Its `id` is the book's citekey
+(Calibre's, else the pinned one), else the proposed one when Calibre's metadata
+blocks none, else `calibre:<uuid>`. An unknown or excluded book is a 404, a key
+naming two different books a 409. LAN only, like the feed.
+
+`pin_citekey` is the commit point of filing a book. After recording the key it
+asks holdings-mcp to refresh (`POST /api/refresh` on `CORPUS_ZOTERO_API`'s
+host, when that is holdings-mcp), syncs the Zotero mirror, which runs the
+matching, and asks holdings-mcp again so it reads the updated books feed. It
+answers with `zotero` (`{ library, key, citekey, matched_by }` or null),
+`zotero_state` (`matched`, `citekey_differs`, `not_matched`, `not_checked`),
+and `zotero_note`. The refresh waits at most 45 s (30 s per holdings-mcp
+request); past that, or when it fails, the pin stands and the note says the
+match may still be on its way. Concurrent pins share one run.
+
 quote-mcp's quotes are checked and anchored here, on the LAN only in the same
 way (§2 of the brief; [src/anchors.ts](../src/anchors.ts)):
 `POST /api/verify` checks a passage against a book's text without saving
-anything, `POST /api/anchors` stores where a quote-mcp quote is (checked
+anything (its hint is `file_page`; `page` is still accepted), `POST /api/anchors` stores where a quote-mcp quote is (checked
 against the book first), `DELETE /api/anchors/<quote id>` removes one, and
 `GET /api/anchors/changes?since=N` numbers every change, including those
 each scan makes when it finds anchors again or orphans them. The feed's `log`

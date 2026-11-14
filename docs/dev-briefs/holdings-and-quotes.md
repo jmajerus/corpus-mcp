@@ -87,10 +87,12 @@ quote-mcp's PLAN.md asks for "a small read-only verify endpoint". It is
 `save_quote`'s check without the save:
 
 `POST /api/verify` with `{ "book": "<book id, citekey, or Calibre UUID>",
-"text": "…", "page": 155 }` (page optional) returns either
+"text": "…", "file_page": 155 }` (file_page optional: a position in the file
+where to look first; `page`, its old name, is still accepted) returns either
 
 - `{ "match": true, "text": "<the book's exact wording>", "anchor": { … },
-  "locator": "p. 211", "page_label": "211", "section": "…" }`, where the
+  "locator": "p. 211", "file_page": 226, "end_file_page": 226, "page_label": "211",
+  "end_page_label": "211", "section": "…" }`, where the
   anchor is today's columns: `calibre_uuid`, `start_page`, `start_offset`,
   `end_page`, `end_offset`, `prefix`, `suffix`, `sha256`; or
 - `{ "match": false, "closest": [ … ] }`, the closest passages, as
