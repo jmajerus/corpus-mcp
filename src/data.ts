@@ -159,6 +159,12 @@ CREATE TABLE IF NOT EXISTS zotero_isbns (
   key TEXT NOT NULL,
   PRIMARY KEY (isbn, key)
 );
+-- Duplicate-review content profiles by file identity ("<path>|<size>|<mtime>"), so a restart doesn't read every file again.
+CREATE TABLE IF NOT EXISTS file_profiles (
+  stamp TEXT PRIMARY KEY,
+  profile TEXT NOT NULL,              -- JSON: a ContentProfile, or { error }
+  profiled_at TEXT NOT NULL
+);
 -- A person's verdict on a title-only match: this Zotero item is (or is not) this Calibre book.
 CREATE TABLE IF NOT EXISTS zotero_links (
   calibre_uuid TEXT NOT NULL,

@@ -348,6 +348,16 @@ years, and saved corpus references. Different publication years are highlighted 
 possible editions. Matching metadata is a review candidate, not proof of identical
 content; the hash evidence covers the format selected for indexing.
 
+Comparing contents means reading each copy's EPUB and PDF, which can take a while, and
+MuPDF can spend many minutes on a damaged PDF. The server does it in a background
+worker thread, so the page opens at once: a group still being read says so, its cells
+show "checking…", it can't be picked yet, and the page updates every 10 seconds until
+the check is done. A file that takes longer than two minutes is stopped and shown as
+unreadable. Results are kept in `data.db` by file, size and modification time, so a
+restart or deploy doesn't read the files again. A preview refuses a group whose contents
+are still being checked. Covers rendered from a PDF's first page, and `render_page`,
+run in a worker of their own with a 30-second limit.
+
 Each writable-library record has a direct **Open this record in Calibre-Web** link,
 so identical titles can be distinguished by the exact record URL. Preview jobs also
 link both the keeper and duplicate.

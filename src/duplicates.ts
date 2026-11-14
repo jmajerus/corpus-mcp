@@ -246,7 +246,7 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     for (const b of g.books.values()) {
       b.cover_colour = coverColour(path.join(c.booksRoot, b.folder, "cover.jpg"));
       for (const fmt of ["EPUB", "PDF"] as const) {
-        if (b.files[fmt]) b.contents[fmt] = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt);
+        if (b.files[fmt]) b.contents[fmt] = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt, c.data);
       }
     }
     const books = [...g.books.values()];
@@ -299,6 +299,9 @@ export function duplicateContents(c: Corpus, writableLibrary: string, keepers: s
   // The same groups as the review screen and the plan: reviewed keep-both pairs do not link groups.
   for (const g of duplicateGroups(c, writableLibrary).groups) {
     const keep = g.books.find(b => keepers.includes(b.id));
+    if (keep && g.contents_pending.length) {
+      throw new ToolError(`The ${g.contents_pending.join(" and ")} contents of ${keep.id}'s group are still being checked. Wait until the duplicates page shows them, then preview again.`);
+    }
     if (keep && (g.content_warnings.length || g.content_notes.length)) out[keep.calibre_id] = { warnings: g.content_warnings.map(w => w.message), notes: g.content_notes };
   }
   return out;

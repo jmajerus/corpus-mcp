@@ -9,6 +9,8 @@ import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
 import type { YearCandidate } from "./years.js";
+import { PdfTimeout, pdfWorkers } from "./pdf-runner.js";
+import type { RenderedPage } from "./pdf-tasks.js";
 import { type TitlePageScan, mangledTitle } from "./titlepage.js";
 import type { Vocabulary, VocabularySource } from "./vocabulary.js";
 import type { TerminologyFollower } from "./taxonomy/terminology.js";
@@ -466,7 +468,8 @@ export interface RenderArgs {
   page?: number;
 }
 
-export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: number; height: number; file_page: number; page_label: string | null } {
+/** What a render needs, checked: the book's PDF, the page, its printed label, and the zoom. */
+function renderRequest(c: Corpus, args: RenderArgs) {
   const book = getIndexedBook(c, args.book_id);
   if (book.reflowable) throw new ToolError(`${book.id} is ${book.format?.toUpperCase()}, which has no fixed pages to render. Use read_book.`);
   const filePage = filePageArg(args.file_page, args.page, "file_page", "page");
@@ -476,12 +479,45 @@ export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: n
   const scale = Math.min(Math.max(args.scale ?? 1.5, 0.5), 3);
   const file = path.join(c.booksRoot, book.file_path!);
   if (!fs.existsSync(file)) throw new ToolError(`The file for ${book.id} is missing on disk. The index may be out of date.`);
+  return { book, filePage, label: label ?? null, scale, file };
+}
+
+/** Files MuPDF couldn't render within the time limit, by file identity, so later requests fail at once. */
+const unrenderable = new Map<string, string>();
+
+/**
+ * renderPage for the HTTP server: in the render worker when it runs one (src/pdf-runner.ts), so a damaged PDF
+ * can't stop the server answering; a file that ran past the time limit is refused at once afterwards.
+ */
+export async function renderPageAsync(c: Corpus, args: RenderArgs): Promise<ReturnType<typeof renderPage>> {
+  const workers = pdfWorkers();
+  if (!workers) return renderPage(c, args);
+  const { book, filePage, label, scale, file } = renderRequest(c, args);
+  const st = fs.statSync(file);
+  const stamp = `${file}|${st.size}|${st.mtimeMs}`;
+  const known = unrenderable.get(stamp);
+  if (known) throw new ToolError(known);
+  try {
+    const image = await workers.render.run<RenderedPage>({ kind: "render", file, format: book.format!, page: filePage, scale });
+    return { ...image, file_page: filePage, page_label: label };
+  } catch (error) {
+    if (error instanceof PdfTimeout) {
+      const message = `Rendering ${book.id} ${error.message}, so it was stopped; the PDF may be damaged.`;
+      unrenderable.set(stamp, message);
+      throw new ToolError(message);
+    }
+    throw new ToolError(`Could not render ${book.id} file_page ${filePage}: ${(error as Error).message}`);
+  }
+}
+
+export function renderPage(c: Corpus, args: RenderArgs): { png: string; width: number; height: number; file_page: number; page_label: string | null } {
+  const { book, filePage, label, scale, file } = renderRequest(c, args);
   const doc = openBook(fs.readFileSync(file), book.format!);
   try {
     const page = doc.loadPage(filePage - 1);
     const pixmap = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true);
     const result = {
-      png: Buffer.from(pixmap.asPNG()).toString("base64"), width: pixmap.getWidth(), height: pixmap.getHeight(), file_page: filePage, page_label: label ?? null,
+      png: Buffer.from(pixmap.asPNG()).toString("base64"), width: pixmap.getWidth(), height: pixmap.getHeight(), file_page: filePage, page_label: label,
     };
     pixmap.destroy();
     page.destroy();

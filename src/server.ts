@@ -42,11 +42,12 @@ import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
 import { isPublicPath, renderPublic } from "./public/site.js";
 import { etagMatches, holdingsBooksResponse } from "./holdings.js";
+import { usePdfWorkers } from "./pdf-runner.js";
 import { anchorChanges, cslAnswer, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, commitPin, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import {
-  type BookRow, type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage,
+  type BookRow, type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPageAsync,
   getBook, searchCorpus, tagCleanupPlan, unpinCitekey,
 } from "./tools.js";
 
@@ -244,8 +245,8 @@ export function createServer(c: Corpus, options: ServerOptions = {}): McpServer 
       scale: z.number().min(0.5).max(3).optional().describe("Zoom factor (default 1.5)"),
     },
     annotations: { title: "Render PDF page", ...readOnly },
-  }, (args) => run(() => {
-    const image = renderPage(c, args);
+  }, (args) => runAsync(async () => {
+    const image = await renderPageAsync(c, args);
     return {
       content: [
         { type: "image", data: image.png, mimeType: "image/png" },
@@ -405,7 +406,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       if (!cover.startsWith(resolvePath(config.booksRoot) + pathSep)) throw new ToolError("Invalid cover path.");
       if (fs.existsSync(cover)) res.writeHead(200, { "content-type": "image/jpeg", "cache-control": "private, max-age=300" }).end(fs.readFileSync(cover));
       else if (book.format === "pdf") {
-        const image = renderPage(c, { book_id: book.id, page: 1, scale: 1 });
+        const image = await renderPageAsync(c, { book_id: book.id, file_page: 1, scale: 1 });
         res.writeHead(200, { "content-type": "image/png", "cache-control": "private, max-age=300" }).end(Buffer.from(image.png, "base64"));
       } else sendJson(res, 404, { error: "No cover image is available yet." });
     }
@@ -686,6 +687,9 @@ const CORS_HEADERS = {
 export async function serveHttp(config: Config, options: WebOptions = {}): Promise<http.Server & { publicServer: http.Server | null }> {
   const corpus = openCorpus(config);
   const { db } = corpus;
+  // MuPDF work (covers, render_page, the duplicates page's content checks) runs in worker threads, so a
+  // damaged PDF can't stop the server answering.
+  usePdfWorkers();
   const fullConfig: Config = { ...config, admin: config.admin ?? loadConfig({}).admin };
   // The mirror syncs in the background on its own timer; the dashboard's job shares the same sync.
   const zotero = fullConfig.zotero ? new ZoteroSync(corpus, fullConfig.zotero) : null;

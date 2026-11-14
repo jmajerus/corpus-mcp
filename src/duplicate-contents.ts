@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { strFromU8, unzipSync } from "fflate";
 import { XMLParser } from "fast-xml-parser";
 import * as mupdf from "mupdf";
+import type { DataStore } from "./data.js";
+import { PdfTimeout, pdfWorkers } from "./pdf-runner.js";
 
 /** What a copy's EPUB or PDF holds, to compare duplicates by more than file size. */
 export interface ContentProfile {
@@ -21,7 +23,7 @@ export interface ContentProfile {
   /** A bottom-k sketch of the text's five-word sequences, to estimate how much text two copies share. */
   sketch: number[];
 }
-export type BookContents = Partial<Record<"EPUB" | "PDF", ContentProfile | { error: string }>>;
+export type BookContents = Partial<Record<"EPUB" | "PDF", ContentProfile | { error: string } | { pending: true }>>;
 
 const SAMPLE = /\b(end of (this |the )?(free )?sample|you(’|')ve (been reading|reached the end of) (a|this) (free )?sample|buy (the|this) (full )?book now)\b/i;
 const countWords = (text: string) => text.match(/[\p{L}\p{N}]+(?:['’.\-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
@@ -140,20 +142,60 @@ export function pdfProfile(data: Uint8Array): ContentProfile {
   } finally { doc.destroy(); }
 }
 
-/** Profiles cached by file identity, like cover colours: a file changes only when Calibre replaces it. A file
- * the catalogue lists but the mirror cannot provide is an error profile, never cached. */
+/** A content check still running in the background (the server's PDF worker); the page shows it as pending. */
+export interface PendingProfile { pending: true }
+export type ProfileState = ContentProfile | { error: string } | PendingProfile;
+export const isPending = (p: unknown): p is PendingProfile => typeof p === "object" && p !== null && "pending" in p;
+
+/**
+ * Profiles cached by file identity, like cover colours: a file changes only when Calibre replaces it. Kept
+ * in memory and, given the data store, in data.db, so a restart doesn't read every duplicate again. A file
+ * the catalogue lists but the mirror cannot provide is an error profile, never cached.
+ *
+ * With the server's PDF workers (src/pdf-runner.ts), a file not yet profiled is read in the background and
+ * comes back pending; the page asks again. A file MuPDF can't finish within the time limit (a damaged PDF can
+ * keep it busy for many minutes) is recorded as unreadable. Without workers (CLI, tests) it is read here.
+ */
 const profiles = new Map<string, ContentProfile | { error: string }>();
-export function contentProfile(file: string, format: "EPUB" | "PDF"): ContentProfile | { error: string } {
+const reading = new Map<string, Promise<void>>();
+
+export function contentProfile(file: string, format: "EPUB" | "PDF", data?: DataStore): ProfileState {
   let stamp: string;
   try { const st = fs.statSync(file); stamp = `${file}|${st.size}|${st.mtimeMs}`; }
   catch (error) { return { error: `The ${format} is missing from the mirror or cannot be read (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}).` }; }
   let result = profiles.get(stamp);
-  if (!result) {
-    try { result = (format === "EPUB" ? epubProfile : pdfProfile)(fs.readFileSync(file)); }
-    catch (error) { result = { error: `Could not read the ${format}: ${(error as Error).message}` }; }
+  if (result) return result;
+  const saved = data?.prepare("SELECT profile FROM file_profiles WHERE stamp = ?").pluck().get(stamp) as string | undefined;
+  if (saved) {
+    result = JSON.parse(saved) as ContentProfile | { error: string };
     profiles.set(stamp, result);
+    return result;
   }
-  return result;
+  const keep = (value: ContentProfile | { error: string }) => {
+    profiles.set(stamp, value);
+    try {
+      data?.prepare("INSERT OR REPLACE INTO file_profiles (stamp, profile, profiled_at) VALUES (?, ?, ?)").run(stamp, JSON.stringify(value), new Date().toISOString());
+    } catch { /* the store closed meanwhile; the memory copy stands */ }
+  };
+  const workers = pdfWorkers();
+  if (!workers) {
+    try { keep((format === "EPUB" ? epubProfile : pdfProfile)(fs.readFileSync(file))); }
+    catch (error) { keep({ error: `Could not read the ${format}: ${(error as Error).message}` }); }
+    return profiles.get(stamp)!;
+  }
+  if (!reading.has(stamp)) {
+    reading.set(stamp, workers.profile.run<ContentProfile>({ kind: "profile", file, format })
+      .then(keep, (error: Error) => keep({ error: error instanceof PdfTimeout
+        ? `Reading the ${format} ${error.message}, so it was stopped; the file may be damaged.`
+        : `Could not read the ${format}: ${error.message}` }))
+      .finally(() => reading.delete(stamp)));
+  }
+  return { pending: true };
+}
+
+/** Resolves when every background content check started so far has finished (tests). */
+export async function profilesSettled(): Promise<void> {
+  while (reading.size) await Promise.all([...reading.values()]);
 }
 
 const kb = (n: number) => n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
@@ -174,10 +216,14 @@ export function contentFindings(books: { id: string; contents: BookContents }[],
   /** Per format, each copy's estimated share of text in common with the copy that has the most words. */
   const overlap: Partial<Record<"EPUB" | "PDF", { reference: string; shared: Record<string, number> }>> = {};
   const flagged = new Set<string>();
+  const pending: ("EPUB" | "PDF")[] = [];
   for (const format of ["EPUB", "PDF"] as const) {
     const before = warnings.length;
     const warn = (measure: Measure, copy: string, message: string, counts = true) => warnings.push({ format, measure, message, copy, against: counts ? [copy] : [] });
-    const all = books.map(b => ({ id: b.id, p: b.contents[format] })).filter(x => x.p);
+    const listed = books.map(b => ({ id: b.id, p: b.contents[format] })).filter(x => x.p);
+    // A copy still being read: nothing to compare yet in this format (the group reports contents_pending).
+    if (listed.some(x => isPending(x.p))) { flagged.add(format); pending.push(format); continue; }
+    const all = listed as { id: string; p: ContentProfile | { error: string } }[];
     for (const x of all) if ("error" in x.p!) warn("error", x.id, `${x.id}: ${x.p.error}`);
     const copies = all.filter((x): x is { id: string; p: ContentProfile } => !("error" in x.p!));
     for (const c of copies) if (c.p.sample) warn("sample", c.id, `${c.id}’s ${format} ends like a store sample.`);
@@ -229,7 +275,7 @@ export function contentFindings(books: { id: string; contents: BookContents }[],
         : "PDF sizes differ, but the pages, text and bookmarks match: probably different image compression.");
     }
   }
-  return { content_warnings: warnings, content_notes: notes, content_overlap: overlap,
+  return { content_warnings: warnings, content_notes: notes, content_overlap: overlap, contents_pending: pending,
     // A size gap stays a warning where the contents differ too, or could not be compared.
     size_warnings: sizeWarnings.filter(w => flagged.has(w.split(" ")[0])) };
 }
