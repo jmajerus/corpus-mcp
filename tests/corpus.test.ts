@@ -1174,6 +1174,7 @@ describe("zotero mirror", () => {
   let refreshes: number;
   let refreshStatus: number;
   let refreshDelay: number;
+  let itemsDelay: number;
   const put = (key: string, data: Record<string, unknown>) => {
     libraryVersion++;
     items.set(key, { key, version: libraryVersion, data: { key, itemType: "book", ...data } });
@@ -1181,7 +1182,7 @@ describe("zotero mirror", () => {
 
   beforeEach(async () => {
     scanLibraries(config, db);
-    items = new Map(); deleted = []; libraryVersion = 0; requests = []; throttle = 1; refreshes = 0; refreshStatus = 200; refreshDelay = 0;
+    items = new Map(); deleted = []; libraryVersion = 0; requests = []; throttle = 1; refreshes = 0; refreshStatus = 200; refreshDelay = 0; itemsDelay = 0;
     put("AAAA1111", { title: "Networks", date: "1986", creators: [{ creatorType: "author", lastName: "Author", firstName: "Ann" }], extra: "Calibre UUID: uuid-1", citationKey: "author1986networks" });
     put("BBBB2222", { title: "Strength in Numbers", date: "2000", creators: [{ creatorType: "author", lastName: "Fixed", firstName: "Fay" }], extra: "Citation Key: fixed2000strengtha\nCalibre UUID: uuid-6" });
     put("CCCC3333", { title: "Echoes: A Study", creators: [{ creatorType: "author", lastName: "Writer", firstName: "Cy" }], citationKey: "writer2010echoes" });
@@ -1201,7 +1202,7 @@ describe("zotero mirror", () => {
       if (url.pathname === "/users/1/items/top") {
         const changed = [...items.values()].filter((i) => i.version > since);
         const start = Number(url.searchParams.get("start") ?? 0);
-        return void res.writeHead(200, { ...headers, "total-results": String(changed.length) }).end(JSON.stringify(changed.slice(start, start + 2)));
+        return void setTimeout(() => res.writeHead(200, { ...headers, "total-results": String(changed.length) }).end(JSON.stringify(changed.slice(start, start + 2))), itemsDelay);
       }
       if (url.pathname === "/users/1/deleted") return void res.writeHead(200, headers).end(JSON.stringify({ items: deleted.filter((d) => d.version > since).map((d) => d.key) }));
       res.writeHead(404).end();
@@ -1307,6 +1308,18 @@ describe("zotero mirror", () => {
     const first = sync.refreshForFiling();
     await Promise.all([first, ...["main:5", "main:2", "main:1"].map((id, i) => commitPin(c, { book_id: id, citekey: `shared${i}`, replace: true }, sync))]);
     expect(refreshes).toBe(4);
+
+    // A background sync already reading the mirror's source when the pin's refresh is asked for: the
+    // filing waits it out and syncs again after the refresh, so it sees the newly filed item.
+    itemsDelay = 100; refreshDelay = 0; requests = [];
+    const background = sync.run();
+    put("QQQQ2222", { title: "Echoes", extra: "Calibre UUID: uuid-2", citationKey: "writer2010echoes" });
+    const raced = await commitPin(c, { book_id: "main:2", citekey: "writer2010echoes", replace: true }, sync);
+    await background;
+    const firstRefresh = requests.indexOf("/api/refresh?");
+    expect(requests.slice(firstRefresh).some((r) => r.startsWith("/users/1/items/top"))).toBe(true);
+    expect(raced).toMatchObject({ zotero_state: "matched", zotero: { key: "QQQQ2222" } });
+    itemsDelay = 0;
 
     // Slower than the deadline: the pin is saved and the answer says the refresh carries on.
     refreshDelay = 300;

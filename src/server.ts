@@ -307,7 +307,10 @@ export function openCorpus(config: Config): Corpus {
 }
 
 export async function serveStdio(config: Config): Promise<void> {
-  await createServer(openCorpus(config)).connect(new StdioServerTransport());
+  const corpus = openCorpus(config);
+  // No timer here (the HTTP server keeps the mirror current); pin_citekey still syncs to commit a filing.
+  const zotero = config.zotero ? new ZoteroSync(corpus, config.zotero) : null;
+  await createServer(corpus, { zotero }).connect(new StdioServerTransport());
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {

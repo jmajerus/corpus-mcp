@@ -400,11 +400,20 @@ export class ZoteroSync {
     }
   }
 
+  /**
+   * A sync that starts after now: a sync already under way may have read holdings-mcp's copy before the
+   * refresh just asked for, so it is waited out first. Another that starts meanwhile started after now too.
+   */
+  async runAfterNow(): Promise<SyncResult> {
+    if (this.current) await this.current.catch(() => undefined);
+    return this.run();
+  }
+
   private async filingRun(): Promise<string[]> {
     const notes: string[] = [];
     await this.askHoldings(notes);
     try {
-      await this.run();
+      await this.runAfterNow();
     } catch (error) {
       notes.push(`the Zotero mirror didn't sync (${(error as Error).message})`);
     }
