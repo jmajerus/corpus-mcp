@@ -94,18 +94,20 @@ const NUMBERING = /^\s*(?:(?:chapter|part|section|book)\s+)?(?:\d+|[ivxlcdm]+)?\
  * Where a heading's title is printed in a page's text, at or after `from`: only where it starts a paragraph,
  * after at most its numbering, since prose often names a section before or after its heading. Tried as
  * written, then without a numbering prefix ("Chapter 3: ", "IV. ") the outline has and the page may print
- * differently. Words only, so punctuation, case, and spacing don't matter. Null when it isn't found.
+ * differently. Whole words only, so punctuation, case, and spacing don't matter but "Part" never matches
+ * "Particle". Its paragraph's start, and where the title ends (the next search starts there, so two headings
+ * with one title find two places); null when it isn't found.
  */
-function titleOffset(text: string, title: string, from: number): number | null {
+function titleOffset(text: string, title: string, from: number): { start: number; end: number } | null {
   const variants = [title, title.replace(/^.*?:\s+/, ""), title.replace(/^(?:(?:chapter|part|section|book)\s+)?(?:\d+|[ivxlcdm]+)\b[.:)]?\s+/i, "")];
   for (const variant of [...new Set(variants)]) {
     const words = variant.match(/[\p{L}\p{N}]+/gu);
     if (!words) continue;
-    const pattern = new RegExp(words.map(escapeRegExp).join("[^\\p{L}\\p{N}]+"), "giu");
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${words.map(escapeRegExp).join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "giu");
     pattern.lastIndex = from;
     for (let m = pattern.exec(text); m; m = pattern.exec(text)) {
       const paragraphStart = text.lastIndexOf("\n", m.index - 1) + 1;
-      if (NUMBERING.test(text.slice(paragraphStart, m.index))) return paragraphStart;
+      if (NUMBERING.test(text.slice(paragraphStart, m.index))) return { start: paragraphStart, end: m.index + m[0].length };
     }
   }
   return null;
@@ -126,11 +128,16 @@ export function sectionAt(db: DB, bookId: string, pageIndex: number, offset: num
   if (!onPage.length) return current;
   const text = (db.prepare("SELECT text FROM pages WHERE book_id = ? AND page_index = ?").pluck().get(bookId, pageIndex) as string | undefined) ?? "";
   let from = 0;
+  let previous = 0;
   for (const entry of onPage) {
     const at = titleOffset(text, entry.title, from);
-    if ((at ?? from) > offset) break;
+    // Not found: where the heading before it was, as before this was looked up.
+    if ((at?.start ?? previous) > offset) break;
     current = entry.path;
-    if (at !== null) from = at;
+    if (at) {
+      previous = at.start;
+      from = at.end;
+    }
   }
   return current;
 }

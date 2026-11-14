@@ -27,8 +27,11 @@ beforeAll(() => {
     // A heading partway down page 2, and its title mentioned in the prose before it.
     { id: 7, title: "Parts", authors: ["Pat Part"], files: { pdf: makePdf({
       pages: [["The first part begins."], ["Closing words of the first part, before the Second Part begins.", "Second Part", "Opening words of the second part."],
-        ["The last of the second part.", "3 Reconciliation", "Making peace comes third."]],
-      outline: [{ title: "Chapter 1: First Part", page: 1 }, { title: "Second Part", page: 2 }, { title: "Chapter 3: Reconciliation", page: 3 }],
+        ["The last of the second part.", "3 Reconciliation", "Making peace comes third."],
+        // "Part" opening a paragraph as the start of another word, then two headings with one title.
+        ["Particles drift before any heading.", "Part", "Between the two notes.", "Notes", "First notes.", "Notes", "Second notes."]],
+      outline: [{ title: "Chapter 1: First Part", page: 1 }, { title: "Second Part", page: 2 }, { title: "Chapter 3: Reconciliation", page: 3 },
+        { title: "Part", page: 4 }, { title: "Notes", page: 4, children: [{ title: "Notes", page: 4 }] }],
     }) } },
     { id: 5, title: "Diary", authors: ["Dee Self"], tags: ["private"], files: { pdf: makePdf({ pages: [["Not for anyone at all."]] }) } },
   ]);
@@ -204,6 +207,11 @@ describe("sections", () => {
     // The heading prints its number differently from the outline's title.
     expect(section("The last of the second part.")).toBe("Second Part");
     expect(section("Making peace comes third.")).toBe("Chapter 3: Reconciliation");
+    expect(section("Particles drift before any heading.")).toBe("Chapter 3: Reconciliation");
+    expect(section("Between the two notes.")).toBe("Part");
+    // The nested "Notes" is the second heading of that title, not the first one again.
+    expect(section("First notes.")).toBe("Notes");
+    expect(section("Second notes.")).toBe("Notes › Notes");
   });
 
   it("corrects the section of an anchor stored before, at the next rescan", () => {
