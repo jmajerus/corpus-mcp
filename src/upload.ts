@@ -7,7 +7,7 @@ import * as mupdf from "mupdf";
 import { DEFAULT_PRESET, proposeCitekey } from "./citekey.js";
 import type { Config } from "./config.js";
 import { type BookContents, type ContentProfile, contentFindings, contentProfile, isPending } from "./duplicate-contents.js";
-import { type DuplicateBook, GREYSCALE_COVER, candidateBooks, coverColour, identifierKey, normal, sizeWarnings } from "./duplicates.js";
+import { type DuplicateBook, GREYSCALE_COVER, candidateBooks, coverColour, identifierKey, normal, normalAuthorsKey, sizeWarnings } from "./duplicates.js";
 import { findPrintedIsbns, isbn13, validIsbn } from "./isbn.js";
 import { mangledTitle, personName, scanTitlePage } from "./titlepage.js";
 import { type Corpus, ToolError } from "./tools.js";
@@ -77,6 +77,7 @@ export interface ExtractedUploadMetadata {
   identifiers: Record<string, string>;
   printed_isbns: string[];
   metadata_source: "embedded" | "titlepage" | "filename";
+  author_order_aligned?: boolean;
 }
 
 export interface StagedUploadDraft {
@@ -247,8 +248,17 @@ function fallbackFromFilename(filename: string, ext: UploadExtension): { title: 
 function cleanAuthorList(raw: string[]): string[] {
   const out: string[] = [];
   for (const item of raw) {
-    for (const part of item.split(/\s*(?:;|\||&)\s*/)) {
-      const trimmed = part.replace(/\s+/g, " ").trim();
+    const parts = item.includes(";") || item.includes("|") || item.includes("&")
+      ? item.split(/\s*(?:;|\||&)\s*/)
+      : [item];
+    for (const part of parts) {
+      let trimmed = part.replace(/\s+/g, " ").trim();
+      // Flip "Last, First" to "First Last" when there is a single comma and it isn't a suffix or organization.
+      const comma = /^([^,]+),\s*([^,]+)$/.exec(trimmed);
+      if (comma && !/^(?:jr|sr|ii|iii|iv|inc|llc|ltd|co|corp|plc|gmbh|ag|s\.?a|pty|limited|incorporated)\.?$/i.test(comma[2].trim())) {
+        const flipped = `${comma[2].trim()} ${comma[1].trim()}`;
+        if (personName(flipped)) trimmed = flipped;
+      }
       if (trimmed && trimmed.toLowerCase() !== "unknown" && !out.some(a => a.toLowerCase() === trimmed.toLowerCase())) {
         out.push(trimmed);
       }
@@ -682,6 +692,14 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   const dir = uploadDir(config);
   const binPath = path.join(dir, `${rec.id}.${rec.ext}`);
 
+  // Normalize "Last, First" authors from earlier staged records so existing staged uploads benefit immediately.
+  if (!rec.extracted.author_order_aligned) {
+    rec.extracted.authors = cleanAuthorList(rec.extracted.authors);
+    rec.draft.authors = cleanAuthorList(rec.draft.authors);
+    rec.extracted.author_order_aligned = true;
+    saveStagedRecord(dir, rec);
+  }
+
   // Keys for identifier and title/author matching (from both extracted and draft metadata).
   const uploadIdKeys = new Set<string>();
   for (const [type, val] of Object.entries(rec.extracted.identifiers)) {
@@ -695,7 +713,7 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   const titleSet = new Set([normal(rec.extracted.title), normal(rec.draft.title)].filter(Boolean));
   const authorSignatures = new Set(
     [rec.extracted.authors, rec.draft.authors]
-      .map(list => list.map(normal).filter(a => a && a !== "unknown").sort().join("|"))
+      .map(normalAuthorsKey)
       .filter(Boolean),
   );
 
@@ -730,9 +748,15 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
       addEvidence(b, "Identical file");
     }
 
-    // 2. Identifier match (ISBN-10/13, ASIN, etc.).
+    // 2. Identifier match (ISBN-10/13, ASIN, etc., plus printed ISBNs in the book's text).
     for (const [type, val] of Object.entries(b.identifiers)) {
       const k = identifierKey(type, val);
+      if (k && uploadIdKeys.has(JSON.stringify(k))) {
+        addEvidence(b, "Matching identifier");
+      }
+    }
+    for (const printedIsbn of b.printed_isbns ?? []) {
+      const k = identifierKey("isbn", printedIsbn);
       if (k && uploadIdKeys.has(JSON.stringify(k))) {
         addEvidence(b, "Matching identifier");
       }
@@ -740,7 +764,7 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
 
     // 3. Normalized title + authors match (or title match when one side lacks authors).
     const bTitle = normal(b.title);
-    const bAuthors = b.authors.map(normal).filter(a => a && a !== "unknown").sort().join("|");
+    const bAuthors = normalAuthorsKey(b.authors);
     if (bTitle && titleSet.has(bTitle)) {
       if (bAuthors && authorSignatures.has(bAuthors)) {
         addEvidence(b, "Matching title and authors");

@@ -9,6 +9,10 @@ import { isbn13, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 
 export const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+/** Normalize a single author name into sorted tokens so "Last, First" and "First Last" produce the same key. */
+export const normalAuthor = (s: string) => normal(s).split(/\s+/).filter(Boolean).sort().join(" ");
+export const normalAuthorsKey = (authors: string[]) =>
+  authors.map(normalAuthor).filter(a => a && a !== "unknown").sort().join("|");
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
@@ -174,6 +178,7 @@ export function candidateBooks(c: Corpus) {
     shelves.set(r.book_id, [...(shelves.get(r.book_id) ?? []), r.name]);
   }
   return (c.db.prepare("SELECT * FROM books ORDER BY id").all() as (BookRow & { folder: string })[]).map(b => {
+    const printedIsbns = b.printed_isbns ? (JSON.parse(b.printed_isbns) as { isbn13?: string; isbn?: string }[]).map(x => x.isbn13 ?? x.isbn ?? "").filter(Boolean) : [];
     const book = {
       id: b.id, uuid: b.uuid, library: b.library, calibre_id: b.calibre_id, title: b.title,
       authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,
@@ -183,11 +188,11 @@ export function candidateBooks(c: Corpus) {
     };
     // `added`, shelves, the cover and the contents only rank the suggested keeper; they stay out of
     // the fingerprints, so keep-both decisions hold. Covers and contents are read only for candidates (see below).
-    return { ...book, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder,
+    return { ...book, printed_isbns: printedIsbns, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder,
       sizes: metadata.get(b.id)?.sizes ?? {}, files: metadata.get(b.id)?.files ?? {}, contents: {} as BookContents, content_flags: 0, fingerprint: hash(book) };
   });
 }
-const hashed = ({ added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const hashed = ({ printed_isbns: _printedIsbns, added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 
 /** Copies whose EPUB or PDF sizes differ by this fraction or more are flagged (as in tools/calibre-duplicates.py). */
 export const SIZE_DIFFERENCE = 0.1;

@@ -155,9 +155,10 @@ it("blocks exact file duplicates and offers add_format when a matched book lacks
   expect(exact.allowed_actions).toEqual(["skip"]);
   expect(() => uploadBatchPlan(c, config, [{ id: exact.id, sha256: exact.sha256, action: "add_book" }])).toThrow(/Identical file/);
 
-  // 2. An EPUB of the same book (matching by ISBN-10 and title/author): main:1 only has PDF, so add_format is suggested!
-  const epubForMain1 = makeRichEpub({ title: "The Same Book", author: "Ada Lovelace", year: "2021", isbn: "0-306-40615-2" });
+  // 2. An EPUB of the same book (matching by ISBN-10 and title/author, even with "Lovelace, Ada" author order): main:1 only has PDF, so add_format is suggested!
+  const epubForMain1 = makeRichEpub({ title: "The Same Book", author: "Lovelace, Ada", year: "2021", isbn: "0-306-40615-2" });
   const addFmt = stageUpload(c, config, "The Same Book.epub", epubForMain1, "me@example.com");
+  expect(addFmt.extracted.authors).toEqual(["Ada Lovelace"]);
   expect(addFmt.exact_matches).toEqual([]);
   expect(addFmt.matches).toHaveLength(1);
   expect(addFmt.matches[0]).toMatchObject({

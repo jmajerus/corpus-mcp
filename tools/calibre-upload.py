@@ -60,6 +60,11 @@ def normal(text):
     return re.sub(r'[^\w]+', ' ', stripped, flags=re.UNICODE).strip()
 
 
+def normal_authors_key(authors):
+    tokens = [' '.join(sorted(normal(a).split())) for a in (authors or [])]
+    return '|'.join(sorted(t for t in tokens if t and t != 'unknown'))
+
+
 def valid_isbn(raw):
     isbn = re.sub(r'^isbn(-1[03])?:?', '', str(raw or ''), flags=re.I)
     isbn = re.sub(r'[\s\-\u2010\u2011\u2013]', '', isbn).upper()
@@ -329,7 +334,7 @@ class UploadReview:
         want_hashes = {item['sha256'], self.effective_sha256}
         want_sizes = {item['size'], self.effective_size}
         want_title = normal(item.get('title', ''))
-        want_authors = '|'.join(sorted(normal(a) for a in item.get('authors', []) if normal(a) and normal(a) != 'unknown'))
+        want_authors = normal_authors_key(item.get('authors', []))
         want_id_keys = set()
         for k, v in (item.get('identifiers') or {}).items():
             ik = identifier_key(k, v)
@@ -361,7 +366,7 @@ class UploadReview:
                     self.blockers.append(f'Identical {fmt.upper()} file is already in Calibre book {book_id} ({mi.title}).')
             if item['action'] == 'add_book' and (book_id, mi.uuid) not in known_ids:
                 b_title = normal(mi.title)
-                b_authors = '|'.join(sorted(normal(a) for a in (mi.authors or []) if normal(a) and normal(a) != 'unknown'))
+                b_authors = normal_authors_key(mi.authors)
                 title_author_match = bool(want_title and b_title == want_title and want_authors and b_authors == want_authors)
                 id_match = any(
                     identifier_key(k, v) in want_id_keys
