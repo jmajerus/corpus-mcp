@@ -14,6 +14,7 @@ PDF, and writes the new books or formats through Calibre's database API.
 """
 import argparse
 import base64
+import contextlib
 import datetime
 import hashlib
 import json
@@ -29,6 +30,8 @@ import unicodedata
 import zipfile
 
 MAX_ITEMS = 100
+MAX_UNCOMPRESSED_ZIP_BYTES = 250 * 1024 * 1024
+MAX_ZIP_ENTRIES = 10000
 ALLOWED_EXTS = {'epub', 'pdf', 'mobi', 'azw', 'azw3', 'prc', 'kfx', 'kfx-zip'}
 
 
@@ -94,6 +97,24 @@ def valid_ref(ref):
     return isinstance(ref, dict) and type(ref.get('id')) is int and ref['id'] >= 1 and isinstance(ref.get('uuid'), str) and bool(ref['uuid'])
 
 
+def check_zip_bounds(zf):
+    """Reject ZIP archives whose entry count, uncompressed byte total, or compression ratio exceeds safe bounds."""
+    infos = zf.infolist()
+    if len(infos) > MAX_ZIP_ENTRIES:
+        raise ValueError(f'Archive contains more than {MAX_ZIP_ENTRIES} entries.')
+    total = 0
+    for info in infos:
+        if info.file_size < 0 or info.compress_size < 0:
+            raise ValueError('Archive has an invalid entry size.')
+        if info.compress_type != zipfile.ZIP_STORED and info.compress_size > 0 and info.file_size == 0:
+            raise ValueError('Archive has an invalid compressed entry size.')
+        if info.file_size > 1024 * 1024 and info.file_size / max(1, info.compress_size) > 200:
+            raise ValueError('Archive compression ratio exceeds safety limit.')
+        total += info.file_size
+        if total > MAX_UNCOMPRESSED_ZIP_BYTES:
+            raise ValueError('Archive uncompressed size exceeds the 250 MB limit.')
+
+
 def read_plan(stream):
     """Validate the upload batch shape before Calibre opens."""
     try:
@@ -115,7 +136,7 @@ def read_plan(stream):
         size = item.get('size')
         action = item.get('action')
         filename = item.get('filename')
-        if not isinstance(item_id, str) or not item_id or not isinstance(filename, str) or not filename.strip():
+        if not isinstance(item_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', item_id) or not isinstance(filename, str) or not filename.strip():
             raise UploadReviewError('Invalid upload file identity.')
         if ext not in ALLOWED_EXTS:
             raise UploadReviewError(f'Unsupported file extension: {ext!r}')
@@ -159,6 +180,12 @@ def read_plan(stream):
                 raise UploadReviewError('Enter a publication year from 1001 to 9999, or leave it blank.')
             if not isinstance(tags, list) or any(not isinstance(t, str) or any(ord(c) < 32 for c in t) for t in tags):
                 raise UploadReviewError('Invalid tags list.')
+            identifiers = item.get('identifiers', {})
+            if not isinstance(identifiers, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in identifiers.items()):
+                raise UploadReviewError('Invalid identifiers map.')
+            printed_isbns = item.get('printed_isbns', [])
+            if not isinstance(printed_isbns, list) or any(not isinstance(v, str) for v in printed_isbns):
+                raise UploadReviewError('Invalid printed_isbns list.')
             known = item.get('known_matches', [])
             if not isinstance(known, list) or not all(valid_ref(r) for r in known):
                 raise UploadReviewError('Invalid known_matches list.')
@@ -184,13 +211,14 @@ def sniff_file(path, ext):
     if ext == 'epub':
         try:
             with zipfile.ZipFile(path) as archive:
+                check_zip_bounds(archive)
                 if archive.testzip() is not None or 'META-INF/container.xml' not in archive.namelist():
                     return 'EPUB', None, 'Damaged EPUB archive: missing container.xml or corrupt zip entry.'
                 if 'META-INF/encryption.xml' in archive.namelist():
                     enc = archive.read('META-INF/encryption.xml').decode('utf-8', errors='ignore')
                     if re.search(r'<EncryptedData\b', enc, flags=re.I) and re.search(r'\.(x?html?|xml|ncx|opf)\b', enc, flags=re.I):
                         return 'EPUB', None, 'DRM-encrypted EPUB; remove DRM before uploading.'
-        except (OSError, zipfile.BadZipFile) as error:
+        except (OSError, ValueError, zipfile.BadZipFile) as error:
             return 'EPUB', None, f'Damaged EPUB archive: {error}'
         return 'EPUB', None, None
     if ext == 'pdf':
@@ -203,7 +231,7 @@ def sniff_file(path, ext):
 
 def stage_and_import_plugins(item, work_dir):
     """Write the uploaded bytes to work_dir, verify checksum, and run Calibre's import plugins (DeDRM / KFX Input) when applicable."""
-    raw_path = work_dir / f'{item["id"]}.{item["ext"]}'
+    raw_path = inside(work_dir, f'{item["id"]}.{item["ext"]}')
     try:
         raw_bytes = base64.b64decode(item['data_base64'], validate=True)
     except Exception as error:
@@ -227,12 +255,13 @@ def stage_and_import_plugins(item, work_dir):
         # Check whether the kfx-zip archive itself contains an unencrypted CONT container or is still locked.
         try:
             with zipfile.ZipFile(effective_path) as zf:
+                check_zip_bounds(zf)
                 names = zf.namelist()
                 if any(zf.read(n)[:8].startswith(b'\xeaDRMION\xee') for n in names):
                     return effective_path, 'KFX', 'EPUB', 'Still encrypted (.kfx-zip DRMION); check that the Kindle keyfile is imported into DeDRM.'
                 cont = next((n for n in names if zf.read(n)[:4] == b'CONT'), None)
                 if cont:
-                    extracted = work_dir / f'{item["id"]}-extracted.kfx'
+                    extracted = inside(work_dir, f'{item["id"]}-extracted.kfx')
                     extracted.write_bytes(zf.read(cont))
                     effective_path = extracted
                     effective_ext = 'kfx'
@@ -251,10 +280,10 @@ def convert_ebook(source_path, source_fmt, convert_to, work_dir, item_id):
     limit = int(os.environ.get('CONVERT_TIMEOUT', '600'))
     actual_convert = convert_to
     if actual_convert == 'PDF':
-        kfx_dir = work_dir / f'kfx-{item_id}'
+        kfx_dir = inside(work_dir, f'kfx-{item_id}')
         kfx_dir.mkdir(exist_ok=True)
-        kfx_copy = kfx_dir / 'book.kfx'
-        out_pdf = work_dir / f'{item_id}.pdf'
+        kfx_copy = inside(kfx_dir, 'book.kfx')
+        out_pdf = inside(work_dir, f'{item_id}.pdf')
         shutil.copy2(source_path, kfx_copy)
         proc = subprocess.run(
             [str(bin_dir / 'calibre-debug'), '-r', 'KFX Input', '--', '-p', str(kfx_copy), str(out_pdf)],
@@ -269,7 +298,7 @@ def convert_ebook(source_path, source_fmt, convert_to, work_dir, item_id):
             raise UploadReviewError(f'Print-replica PDF extraction failed for {source_path.name}.')
 
     if actual_convert == 'EPUB':
-        out_epub = work_dir / f'{item_id}.epub'
+        out_epub = inside(work_dir, f'{item_id}.epub')
         proc = subprocess.run(
             [str(bin_dir / 'ebook-convert'), str(source_path), str(out_epub)],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=limit, check=False,
@@ -296,11 +325,31 @@ class UploadReview:
             desired.append(self.convert_to)
         self.desired_formats = desired
 
-        # Check all existing books in the live library for exact file matches or unreviewed metadata matches.
+        # Check all existing books in the live library for exact file matches or unreviewed metadata/identifier matches.
         want_hashes = {item['sha256'], self.effective_sha256}
         want_sizes = {item['size'], self.effective_size}
         want_title = normal(item.get('title', ''))
         want_authors = '|'.join(sorted(normal(a) for a in item.get('authors', []) if normal(a) and normal(a) != 'unknown'))
+        want_id_keys = set()
+        for k, v in (item.get('identifiers') or {}).items():
+            ik = identifier_key(k, v)
+            if ik:
+                want_id_keys.add(ik)
+        for isbn_val in (item.get('printed_isbns') or []):
+            ik = identifier_key('isbn', isbn_val)
+            if ik:
+                want_id_keys.add(ik)
+        if not sniff_problem:
+            try:
+                from calibre.ebooks.metadata.meta import get_metadata
+                with self.effective_path.open('rb') as stream:
+                    ext_mi = get_metadata(stream, stream_type=self.source_format.lower(), use_libprs_metadata=True)
+                for k, v in (getattr(ext_mi, 'identifiers', None) or {}).items():
+                    ik = identifier_key(k, v)
+                    if ik:
+                        want_id_keys.add(ik)
+            except Exception:
+                pass
         known_ids = {(r['id'], r['uuid']) for r in item.get('known_matches', [])}
 
         for book_id in sorted(api.all_book_ids()):
@@ -313,7 +362,13 @@ class UploadReview:
             if item['action'] == 'add_book' and (book_id, mi.uuid) not in known_ids:
                 b_title = normal(mi.title)
                 b_authors = '|'.join(sorted(normal(a) for a in (mi.authors or []) if normal(a) and normal(a) != 'unknown'))
-                if want_title and b_title == want_title and want_authors and b_authors == want_authors:
+                title_author_match = bool(want_title and b_title == want_title and want_authors and b_authors == want_authors)
+                id_match = any(
+                    identifier_key(k, v) in want_id_keys
+                    for k, v in (getattr(mi, 'identifiers', None) or {}).items()
+                    if identifier_key(k, v) is not None
+                )
+                if title_author_match or id_match:
                     self.blockers.append(f'Matches Calibre book {book_id} ({mi.title}) in the live library. Refresh Corpus and review the match first.')
 
         self.target_state = None
@@ -432,24 +487,31 @@ def apply_review(api, library, review, saved, backup):
     mi.author_sort = api.author_sort_from_authors(authors)
 
     book_id = api.create_book_entry(mi)
-    uuid = api.field_for('uuid', book_id)
-    added_fmts = []
-    for fmt in review.add_formats:
-        fpath = files_by_fmt.get(fmt)
-        if not fpath:
-            continue
-        expected = digest(fpath)
-        if not api.add_format(book_id, fmt, str(fpath), replace=False, run_hooks=False):
-            raise UploadReviewError(f'Could not add {fmt} to new book {book_id}.')
-        if digest(pathlib.Path(api.format_abspath(book_id, fmt))) != expected:
-            raise UploadReviewError(f'Checksum verification failed for {fmt} on new book {book_id}.')
-        added_fmts.append(fmt)
-    if cover_bytes:
-        try:
-            api.set_cover({book_id: cover_bytes})
-        except Exception:
-            pass
-    api.dump_metadata([book_id])
+    try:
+        uuid = api.field_for('uuid', book_id)
+        added_fmts = []
+        for fmt in review.add_formats:
+            fpath = files_by_fmt.get(fmt)
+            if not fpath:
+                continue
+            expected = digest(fpath)
+            if not api.add_format(book_id, fmt, str(fpath), replace=False, run_hooks=False):
+                raise UploadReviewError(f'Could not add {fmt} to new book {book_id}.')
+            if digest(pathlib.Path(api.format_abspath(book_id, fmt))) != expected:
+                raise UploadReviewError(f'Checksum verification failed for {fmt} on new book {book_id}.')
+            added_fmts.append(fmt)
+        if not added_fmts:
+            raise UploadReviewError(f'No format could be added to new book {book_id}.')
+        if cover_bytes:
+            try:
+                api.set_cover({book_id: cover_bytes})
+            except Exception:
+                pass
+        api.dump_metadata([book_id])
+    except BaseException:
+        with contextlib.suppress(Exception):
+            api.remove_books([book_id], permanent=True)
+        raise
     event(
         book_id, uuid, title,
         added=mi.tags,

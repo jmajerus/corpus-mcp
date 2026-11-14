@@ -18,7 +18,56 @@ export type UploadExtension = (typeof UPLOAD_EXTENSIONS)[number];
 export type UploadAction = "skip" | "add_format" | "add_book";
 
 export const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
+export const MAX_UNCOMPRESSED_ZIP_BYTES = 250 * 1024 * 1024;
+export const MAX_ZIP_ENTRY_BYTES = 100 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 10_000;
 const STAGED_TTL_MS = 7 * 24 * 3600 * 1000;
+
+/**
+ * Decompresses a ZIP-based archive (EPUB or KFX-ZIP) while enforcing strict bounds on entry count,
+ * individual entry size, total uncompressed size across all central-directory entries, and compression ratio
+ * before any entry is expanded. When `select` is provided, every entry in the archive is still checked against
+ * the size/count bounds, while only selected entries are inflated.
+ */
+export function unzipBounded(
+  data: Uint8Array,
+  opts: {
+    maxTotalBytes?: number;
+    maxEntryBytes?: number;
+    maxEntries?: number;
+    select?: (file: { name: string; size: number; originalSize: number }) => boolean;
+  } = {},
+): Record<string, Uint8Array> {
+  const maxTotal = opts.maxTotalBytes ?? MAX_UNCOMPRESSED_ZIP_BYTES;
+  const maxEntry = opts.maxEntryBytes ?? MAX_ZIP_ENTRY_BYTES;
+  const maxEntries = opts.maxEntries ?? MAX_ZIP_ENTRIES;
+  let entries = 0;
+  let totalUncompressed = 0;
+  return unzipSync(data, {
+    filter(file) {
+      if (++entries > maxEntries) {
+        throw new Error(`Archive contains more than ${maxEntries.toLocaleString("en")} entries.`);
+      }
+      if (file.originalSize < 0 || file.size < 0 || !Number.isFinite(file.originalSize) || !Number.isFinite(file.size)) {
+        throw new Error("Archive has an invalid entry size.");
+      }
+      if (file.compression !== 0 && file.size > 0 && file.originalSize === 0) {
+        throw new Error("Archive has an invalid compressed entry size.");
+      }
+      if (file.originalSize > maxEntry) {
+        throw new Error(`Archive entry ${file.name} exceeds the ${Math.round(maxEntry / (1024 * 1024))} MB uncompressed limit.`);
+      }
+      if (file.originalSize > 1024 * 1024 && file.originalSize / Math.max(1, file.size) > 200) {
+        throw new Error("Archive compression ratio exceeds safety limit.");
+      }
+      totalUncompressed += file.originalSize;
+      if (totalUncompressed > maxTotal) {
+        throw new Error(`Archive uncompressed size exceeds the ${Math.round(maxTotal / (1024 * 1024))} MB limit.`);
+      }
+      return opts.select ? opts.select(file) : true;
+    },
+  });
+}
 
 export interface ExtractedUploadMetadata {
   title: string;
@@ -111,7 +160,9 @@ export function sniffUpload(data: Buffer, ext: UploadExtension): {
   }
   if (ext === "epub") {
     try {
-      const files = unzipSync(new Uint8Array(data));
+      const files = unzipBounded(new Uint8Array(data), {
+        select: f => f.name === "META-INF/container.xml" || f.name === "META-INF/encryption.xml",
+      });
       if (!files["META-INF/container.xml"]) {
         return { kind: "epub", problem: "Damaged EPUB: META-INF/container.xml is missing.", target_formats: ["EPUB"], primary_format: "EPUB", converts_to: null };
       }
@@ -136,15 +187,24 @@ export function sniffUpload(data: Buffer, ext: UploadExtension): {
   }
   if (ext === "kfx-zip") {
     try {
-      const files = unzipSync(new Uint8Array(data));
+      const files = unzipBounded(new Uint8Array(data));
       const names = Object.keys(files);
       if (!names.length) {
         return { kind: "kfx-zip", problem: "Empty KFX-ZIP archive.", target_formats: ["KFX", "EPUB"], primary_format: "EPUB", converts_to: "EPUB" };
       }
-      const replica = Object.values(files).some(b => {
-        const buf = Buffer.from(b);
-        return buf.includes(Buffer.from("%PDF-", "latin1")) && (buf.includes(Buffer.from("yj_textbook", "latin1")) || buf.includes(Buffer.from("yj_fixed_layout", "latin1")));
-      });
+      const buffers = Object.values(files).map(b => Buffer.from(b));
+      if (buffers.some(buf => buf.subarray(0, 8).equals(Buffer.from("\xeaDRMION\xee", "latin1")))) {
+        return {
+          kind: "kfx-zip",
+          problem: "DRM-encrypted (KFX DRMION); download it again and add it through DeDRM.",
+          target_formats: ["KFX", "EPUB"],
+          primary_format: "EPUB",
+          converts_to: "EPUB",
+        };
+      }
+      const replica = buffers.some(buf =>
+        buf.includes(Buffer.from("%PDF-", "latin1")) && (buf.includes(Buffer.from("yj_textbook", "latin1")) || buf.includes(Buffer.from("yj_fixed_layout", "latin1"))),
+      );
       const conv = replica ? "PDF" : "EPUB";
       return { kind: "kfx-zip", problem: null, target_formats: ["KFX", conv], primary_format: conv, converts_to: conv };
     } catch (error) {
@@ -294,11 +354,17 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
 
   if (ext === "epub") {
     try {
-      const files = unzipSync(new Uint8Array(data));
+      const u8 = new Uint8Array(data);
+      const containerFiles = unzipBounded(u8, {
+        select: f => f.name === "META-INF/container.xml" || f.name.toLowerCase().endsWith(".opf"),
+      });
       const xml = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true, parseTagValue: false });
-      const roots = [xml.parse(strFromU8(files["META-INF/container.xml"])).container?.rootfiles?.rootfile].flat().filter(Boolean);
+      const roots = [xml.parse(strFromU8(containerFiles["META-INF/container.xml"])).container?.rootfiles?.rootfile].flat().filter(Boolean);
       const opfPath = (roots.find(r => r["@_media-type"] === "application/oebps-package+xml") ?? roots[0])?.["@_full-path"];
-      const pkg = opfPath && files[opfPath] ? xml.parse(strFromU8(files[opfPath])).package : null;
+      if (opfPath && !containerFiles[opfPath]) {
+        Object.assign(containerFiles, unzipBounded(u8, { select: f => f.name === opfPath }));
+      }
+      const pkg = opfPath && containerFiles[opfPath] ? xml.parse(strFromU8(containerFiles[opfPath])).package : null;
       const meta = pkg?.metadata;
       if (meta) {
         const titles = [meta.title].flat().map(textValue).filter(Boolean);
@@ -325,8 +391,11 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
       const spinePaths = [pkg?.spine?.itemref].flat().filter(Boolean).flatMap(r => {
         const href = items.get(r["@_idref"]);
         return href ? [decodeURIComponent(new URL(href, `https://epub.invalid/${opfPath}`).pathname.slice(1))] : [];
-      }).filter(p => files[p]);
-      const samplePaths = [...spinePaths.slice(0, 6), ...spinePaths.slice(-2)];
+      });
+      const wantedSample = [...new Set([...spinePaths.slice(0, 6), ...spinePaths.slice(-2)])];
+      const wantedSet = new Set(wantedSample);
+      const files = wantedSet.size ? unzipBounded(u8, { select: f => wantedSet.has(f.name) }) : {};
+      const samplePaths = wantedSample.filter(p => files[p]);
       const pages = samplePaths.map((p, idx) => ({
         page_index: idx,
         label: null,
@@ -495,7 +564,12 @@ export function stageUpload(c: Corpus, config: Config, filename: string, data: B
   const existing = readStagedRecords(dir).find(r => r.sha256 === sha256);
   const id = existing?.id ?? `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
   const binPath = path.join(dir, `${id}.${ext}`);
-  if (!existing) fs.writeFileSync(binPath, data, { mode: 0o600 });
+  if (existing && existing.ext !== ext) {
+    fs.rmSync(path.join(dir, `${id}.${existing.ext}`), { force: true });
+  }
+  if (!existing || existing.ext !== ext || !fs.existsSync(binPath)) {
+    fs.writeFileSync(binPath, data, { mode: 0o600 });
+  }
 
   const sniff = sniffUpload(data, ext);
   const extracted = extractUploadMetadata(data, ext, cleanName, sniff.problem);
@@ -862,6 +936,8 @@ export interface UploadItemPlan {
   authors: string[];
   year: number | null;
   tags: string[];
+  identifiers?: Record<string, string>;
+  printed_isbns?: string[];
   known_matches: { id: number; uuid: string }[];
   reviewed?: string;
 }
@@ -989,6 +1065,8 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
       authors,
       year,
       tags,
+      identifiers: rec.extracted.identifiers,
+      printed_isbns: rec.extracted.printed_isbns,
       known_matches: evaluated.matches
         .filter(m => m.book.library === config.shelvesLibrary && m.book.uuid !== null)
         .map(m => ({ id: m.book.calibre_id, uuid: m.book.uuid! })),

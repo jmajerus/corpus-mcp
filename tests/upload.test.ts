@@ -16,8 +16,10 @@ import {
   listStagedUploads,
   removeStagedUpload,
   stageUpload,
+  unzipBounded,
   updateStagedUpload,
   uploadBatchPlan,
+  uploadDir,
 } from "../src/upload.js";
 import { UPLOAD_HTML } from "../src/web/upload.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -207,6 +209,29 @@ it("extracts MOBI EXTH metadata, sniffs DRM and print-replica KFX, and validates
   const lockedKfx = stageUpload(c, config, "locked.kfx", drmion);
   expect(lockedKfx.blockers[0]).toMatch(/DRM-encrypted/);
 
+  // Encrypted .kfx-zip containing a DRMION member is also blocked at staging
+  const lockedKfxZip = Buffer.from(zipSync({ "book.kfx": new Uint8Array(drmion) }));
+  const stagedKfxZip = stageUpload(c, config, "locked.kfx-zip", lockedKfxZip);
+  expect(stagedKfxZip.blockers[0]).toMatch(/DRM-encrypted \(KFX DRMION\)/);
+  expect(stagedKfxZip.allowed_actions).toEqual(["skip"]);
+
+  // Re-staging identical bytes under a different supported extension moves the payload to the new extension
+  const restaged = stageUpload(c, config, "locked-renamed.azw", drmion);
+  expect(restaged.id).toBe(lockedKfx.id);
+  expect(restaged.ext).toBe("azw");
+  expect(fs.existsSync(path.join(uploadDir(config), `${restaged.id}.kfx`))).toBe(false);
+  expect(fs.existsSync(path.join(uploadDir(config), `${restaged.id}.azw`))).toBe(true);
+  expect(listStagedUploads(c, config).items.some(i => i.id === restaged.id && i.ext === "azw")).toBe(true);
+
+  // Bounded zip decompression rejects zip bombs / excessive uncompressed size or entry counts before expanding
+  const bombEntry = new Uint8Array(2 * 1024 * 1024); // 2 MB of zeroes compresses to ~2 KB (>200x ratio)
+  const ratioZip = zipSync({ "META-INF/container.xml": bombEntry });
+  expect(() => unzipBounded(ratioZip)).toThrow(/compression ratio exceeds safety limit/);
+  expect(() => unzipBounded(new Uint8Array(existingEpub), { maxTotalBytes: 10 })).toThrow(/uncompressed size exceeds/);
+  expect(() => unzipBounded(new Uint8Array(existingEpub), { maxEntries: 1 })).toThrow(/more than 1 entries/);
+  const bombEpub = stageUpload(c, config, "bomb.epub", Buffer.from(ratioZip));
+  expect(bombEpub.blockers[0]).toMatch(/compression ratio exceeds safety limit/);
+
   // Print-replica KFX targets PDF
   const replicaKfx = Buffer.from("CONT\x02\x00yj_textbook yj_fixed_layout %PDF-1.4", "latin1");
   const stagedReplica = stageUpload(c, config, "New Textbook - Jane Doe (2024).kfx", replicaKfx);
@@ -363,7 +388,7 @@ class LibraryDatabase:
  def has_id(self, book_id): return book_id in self.books
  def get_metadata(self, book_id):
   b = self.books[book_id]
-  return SimpleNamespace(uuid=b['uuid'], title=b['title'], authors=b['authors'], identifiers={})
+  return SimpleNamespace(uuid=b['uuid'], title=b['title'], authors=b['authors'], identifiers=b.get('identifiers', {'isbn': '978-0-306-40615-7'}))
  def field_for(self, field, book_id):
   return self.books[book_id]['path'] if field == 'path' else self.books[book_id]['uuid']
  def formats(self, book_id): return list(self.books[book_id]['formats'].keys())
@@ -376,11 +401,20 @@ class LibraryDatabase:
   self.books[bid] = {'uuid': f'uuid-{bid}', 'title': mi.title, 'authors': mi.authors, 'path': rel, 'formats': {}}
   return bid
  def add_format(self, book_id, fmt, src, replace=False, run_hooks=False):
+  if self.books[book_id]['title'] == 'Fail Add Format':
+   return False
   rel = f"{self.books[book_id]['path']}/book.{fmt.lower()}"
   dst = self.lib / rel
   shutil.copy2(src, dst)
   self.books[book_id]['formats'][fmt.upper()] = rel
   return True
+ def remove_books(self, ids, permanent=False):
+  for bid in ids:
+   b = self.books.pop(bid, None)
+   if b:
+    shutil.rmtree(self.lib / b['path'], ignore_errors=True)
+  with (self.lib / 'removed.log').open('a') as f:
+   f.write(','.join(str(i) for i in ids) + f':permanent={permanent}\\n')
  def set_cover(self, data): pass
  def dump_metadata(self, ids): pass
 `);
@@ -394,11 +428,23 @@ class LibraryDatabase:
       env: { ...process.env, PYTHONPATH: pyRoot, CALIBRE_BIN: binDir },
     });
 
-  // 1. Invalid JSON / plan fails concisely without traceback
+  // 1. Invalid JSON / plan fails concisely without traceback, including path traversal ids
   const bad = runPy('{"items":[]}');
   expect(bad.status).toBe(1);
   expect(bad.stderr.trim()).toBe("Select at least one file to upload.");
   expect(bad.stderr).not.toContain("Traceback");
+
+  const traversal = runPy(JSON.stringify({
+    library: "main",
+    items: [{
+      id: "../../outside", filename: "test.epub", ext: "epub", format: "EPUB",
+      target_formats: ["EPUB"], primary_format: "EPUB", converts_to: null,
+      sha256: "a".repeat(64), size: 10, action: "add_book", target: null,
+      title: "Test", authors: ["Author"], year: 2020, tags: [], known_matches: [], data_base64: "dGVzdA==",
+    }],
+  }));
+  expect(traversal.status).toBe(1);
+  expect(traversal.stderr.trim()).toBe("Invalid upload file identity.");
 
   // 2. Preview adding a MOBI as a new book and an EPUB as a format on book 1
   const mobiBytes = makeMobiBuffer({ title: "Fresh Mobi", author: "Donald Knuth", year: "2020" });
@@ -464,6 +510,49 @@ class LibraryDatabase:
     upload_applied: { id: "u2", action: "add_format", formats: ["EPUB"] },
   });
   expect(fs.readdirSync(libDir).some(f => f.startsWith("metadata.db.before-upload-"))).toBe(true);
+
+  // 4. Live identifier match (ISBN-10 matching book 1's ISBN-13 with different title/author) blocks unreviewed add_book, unless in known_matches
+  const idMatchPlan = {
+    library: "main",
+    items: [{
+      id: "u3", filename: "Different Title.epub", ext: "epub", format: "EPUB",
+      target_formats: ["EPUB"], primary_format: "EPUB", converts_to: null,
+      sha256: createHash("sha256").update(epubBytes).digest("hex"), size: epubBytes.length,
+      action: "add_book", target: null, title: "Edited Title", authors: ["Edited Author"], year: 2021, tags: [],
+      identifiers: { isbn: "0306406152" }, known_matches: [], data_base64: epubBytes.toString("base64"),
+    }],
+  };
+  const idBlocked = JSON.parse(runPy(JSON.stringify(idMatchPlan), false).stdout.trim().slice(9));
+  expect(idBlocked.upload_review.blockers).toEqual([
+    "Matches Calibre book 1 (The Same Book) in the live library. Refresh Corpus and review the match first.",
+  ]);
+  const idReviewedPlan = {
+    library: "main",
+    items: [{ ...idMatchPlan.items[0], known_matches: [{ id: 1, uuid: "uuid-1" }] }],
+  };
+  const idAllowed = JSON.parse(runPy(JSON.stringify(idReviewedPlan), false).stdout.trim().slice(9));
+  expect(idAllowed.upload_review.blockers).toEqual([]);
+
+  // 5. Rollback of create_book_entry when add_format fails during apply
+  const failPlan = {
+    library: "main",
+    items: [{
+      id: "u4", filename: "Fail.epub", ext: "epub", format: "EPUB",
+      target_formats: ["EPUB"], primary_format: "EPUB", converts_to: null,
+      sha256: createHash("sha256").update(epubBytes).digest("hex"), size: epubBytes.length,
+      action: "add_book", target: null, title: "Fail Add Format", authors: ["Author"], year: 2021, tags: [],
+      known_matches: [], data_base64: epubBytes.toString("base64"),
+    }],
+  };
+  const failPrev = JSON.parse(runPy(JSON.stringify(failPlan), false).stdout.trim().slice(9));
+  const failApply = runPy(JSON.stringify({
+    library: "main",
+    items: [{ ...failPrev.upload_review.plan, data_base64: failPlan.items[0].data_base64 }],
+  }), true);
+  expect(failApply.status).toBe(1);
+  expect(failApply.stderr).toContain("Could not add EPUB to new book 10.");
+  expect(fs.readFileSync(path.join(libDir, "removed.log"), "utf8").trim()).toBe("10:permanent=True");
+  expect(fs.existsSync(path.join(libDir, "New", "Fail Add Format (10)"))).toBe(false);
 });
 
 it("renders the upload page script and loads staged items", async () => {
