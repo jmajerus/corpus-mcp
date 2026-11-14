@@ -6,13 +6,15 @@ export const ZOTERO_HTML = page({
   nav: "zotero",
   css: `
 .status-ok { color: var(--ok); } .status-bad { color: var(--danger); }
-td .cand { margin: 2px 0; }`,
+td .cand { margin: 2px 0; }
+tr.wanted td { background: var(--highlight, rgba(255, 213, 79, 0.25)); }`,
   body: `
 <h1>Zotero</h1>
 <p class="sub" id="summary">Loading…</p>
 <div class="grid" id="cards"></div>
 <h2>Possible matches</h2>
-<p class="note">Same title, first author, and year, but nothing ties them together. Confirming one pins its citekey.</p>
+<p class="note">Same title, first author, and year, or the only Zotero item with an ISBN printed in the book (which may be another edition's), but nothing ties them together. Confirming one pins its citekey.</p>
+<p class="note" id="wanted-note" hidden></p>
 <div class="scroll"><table><thead><tr><th>Book</th><th>Zotero item</th></tr></thead><tbody id="candidates"></tbody></table></div>
 <h2>Citekey mismatches</h2>
 <p class="note">The book's pinned or Calibre key differs from the key Zotero holds. Fix whichever is wrong; corpus-mcp never changes a pin on its own.</p>
@@ -45,8 +47,9 @@ async function load() {
       ["Possible duplicates", num(r.duplicates.length)], ["Not found", num(b.not_found)]]) +
     card("Mirror", num(s.items) + " items", [["Library version", s.version ? num(s.version) : "—"], ["In the trash", num(s.trashed)]]);
   const dis = canWrite ? "" : " disabled";
-  document.getElementById("candidates").innerHTML = r.candidates.length ? r.candidates.map((c) => "<tr><td>" + bookLink(c.book_id, c.title) + (c.year ? " (" + c.year + ")" : "") + "</td><td>" +
+  document.getElementById("candidates").innerHTML = r.candidates.length ? r.candidates.map((c) => '<tr data-book-row="' + esc(c.book_id) + '"><td>' + bookLink(c.book_id, c.title) + (c.year ? " (" + c.year + ")" : "") + "</td><td>" +
     c.candidates.map((x) => '<div class="cand">' + esc(x.key) + " " + esc(x.title || "") + (x.year ? " (" + x.year + ")" : "") + (x.citekey ? " · " + esc(x.citekey) : "") +
+      (x.reason === "printed_isbn" ? ' <span class="note">ISBN ' + esc(x.printed_isbn) + " printed in the book; check the edition</span>" : "") +
       ' <button type="button" data-book="' + esc(c.book_id) + '" data-zkey="' + esc(x.key) + '" data-zaction="confirm"' + dis + ">This book</button>" +
       ' <button type="button" data-book="' + esc(c.book_id) + '" data-zkey="' + esc(x.key) + '" data-zaction="reject"' + dis + ">Not this book</button></div>").join("") + "</td></tr>").join("")
     : empty(2, "None.");
@@ -58,6 +61,22 @@ async function load() {
       ' <button type="button" data-book="' + esc(d.book_id) + '" data-zkey="' + esc(x.key) + '" data-zaction="reject"' + dis + ">Not a duplicate</button></div>").join("") + "</td></tr>").join("")
     : empty(3, "None.");
   document.getElementById("nokey").innerHTML = r.no_citekey.length ? r.no_citekey.map((m) => "<tr><td>" + bookLink(m.book_id, m.title) + "</td><td>" + esc(m.zotero_key) + "</td><td>" + esc(how[m.matched_by] || m.matched_by) + "</td></tr>").join("") : empty(3, "None.");
+  showWanted();
+}
+// ?book=<book id> (a link from holdings-mcp's worklist): highlight that book's possible match and scroll to it.
+function showWanted() {
+  const want = new URLSearchParams(location.search).get("book");
+  if (!want) return;
+  const row = [...document.querySelectorAll("tr[data-book-row]")].find((tr) => tr.dataset.bookRow === want);
+  const note = document.getElementById("wanted-note");
+  if (row) {
+    row.classList.add("wanted");
+    note.hidden = true;
+    row.scrollIntoView({ block: "center" });
+  } else {
+    note.hidden = false;
+    note.innerHTML = esc(want) + " has no possible match to confirm here. " + bookLink(want, "Open its page") + " to see where it stands.";
+  }
 }
 document.addEventListener("click", async (e) => {
   const t = e.target;
