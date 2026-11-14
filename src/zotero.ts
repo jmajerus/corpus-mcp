@@ -1,6 +1,7 @@
 import { recordChanges } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
-import { type BookRow, type Corpus, ToolError, getBook, pinCitekey } from "./tools.js";
+import { pinnedByUuid } from "./data.js";
+import { type BookRow, type Corpus, type PinArgs, ToolError, effectiveCitekey, getBook, pinCitekey } from "./tools.js";
 
 /**
  * A read-only view of a Zotero library through the Zotero Web API, or holdings-mcp's copy of it on the LAN
@@ -337,12 +338,88 @@ export function zoteroReport(c: Corpus, config: ZoteroConfig | undefined) {
   };
 }
 
+/** True when the API is holdings-mcp's copy of Zotero on the LAN rather than zotero.org. */
+export function viaHoldings(config: ZoteroConfig): boolean {
+  return !/^https?:\/\/api\.zotero\.org(?:\/|$)/i.test(config.apiBase);
+}
+
+export interface ZoteroSyncOptions {
+  /** How long pin_citekey waits for the refresh before answering without it (default 45 s). */
+  filingDeadlineMs?: number;
+  /** Per request to holdings-mcp's /api/refresh (default 30 s). */
+  refreshTimeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
 /** One sync at a time, shared by the timer and the dashboard's job; a request during a sync joins it. */
 export class ZoteroSync {
   private current: Promise<SyncResult> | null = null;
   private timer: NodeJS.Timeout | null = null;
+  private filing: Promise<string[]> | null = null;
+  private nextFiling: Promise<string[]> | null = null;
 
-  constructor(private readonly c: Corpus, readonly config: ZoteroConfig) {}
+  constructor(private readonly c: Corpus, readonly config: ZoteroConfig, private readonly options: ZoteroSyncOptions = {}) {}
+
+  /**
+   * After a pin: asks holdings-mcp to pull from zotero.org (when the API is holdings-mcp), syncs the mirror
+   * from it, which runs the matching, then asks holdings-mcp again so it reads the updated books feed.
+   * Resolves to notes on what failed, never rejects. Calls during a run share the next one, since the
+   * running one may have asked holdings-mcp before their item reached Zotero.
+   */
+  refreshForFiling(): Promise<string[]> {
+    if (!this.filing) {
+      this.filing = this.filingRun().finally(() => { this.filing = null; });
+      return this.filing;
+    }
+    return this.nextFiling ??= this.filing.then(() => {
+      this.nextFiling = null;
+      return this.refreshForFiling();
+    });
+  }
+
+  /** refreshForFiling, waiting at most the filing deadline; null when the run is still going (it carries on). */
+  async refreshForFilingWithin(): Promise<string[] | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), this.options.filingDeadlineMs ?? 45_000); });
+    try {
+      return await Promise.race([this.refreshForFiling(), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async askHoldings(notes: string[]): Promise<void> {
+    if (!viaHoldings(this.config)) return;
+    const url = new URL("/api/refresh", this.config.apiBase);
+    try {
+      const res = await (this.options.fetchImpl ?? fetch)(url, { method: "POST", signal: AbortSignal.timeout(this.options.refreshTimeoutMs ?? 30_000) });
+      await res.body?.cancel();
+      if (!res.ok) notes.push(`holdings-mcp answered ${res.status} to the refresh`);
+    } catch (error) {
+      notes.push(`holdings-mcp didn't answer the refresh (${(error as Error).message})`);
+    }
+  }
+
+  /**
+   * A sync that starts after now: a sync already under way may have read holdings-mcp's copy before the
+   * refresh just asked for, so it is waited out first. Another that starts meanwhile started after now too.
+   */
+  async runAfterNow(): Promise<SyncResult> {
+    if (this.current) await this.current.catch(() => undefined);
+    return this.run();
+  }
+
+  private async filingRun(): Promise<string[]> {
+    const notes: string[] = [];
+    await this.askHoldings(notes);
+    try {
+      await this.runAfterNow();
+    } catch (error) {
+      notes.push(`the Zotero mirror didn't sync (${(error as Error).message})`);
+    }
+    await this.askHoldings(notes);
+    return notes;
+  }
 
   run(log: (text: string) => void = () => {}): Promise<SyncResult> {
     if (!this.current) {
@@ -393,4 +470,57 @@ export function zoteroSynced(c: Corpus): boolean {
 export function zoteroItemLink(library: string | undefined, key: string): string {
   const group = library?.match(/^groups\/(\d+)$/)?.[1];
   return group ? `zotero://select/groups/${group}/items/${key}` : `zotero://select/library/items/${key}`;
+}
+
+export type FilingState = "matched" | "citekey_differs" | "not_matched" | "not_checked";
+
+/**
+ * Where a just-pinned book stands in Zotero, from the mirror: the item it matches, or why there is none.
+ * `notes` are what failed in the refresh; `pending` means the refresh outran its deadline.
+ */
+export function filingState(c: Corpus, book: BookRow, library: string | undefined, refresh: { notes: string[]; pending: boolean } | null) {
+  const later = "The pin is saved; the match may still be on its way: cite_passage shows it once the mirror has it.";
+  if (!refresh && !zoteroSynced(c)) {
+    return { zotero: null, zotero_state: "not_checked" as FilingState, zotero_note: "This server doesn't mirror Zotero, so the match wasn't checked." };
+  }
+  const { match, candidates } = zoteroMatch(c, book);
+  const { citekey } = effectiveCitekey(book, pinnedByUuid(c.data, book.uuid));
+  const trouble = refresh?.pending
+    ? "The refresh from Zotero is taking longer than expected and carries on in the background."
+    : refresh?.notes.length ? `${refresh.notes.join("; ")}.` : "";
+  if (match) {
+    const zotero = { library: library ?? null, key: match.key, citekey: match.citekey, matched_by: match.matched_by };
+    if (match.citekey && citekey && match.citekey.toLowerCase() !== citekey.toLowerCase()) {
+      return {
+        zotero, zotero_state: "citekey_differs" as FilingState,
+        zotero_note: `Zotero item ${match.key} is this book, but its citekey is "${match.citekey}", not "${citekey}". Pin "${match.citekey}" with replace: true, or change the key in Zotero.`,
+      };
+    }
+    return { zotero, zotero_state: "matched" as FilingState, zotero_note: null };
+  }
+  const reasons: string[] = [];
+  if (trouble) reasons.push(trouble);
+  const byKey = citekey
+    ? c.data.prepare("SELECT key FROM zotero_items WHERE citekey = ? COLLATE NOCASE AND trashed = 0 ORDER BY key").pluck().all(citekey) as string[]
+    : [];
+  if (byKey.length) {
+    reasons.push(`Zotero item ${byKey.join(", ")} has the citekey "${citekey}" but no "Calibre UUID: ${book.uuid}" line in Extra, so nothing ties it to this book. Add the line, or confirm the item on the admin Zotero page.`);
+  } else {
+    reasons.push(`No Zotero item carries this book's Calibre UUID (${book.uuid}) in Extra${citekey ? ` or the citekey "${citekey}"` : ""}.`);
+  }
+  if (candidates.length) reasons.push(`${candidates.length} item(s) share its title and author (${candidates.map((x) => x.key).join(", ")}).`);
+  if (trouble) reasons.push(later);
+  return { zotero: null, zotero_state: "not_matched" as FilingState, zotero_note: reasons.join(" ") };
+}
+
+/**
+ * pin_citekey as the commit point of filing a book: records the key, then (with a sync) refreshes the
+ * mirror through holdings-mcp and answers with the book's match. The pin stands whatever the refresh does.
+ */
+export async function commitPin(c: Corpus, args: PinArgs, sync: ZoteroSync | null | undefined, by?: string) {
+  const pinned = pinCitekey(c, args, by);
+  const book = getBook(c, pinned.book_id);
+  const notes = sync ? await sync.refreshForFilingWithin() : undefined;
+  const refresh = sync ? { notes: notes ?? [], pending: notes === null } : null;
+  return { ...pinned, ...filingState(c, book, sync?.config.library, refresh) };
 }

@@ -19,7 +19,7 @@ import { findPrintedYears, printedYear } from "../src/years.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
 import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, reflow, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
 import { listProposals, normalizeProposalTags, proposeTags, reviewProposal, setBookCategories, tagPlan, taggingWorklist, vocabularyReport } from "../src/tagging.js";
-import { type ZoteroConfig, linkZotero, syncZotero, zoteroCiteInfo, zoteroMatch, zoteroReport } from "../src/zotero.js";
+import { type ZoteroConfig, ZoteroSync, commitPin, linkZotero, syncZotero, zoteroCiteInfo, zoteroMatch, zoteroReport } from "../src/zotero.js";
 import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
@@ -230,40 +230,54 @@ describe("tools", () => {
 
   it("returns an outline with 1-based pages and printed labels", () => {
     const outline = getBookOutline(c, "main:1");
-    expect(outline.outline[2]).toEqual({ level: 1, title: "Chapter 1", page: 3, page_label: "1" });
+    expect(outline.outline[2]).toEqual({ level: 1, title: "Chapter 1", file_page: 3, page_label: "1", page: 3 });
     expect(getBookOutline(c, "main:2").page_kind).toBe("location");
   });
 
   it("reads a section or a page range and reports where to continue", () => {
     const section = readBook(c, { book_id: "main:1", section: "Chapter 1" });
-    expect(section).toContain("--- page 3 (printed 1) · Part One › Chapter 1 ---");
-    expect(section).toContain("--- page 4 (printed 2)");
-    expect(section).not.toContain("page 5");
-    const partial = readBook(c, { book_id: "main:1", start_page: 1, end_page: 5, max_chars: 500 });
-    expect(partial).toMatch(/Continue with start_page \d/);
-    expect(() => readBook(c, { book_id: "main:1", start_page: 9 })).toThrow(/pages 1–5/);
-    const epubText = readBook(c, { book_id: "main:2", start_page: 1 });
-    expect(epubText).toContain("--- location 1 · Alpha ---");
+    expect(section).toContain("--- file_page 3 · page_label 1 · Part One › Chapter 1 ---");
+    expect(section).toContain("--- file_page 4 · page_label 2");
+    expect(section).not.toContain("file_page 5");
+    const partial = readBook(c, { book_id: "main:1", file_page: 1, end_file_page: 5, max_chars: 500 });
+    expect(partial).toMatch(/Continue with file_page \d/);
+    // The old names still work, for one release, and must agree with the new ones when both are given.
+    expect(readBook(c, { book_id: "main:1", start_page: 1, end_page: 5, max_chars: 500 })).toBe(partial);
+    expect(() => readBook(c, { book_id: "main:1", file_page: 2, start_page: 3 })).toThrow(/deprecated name for file_page/);
+    expect(() => readBook(c, { book_id: "main:1", file_page: 9 })).toThrow(/file pages 1–5/);
+    const epubText = readBook(c, { book_id: "main:2", file_page: 1 });
+    expect(epubText).toContain("--- file_page 1 (reading location) · Alpha ---");
     expect(epubText).toMatch(/reading locations, not page numbers/);
+    const hit = searchCorpus(c, { query: "weak ties" }).results[0];
+    expect(hit).toMatchObject({ file_page: hit.page, page_kind: "pdf_page" });
     expect(searchCorpus(c, { query: "amplifies", book_id: "main:2" }).results[0].page_kind).toBe("location");
     expect(searchCorpus(c, { query: "weak ties" }).results[0].page_kind).toBe("pdf_page");
   });
 
   it("cites as a CSL item with a page locator for PDFs and none for EPUBs", () => {
-    const pdfCite = citePassage(c, { book_id: "main:1", page: 3, end_page: 4 });
+    const pdfCite = citePassage(c, { book_id: "main:1", file_page: 3, end_file_page: 4 });
     expect(pdfCite.csl).toEqual({
       id: "author1986networks", "citation-key": "author1986networks", type: "book", title: "Networks",
       author: [{ family: "Author", given: "Ann" }, { family: "Second", given: "Bo" }],
       publisher: "Free Press", issued: { "date-parts": [[1986]] }, ISBN: "9780000000002",
     });
     expect(pdfCite.locator).toEqual({ label: "page", locator: "1-2" });
-    expect(pdfCite.position).toEqual({ page: 3, end_page: 4, page_kind: "page", section: "Part One › Chapter 1", page_label: "1", end_page_label: "2" });
+    expect(pdfCite.position).toEqual({
+      file_page: 3, end_file_page: 4, page_kind: "page", section: "Part One › Chapter 1", page_label: "1", end_page_label: "2", page: 3, end_page: 4,
+    });
+    // The same passage by its old names, and by the printed numbers.
+    expect(citePassage(c, { book_id: "main:1", page: 3, end_page: 4 }).position).toEqual(pdfCite.position);
+    expect(citePassage(c, { book_id: "main:1", page_label: "1", end_page_label: "2" })).toMatchObject({ locator: pdfCite.locator, position: pdfCite.position });
+    expect(citePassage(c, { book_id: "main:1", page_label: "1", file_page: 3 }).locator).toEqual({ label: "page", locator: "1" });
+    expect(() => citePassage(c, { book_id: "main:1", page_label: "1", file_page: 4 })).toThrow(/is file_page 3, not 4/);
+    expect(() => citePassage(c, { book_id: "main:1", page_label: "99" })).toThrow(/No page of main:1 is labelled "99"/);
+    expect(() => citePassage(c, { book_id: "main:2", page_label: "1" })).toThrow(/reading locations, not printed page numbers/);
     expect(pdfCite).toMatchObject({ isbn: "9780000000002", isbn_candidates: [] });
     expect(pdfCite.bibtex).toMatch(/^@book\{author1986networks,/);
     // The legacy citation field, for one release; the legacy zotero_filing calls are gone.
     expect(pdfCite.citation).toEqual({ title: "Networks", author: "Ann Author and Bo Second", publisher: "Free Press", year: "1986", pages: "1-2" });
     expect(pdfCite).not.toHaveProperty("zotero_filing");
-    const epubCite = citePassage(c, { book_id: "main:2", page: 1 });
+    const epubCite = citePassage(c, { book_id: "main:2", file_page: 1 });
     expect(epubCite.csl).toEqual({ id: "calibre:uuid-2", type: "book", title: "Echoes", author: [{ family: "Writer", given: "Cy" }] });
     expect(epubCite.locator).toBeNull();
     expect(epubCite.position).toMatchObject({ page_kind: "location", section: "Alpha" });
@@ -274,10 +288,21 @@ describe("tools", () => {
   });
 
   it("renders PDF pages and refuses reflowable books", () => {
-    const image = renderPage(c, { book_id: "main:1", page: 1, scale: 0.5 });
+    const image = renderPage(c, { book_id: "main:1", file_page: 3, scale: 0.5 });
     expect(Buffer.from(image.png, "base64").subarray(1, 4).toString()).toBe("PNG");
-    expect(image.width).toBe(306);
+    expect(image).toMatchObject({ width: 306, file_page: 3, page_label: "1" });
+    expect(renderPage(c, { book_id: "main:1", page: 1, scale: 0.5 }).file_page).toBe(1);
+    expect(() => renderPage(c, { book_id: "main:1" })).toThrow(/Pass file_page/);
     expect(() => renderPage(c, { book_id: "main:2", page: 1 })).toThrow(/no fixed pages/);
+  });
+
+  it("refuses a page_label printed on more than one page", () => {
+    config.libraries.push("restart");
+    // Two parts that each number their pages from 1: "1" is file pages 1 and 3.
+    makeLibrary(root, "restart", [{ id: 4, title: "Two Parts", authors: ["Ida Part"], files: { pdf: makePdf({ pages: [["a"], ["b"], ["c"], ["d"]], labels: [[0, "D", 1], [2, "D", 1]] }) } }]);
+    scanLibraries(config, db);
+    expect(() => citePassage(c, { book_id: "restart:4", page_label: "1" })).toThrow(/printed on 2 pages of restart:4 \(file_page 1, 3\)/);
+    expect(citePassage(c, { book_id: "restart:4", file_page: 3 }).position).toMatchObject({ file_page: 3, page_label: "1" });
   });
 
   it("reports status, including scans with no text layer", () => {
@@ -1145,6 +1170,11 @@ describe("zotero mirror", () => {
   let requests: string[];
   let throttle: number;
   let zconfig: ZoteroConfig;
+  // holdings-mcp's /api/refresh on the same stand-in: how often it was asked, what it answers, and how slowly.
+  let refreshes: number;
+  let refreshStatus: number;
+  let refreshDelay: number;
+  let itemsDelay: number;
   const put = (key: string, data: Record<string, unknown>) => {
     libraryVersion++;
     items.set(key, { key, version: libraryVersion, data: { key, itemType: "book", ...data } });
@@ -1152,7 +1182,7 @@ describe("zotero mirror", () => {
 
   beforeEach(async () => {
     scanLibraries(config, db);
-    items = new Map(); deleted = []; libraryVersion = 0; requests = []; throttle = 1;
+    items = new Map(); deleted = []; libraryVersion = 0; requests = []; throttle = 1; refreshes = 0; refreshStatus = 200; refreshDelay = 0; itemsDelay = 0;
     put("AAAA1111", { title: "Networks", date: "1986", creators: [{ creatorType: "author", lastName: "Author", firstName: "Ann" }], extra: "Calibre UUID: uuid-1", citationKey: "author1986networks" });
     put("BBBB2222", { title: "Strength in Numbers", date: "2000", creators: [{ creatorType: "author", lastName: "Fixed", firstName: "Fay" }], extra: "Citation Key: fixed2000strengtha\nCalibre UUID: uuid-6" });
     put("CCCC3333", { title: "Echoes: A Study", creators: [{ creatorType: "author", lastName: "Writer", firstName: "Cy" }], citationKey: "writer2010echoes" });
@@ -1161,6 +1191,10 @@ describe("zotero mirror", () => {
     api = http.createServer((req, res) => {
       const url = new URL(req.url!, "http://x");
       requests.push(`${url.pathname}?${url.searchParams}`);
+      if (req.method === "POST" && url.pathname === "/api/refresh") {
+        refreshes++;
+        return void setTimeout(() => res.writeHead(refreshStatus).end(), refreshDelay);
+      }
       if (req.headers["zotero-api-key"] !== "k") return void res.writeHead(403).end();
       if (throttle-- > 0) return void res.writeHead(429, { "retry-after": "0" }).end();
       const since = Number(url.searchParams.get("since") ?? 0);
@@ -1168,7 +1202,7 @@ describe("zotero mirror", () => {
       if (url.pathname === "/users/1/items/top") {
         const changed = [...items.values()].filter((i) => i.version > since);
         const start = Number(url.searchParams.get("start") ?? 0);
-        return void res.writeHead(200, { ...headers, "total-results": String(changed.length) }).end(JSON.stringify(changed.slice(start, start + 2)));
+        return void setTimeout(() => res.writeHead(200, { ...headers, "total-results": String(changed.length) }).end(JSON.stringify(changed.slice(start, start + 2))), itemsDelay);
       }
       if (url.pathname === "/users/1/deleted") return void res.writeHead(200, headers).end(JSON.stringify({ items: deleted.filter((d) => d.version > since).map((d) => d.key) }));
       res.writeHead(404).end();
@@ -1232,6 +1266,68 @@ describe("zotero mirror", () => {
     expect(zoteroReport(c, zconfig).mismatches.map((m) => [m.book_id, m.zotero_key, m.zotero_citekey])).toEqual([
       ["main:2", "KKKK9999", "writer2010echoesb"], ["main:6", "BBBB2222", "fixed2000strengtha"],
     ]);
+  });
+
+  it("commits a filing at pin_citekey: refreshes through holdings-mcp, then answers with the match", async () => {
+    // Not mirrored yet: nothing to say about Zotero.
+    expect(await commitPin(c, { book_id: "main:5", citekey: "one2001weak" }, null)).toMatchObject({ status: "pinned", zotero: null, zotero_state: "not_checked" });
+    await syncZotero(c, zconfig);
+    const sync = new ZoteroSync(c, zconfig);
+
+    // Filed in Zotero since the last sync, with the book's UUID in Extra.
+    put("PPPP1111", { title: "Weak Ties Revisited", date: "2001", extra: "Calibre UUID: uuid-5", citationKey: "one2001weak" });
+    const filed = await commitPin(c, { book_id: "main:5", citekey: "one2001weak" }, sync);
+    expect(filed).toMatchObject({
+      status: "unchanged", zotero: { library: "users/1", key: "PPPP1111", citekey: "one2001weak", matched_by: "calibre_uuid" }, zotero_state: "matched", zotero_note: null,
+    });
+    // Asked before the sync (to pull from zotero.org) and after (to read the updated books feed).
+    expect(refreshes).toBe(2);
+
+    // Pinned under another key than Zotero's.
+    const differs = await commitPin(c, { book_id: "main:5", citekey: "other2001weak", replace: true }, sync);
+    expect(differs).toMatchObject({ status: "replaced", zotero_state: "citekey_differs", zotero: { key: "PPPP1111" } });
+    expect(differs.zotero_note).toMatch(/its citekey is "one2001weak", not "other2001weak"/);
+
+    // Filed with the key but without the UUID line: a candidate, not a match, and the answer says why.
+    const unmatched = await commitPin(c, { book_id: "main:2", citekey: "writer2010echoes" }, sync);
+    expect(unmatched).toMatchObject({ status: "pinned", zotero: null, zotero_state: "not_matched" });
+    expect(unmatched.zotero_note).toMatch(/CCCC3333 has the citekey "writer2010echoes" but no "Calibre UUID: uuid-2" line/);
+
+    // holdings-mcp failing doesn't fail the pin; the answer says the match may be on its way.
+    refreshStatus = 503;
+    const down = await commitPin(c, { book_id: "main:2", citekey: "writer2010echoes" }, sync);
+    expect(down).toMatchObject({ status: "unchanged", zotero_state: "not_matched" });
+    expect(down.zotero_note).toMatch(/holdings-mcp answered 503 to the refresh.*may still be on its way/s);
+  });
+
+  it("shares refreshes between concurrent pins and answers within its deadline", async () => {
+    await syncZotero(c, zconfig);
+    const sync = new ZoteroSync(c, zconfig, { filingDeadlineMs: 2000 });
+    // One run under way, and three pins arriving during it share a single run after it.
+    refreshDelay = 50;
+    const first = sync.refreshForFiling();
+    await Promise.all([first, ...["main:5", "main:2", "main:1"].map((id, i) => commitPin(c, { book_id: id, citekey: `shared${i}`, replace: true }, sync))]);
+    expect(refreshes).toBe(4);
+
+    // A background sync already reading the mirror's source when the pin's refresh is asked for: the
+    // filing waits it out and syncs again after the refresh, so it sees the newly filed item.
+    itemsDelay = 100; refreshDelay = 0; requests = [];
+    const background = sync.run();
+    put("QQQQ2222", { title: "Echoes", extra: "Calibre UUID: uuid-2", citationKey: "writer2010echoes" });
+    const raced = await commitPin(c, { book_id: "main:2", citekey: "writer2010echoes", replace: true }, sync);
+    await background;
+    const firstRefresh = requests.indexOf("/api/refresh?");
+    expect(requests.slice(firstRefresh).some((r) => r.startsWith("/users/1/items/top"))).toBe(true);
+    expect(raced).toMatchObject({ zotero_state: "matched", zotero: { key: "QQQQ2222" } });
+    itemsDelay = 0;
+
+    // Slower than the deadline: the pin is saved and the answer says the refresh carries on.
+    refreshDelay = 300;
+    const slow = new ZoteroSync(c, zconfig, { filingDeadlineMs: 20 });
+    const late = await commitPin(c, { book_id: "main:5", citekey: "late2001weak", replace: true }, slow);
+    expect(late).toMatchObject({ status: "replaced", citekey: "late2001weak", zotero_state: "not_matched" });
+    expect(late.zotero_note).toMatch(/taking longer than expected/);
+    await slow.refreshForFiling();
   });
 
   it("keeps the last error and the library version when a sync fails", async () => {

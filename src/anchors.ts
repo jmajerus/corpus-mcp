@@ -4,7 +4,7 @@ import type { DB } from "./db.js";
 import { type HoldingsBook, hasText, holdingsBook, holdingsBookRows } from "./holdings.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { CONTEXT, MAX_QUOTE, type QuoteAnchor, find, joinedPageText, locate, pagesOf, suggestions } from "./quotes.js";
-import type { BookRow, Corpus } from "./tools.js";
+import { type BookRow, type Corpus, ToolError, citePassage } from "./tools.js";
 
 /**
  * Verify and anchors for quote-mcp (docs/dev-briefs/holdings-and-quotes.md §2, shapes agreed with
@@ -111,16 +111,28 @@ const fromRow = (r: AnchorRow): Anchor => ({
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const bad = (error: string): ApiAnswer => ({ status: 400, body: { error } });
 
-/** POST /api/verify: is this text in this book, and where? save_quote's check, without the save. */
+/**
+ * POST /api/verify: is this text in this book, and where? save_quote's check, without the save. `file_page`
+ * (a position in the file; `page` is its deprecated name) says where to look first. Answers carry
+ * `file_page` and `page_label` (the printed number, PDF only); `page` in `closest` is file_page's old name.
+ */
 export function verifyPassage(c: Corpus, o: AnchorOptions, body: unknown): ApiAnswer {
-  if (!isObject(body)) return bad("Send { book, text, page? }.");
+  if (!isObject(body)) return bad("Send { book, text, file_page? }.");
   const key = typeof body.book === "string" ? body.book.trim() : "";
   const wanted = typeof body.text === "string" ? body.text.trim() : "";
   if (!key) return bad("Send the book: a book id, citekey, Calibre UUID, or zotero:<library>/<key>.");
   if (!wanted) return bad("Send the text to verify.");
   if (wanted.length > MAX_QUOTE) return bad(`Quotes are limited to ${MAX_QUOTE} characters; this one has ${wanted.length}.`);
-  if (body.page !== undefined && body.page !== null && !(Number.isInteger(body.page) && (body.page as number) >= 1)) return bad("page is a page number from 1.");
-  const page = typeof body.page === "number" ? body.page - 1 : undefined;
+  const hint = (name: string) => body[name] === undefined || body[name] === null ? undefined : body[name];
+  for (const name of ["file_page", "page"]) {
+    const v = hint(name);
+    if (v !== undefined && !(Number.isInteger(v) && (v as number) >= 1)) return bad(`${name} is a position in the file, from 1.`);
+  }
+  if (hint("file_page") !== undefined && hint("page") !== undefined && hint("file_page") !== hint("page")) {
+    return bad("file_page and page disagree. page is the deprecated name for file_page; send file_page only.");
+  }
+  const filePage = (hint("file_page") ?? hint("page")) as number | undefined;
+  const page = filePage === undefined ? undefined : filePage - 1;
 
   let books = booksFor(c, o, key);
   if (!books.length) return { status: 404, body: { error: "no-book" } };
@@ -138,7 +150,7 @@ export function verifyPassage(c: Corpus, o: AnchorOptions, body: unknown): ApiAn
     const label = labels(c.db, book.id);
     const closest = suggestions(c, book, wanted).map((s) => {
       const l = label(s.page - 1);
-      return { page: s.page, page_label: l?.label ?? null, section: l?.section_path ?? null, locator: locator(l?.label ?? null, null), snippet: s.snippet };
+      return { file_page: s.page, page_label: l?.label ?? null, section: l?.section_path ?? null, locator: locator(l?.label ?? null, null), snippet: s.snippet, page: s.page };
     });
     return { status: 200, body: { match: false, closest, book: named } };
   }
@@ -147,7 +159,8 @@ export function verifyPassage(c: Corpus, o: AnchorOptions, body: unknown): ApiAn
     status: 200,
     body: {
       match: true, exact: wanted === anchor.text, text: anchor.text, locator: locator(anchor.page_label, anchor.end_page_label),
-      page_label: anchor.page_label, section: anchor.section, anchor, book: named,
+      file_page: anchor.start_page + 1, end_file_page: anchor.end_page + 1, page_label: anchor.page_label, end_page_label: anchor.end_page_label,
+      section: anchor.section, anchor, book: named,
     },
   };
 }
@@ -288,4 +301,30 @@ export function reanchorAnchors(db: DB, data: DataStore): { reanchored: number; 
     })();
   }
   return counts;
+}
+
+/**
+ * GET /api/csl?book=<book id, Calibre UUID, or citekey>: the book's CSL JSON item as cite_passage gives it,
+ * without a locator, for building a bibliography elsewhere (iasp-mcp, for books not filed in Zotero). Its
+ * "id" is the book's citekey (Calibre's, else the pinned one), else the proposed one when Calibre's metadata
+ * blocks nothing, else calibre:<uuid>. Books with an excluded tag are unknown here, as in the holdings feed.
+ */
+export function cslAnswer(c: Corpus, o: AnchorOptions, key: string | null): ApiAnswer {
+  const wanted = key?.trim() ?? "";
+  if (!wanted) return bad("Send ?book=: a book id (main:184), Calibre UUID, or citekey.");
+  const books = booksFor(c, o, wanted);
+  if (!books.length) return { status: 404, body: { error: "no-book" } };
+  // Copies of one book (the same UUID in two libraries) give the same item.
+  if (new Set(books.map((b) => b.uuid ?? b.id)).size > 1) {
+    return { status: 409, body: { error: "ambiguous", books: books.map((b) => holdingsBook(c, b, o.zoteroLibrary)) } };
+  }
+  try {
+    const cite = citePassage(c, { book_id: books[0].id });
+    const warnings = [...cite.warnings];
+    if (!cite.citekey && !cite.csl["citation-key"]) warnings.push(`The book has no citekey yet, so the item's id is "${cite.csl.id}".`);
+    return { status: 200, body: { item: cite.csl, warnings } };
+  } catch (error) {
+    if (error instanceof ToolError) return bad(error.message);
+    throw error;
+  }
 }

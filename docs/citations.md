@@ -10,7 +10,8 @@
            "author": [{ "family": "Nye", "given": "Joseph S., Jr." }], "publisher": "PublicAffairs",
            "issued": { "date-parts": [[2011]] }, "ISBN": "9781586488925" },
   "locator": { "label": "page", "locator": "4-5" },
-  "position": { "page": 19, "end_page": 20, "page_kind": "page", "page_label": "4", "end_page_label": "5", "section": "Part One › Chapter 1" },
+  "position": { "file_page": 19, "end_file_page": 20, "page_kind": "page", "page_label": "4", "end_page_label": "5", "section": "Part One › Chapter 1",
+                "page": 19, "end_page": 20 },
   "citekey": "nye2011future", "citekey_source": "pinned",
   "bibtex": "@book{nye2011future, …}", "isbn": "9781586488925", "isbn_candidates": [],
   "warnings": []
@@ -24,6 +25,14 @@
 - `locator` is a CSL locator: printed page labels for PDFs (physical pages,
   with a warning, when a PDF has none), and null for EPUB and MOBI, whose
   locations are not pages. `position` is where the passage is in the index.
+- **Two kinds of page number.** `file_page` is a page's 1-based position in
+  the file (a physical PDF page; for EPUB and MOBI a reading location, nothing
+  to cite). `page_label` is the number printed on a PDF page, the one to cite.
+  Every tool takes and returns these names (quote-mcp uses the same two).
+  `cite_passage` takes either `file_page`/`end_file_page` or
+  `page_label`/`end_page_label`, and refuses a label printed on more than one
+  page. `page`, `start_page`, and `end_page`, the old names for file pages, are
+  still accepted and returned for one release.
 - `bibtex` is null when the citekey is blocked; `isbn` is null when Calibre's
   ISBN is missing or fails its check digit.
 - Until consumers switch, the legacy `citation` field (`title`, `author`,
