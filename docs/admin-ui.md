@@ -233,8 +233,11 @@ on a book's page.
 How Calibre's books stand against a read-only mirror of the Zotero library. The
 summary shows when it last synced. **Sync now** runs a sync job.
 
-- **Possible matches:** same title, first author, and year, but nothing ties
-  them. **This book** links it and pins its citekey; **Not this book** dismisses it.
+- **Possible matches:** same title, first author, and year, or the only item
+  with an ISBN printed in the book (marked, since it may be another edition's),
+  but nothing ties them. **This book** links it and pins its citekey; **Not this
+  book** dismisses it. `/admin/zotero?book=<book id>` highlights that book's row
+  and scrolls to it, or says it has nothing to confirm.
 - **Citekey mismatches:** the book's key differs from Zotero's. Fix whichever
   is wrong; corpus-mcp never changes a pin on its own.
 - **Possible duplicates in Zotero:** perhaps a second copy filed by mistake.

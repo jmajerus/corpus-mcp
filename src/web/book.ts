@@ -49,7 +49,7 @@ function categoriesCard() {
   return '<div class="card"><h2>Categories ' + badge("category", c.state) + "</h2><div>In Calibre: " + calibre + "</div>" + pending + proposal + editor + "</div>";
 }
 
-// Where the book is in the Zotero mirror; title-only candidates get confirm and reject buttons.
+// Where the book is in the Zotero mirror; candidates (by title, or a printed ISBN) get confirm and reject buttons.
 function zoteroRow() {
   const z = book.zotero;
   if (!z) return '<span class="note">not synced</span>';
@@ -61,6 +61,7 @@ function zoteroRow() {
   if (!z.candidates.length) return '<span class="note">not found</span>';
   const dis = canWrite ? "" : " disabled";
   return z.candidates.map((x) => '<div>Maybe <a href="' + esc(x.link) + '">' + esc(x.key) + "</a> " + esc(x.title || "") + (x.year ? " (" + x.year + ")" : "") + (x.citekey ? " · " + esc(x.citekey) : "") +
+    (x.reason === "printed_isbn" ? ' <span class="note">its ISBN ' + esc(x.printed_isbn) + " is printed in this book; check the edition</span>" : "") +
     ' <button type="button" data-zkey="' + esc(x.key) + '" data-zaction="confirm"' + dis + ">This book</button>" +
     ' <button type="button" data-zkey="' + esc(x.key) + '" data-zaction="reject"' + dis + ">Not this book</button></div>").join("");
 }

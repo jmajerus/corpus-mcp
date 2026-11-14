@@ -121,8 +121,11 @@ last library version, with long timeouts, retries, and Zotero's `Backoff` and
 - **Matching:** a book matches an item whose Extra holds `Calibre UUID: <uuid>`
   (written when a book is filed from `cite_passage`'s BibTeX), else one item
   with the book's ISBN, else a link a person confirmed. Items with the same
-  title, first author, and year are offered as candidates to confirm or
-  reject, on the book's page and at `/admin/zotero`.
+  title, first author (ignoring credentials such as "Ph.D."), and year are
+  offered as candidates to confirm or reject, on the book's page and at
+  `/admin/zotero`, as is the one item carrying an ISBN printed in the book's
+  text (`reason: "printed_isbn"`). A printed ISBN never matches on its own:
+  copyright pages print other editions' ISBNs.
 - **Pinning:** a matched item's citekey (Zotero's `citationKey` field, or a
   `Citation Key:` line in Extra) is pinned to a book that has no key yet.
   A key that differs from a pinned or Calibre key is reported, never changed.

@@ -1,7 +1,7 @@
 import { recordChanges } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { pinnedByUuid } from "./data.js";
-import { type BookRow, type Corpus, type PinArgs, ToolError, effectiveCitekey, getBook, pinCitekey } from "./tools.js";
+import { type BookRow, type Corpus, type PinArgs, ToolError, effectiveCitekey, getBook, pinCitekey, printedIsbns } from "./tools.js";
 
 /**
  * A read-only view of a Zotero library through the Zotero Web API, or holdings-mcp's copy of it on the LAN
@@ -83,6 +83,28 @@ export function normalizedTitle(title: string | null | undefined): string {
 
 function familyName(value: string | null | undefined): string {
   return String(value ?? "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z]/g, "");
+}
+
+/** Degrees, licences, and generational suffixes that follow a name ("Maureen Duffy Ph.D.", "Smith, Jr."). */
+const CREDENTIAL = /^(?:ph\.?\s?d|m\.?\s?d|psy\.?\s?d|ed\.?\s?d|d\.?\s?phil|d\.?\s?min|j\.?\s?d|ll\.?\s?[bdm]|m\.?\s?b\.?\s?a|m\.?\s?[as]|m\.?\s?sc|b\.?\s?[as]|r\.?\s?n|lcsw|lmft|lpc|cpa|esq|jr|sr|ii|iii|iv)\.?$/i;
+
+/** A name without trailing credentials: "Maureen Duffy, Ph.D." → "Maureen Duffy". */
+function withoutCredentials(name: string): string {
+  const words = name.replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  while (words.length > 1 && CREDENTIAL.test(words.at(-1)!)) words.pop();
+  return words.join(" ");
+}
+
+/**
+ * The first author's family name, as Zotero's first creator is compared: from Calibre's sort form ("Duffy,
+ * Maureen"), or, when that is only a credential ("Ph.D., Maureen Duffy") or missing, the last word of the
+ * name without its credentials.
+ */
+function firstFamily(book: Pick<BookRow, "authors" | "author_sorts">): string {
+  const sort = ((JSON.parse(book.author_sorts) as string[])[0] ?? "").split(",")[0].trim();
+  if (sort && !CREDENTIAL.test(sort)) return familyName(withoutCredentials(sort).split(" ").at(-1));
+  const name = (JSON.parse(book.authors) as string[])[0] ?? "";
+  return familyName(withoutCredentials(name).split(" ").at(-1));
 }
 
 /** The citekey Better BibTeX assigned: Zotero's field, else the "Citation Key:" line it writes to Extra. */
@@ -213,10 +235,24 @@ function survivor(c: Corpus, key: string): MirrorItem | undefined {
   return undefined;
 }
 
+export interface ZoteroCandidate {
+  key: string; citekey: string | null; title: string | null; year: number | null;
+  /**
+   * Why it may be this book: "title" (title, first author, and year agree) or "printed_isbn" (the only item
+   * with an ISBN printed in the book's text, which may be another edition's).
+   */
+  reason: "title" | "printed_isbn";
+  /** With reason "printed_isbn": the ISBN-13 the book prints. */
+  printed_isbn?: string;
+}
+
 export interface ZoteroMatch {
   match: { key: string; citekey: string | null; matched_by: MatchKind; title: string | null } | null;
-  /** Title, first author, and year agree, but nothing ties the two together; a person confirms or rejects. */
-  candidates: { key: string; citekey: string | null; title: string | null; year: number | null }[];
+  /**
+   * Items that may be this book though nothing ties them together: title, first author, and year agree, or
+   * it is the only item with an ISBN the book prints. A person confirms or rejects; never a match on its own.
+   */
+  candidates: ZoteroCandidate[];
   /** With a match: other items with the same title and first author, perhaps a second copy in Zotero. */
   duplicates: { key: string; citekey: string | null; title: string | null; year: number | null }[];
 }
@@ -230,8 +266,7 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
   const item = (sql: string, ...args: unknown[]) =>
     (c.data.prepare(`SELECT * FROM zotero_items WHERE ${live} AND ${sql}`).all(...args) as MirrorItem[])
       .filter((i) => !rejected.has(i.key) && (!i.calibre_uuid || i.calibre_uuid === book.uuid));
-  const sorts = JSON.parse(book.author_sorts) as string[];
-  const family = familyName((sorts[0] ?? "").split(",")[0]);
+  const family = firstFamily(book);
   // Same title (without a subtitle), first author, and year within one: a candidate, or beside a match, a duplicate.
   const lookalikes = (except?: string) => item("title_norm = ?", normalizedTitle(book.title))
     .filter((i) => i.key !== except && (!family || i.first_creator === family) && (!book.year || !i.year || Math.abs(i.year - book.year) <= 1))
@@ -258,7 +293,18 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
     // Only an ISBN that names one item; two copies of the same book are for a person to sort out.
     if (byIsbn.length === 1) return found(byIsbn[0], "isbn");
   }
-  return { match: null, candidates: lookalikes(), duplicates: [] };
+  const candidates: ZoteroCandidate[] = lookalikes().map((x) => ({ ...x, reason: "title" as const }));
+  // ISBNs printed in the text, other than Calibre's: a candidate only when one live item has the ISBN, since
+  // copyright pages print other editions' ISBNs and the last pages advertise other books.
+  const own = isbn ? isbn13(isbn) : null;
+  const holders = c.data.prepare("SELECT i.key FROM zotero_isbns z JOIN zotero_items i ON i.key = z.key WHERE z.isbn = ? AND i.trashed = 0").pluck();
+  for (const printed of new Set(printedIsbns(book).map((p) => p.isbn13).filter((i) => i !== own))) {
+    const keys = holders.all(printed) as string[];
+    if (keys.length !== 1 || candidates.some((x) => x.key === keys[0])) continue;
+    const [i] = item("key = ?", keys[0]);
+    if (i) candidates.push({ key: i.key, citekey: i.citekey, title: i.title, year: i.year, reason: "printed_isbn", printed_isbn: printed });
+  }
+  return { match: null, candidates, duplicates: [] };
 }
 
 /**
@@ -455,7 +501,7 @@ export function zoteroCiteInfo(c: Corpus, book: BookRow) {
     note: match
       ? `Already in Zotero as item ${match.key}${match.citekey ? ` (${match.citekey})` : ""}; don't file it again.`
       : candidates.length
-        ? `Zotero has ${candidates.length} item(s) with this title and author (${candidates.map((x) => x.key).join(", ")}) that may be this book; check before filing.`
+        ? `Zotero has ${candidates.length} item(s) that may be this book (${candidates.map((x) => x.reason === "printed_isbn" ? `${x.key}, by an ISBN printed in it` : x.key).join("; ")}); check before filing.`
         : null,
     synced_at: meta(c, "zotero_synced_at"),
   };

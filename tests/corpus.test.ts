@@ -1224,12 +1224,12 @@ describe("zotero mirror", () => {
     const report = zoteroReport(c, zconfig);
     expect(report.books).toMatchObject({ calibre_uuid: 2, isbn: 0, confirmed: 0, candidates: 1 });
     expect(report.sync).toMatchObject({ version: 5, items: 4, trashed: 1, error: null });
-    expect(report.candidates).toEqual([{ book_id: "main:2", title: "Echoes", year: null, candidates: [{ key: "CCCC3333", citekey: "writer2010echoes", title: "Echoes: A Study", year: null }] }]);
+    expect(report.candidates).toEqual([{ book_id: "main:2", title: "Echoes", year: null, candidates: [{ key: "CCCC3333", citekey: "writer2010echoes", title: "Echoes: A Study", year: null, reason: "title" }] }]);
     expect(report.mismatches).toEqual([{ book_id: "main:6", title: "Strength in Numbers", zotero_key: "BBBB2222", matched_by: "calibre_uuid", calibre: "fixed2000strength", zotero_citekey: "fixed2000strengtha" }]);
     // The trashed item and the note match nothing; library:7, a copy of Networks, is not offered A (filed for main:1).
     expect(zoteroMatch(c, getBookRow("main:5")).match).toBeNull();
     expect(zoteroMatch(c, getBookRow("library:7")).candidates).toEqual([]);
-    expect(zoteroCiteInfo(c, getBookRow("main:2"))?.note).toMatch(/1 item\(s\) with this title and author \(CCCC3333\)/);
+    expect(zoteroCiteInfo(c, getBookRow("main:2"))?.note).toMatch(/1 item\(s\) that may be this book \(CCCC3333\)/);
     expect(zoteroCiteInfo(c, getBookRow("main:1"))).toMatchObject({ zotero: { key: "AAAA1111", matched_by: "calibre_uuid" }, note: expect.stringMatching(/don't file it again/) });
 
     // Incremental: only what changed since version 5, and the deletion log.
@@ -1328,6 +1328,39 @@ describe("zotero mirror", () => {
     expect(late).toMatchObject({ status: "replaced", citekey: "late2001weak", zotero_state: "not_matched" });
     expect(late.zotero_note).toMatch(/taking longer than expected/);
     await slow.refreshForFiling();
+  });
+
+  it("offers the one item with an ISBN the book prints, and matches authors with credentials, for a person to confirm", async () => {
+    // As main:649 was: Calibre's author carries a degree, and the text prints the ISBN of the item filed in Zotero.
+    const printed = (isbn13: string) => JSON.stringify([{ isbn: isbn13, isbn13, format: null, page: 4, position: "front", page_label: null }]);
+    db.prepare("UPDATE books SET title = 'Mobbing Recovery', authors = ?, author_sorts = ?, year = 2013, isbn = NULL, printed_isbns = ? WHERE id = 'main:5'")
+      .run(JSON.stringify(["Maureen Duffy Ph.D."]), JSON.stringify(["Ph.D., Maureen Duffy"]), printed("9780199929559"));
+    put("OVER1111", { title: "Overcoming Mobbing", date: "2013", ISBN: "978-0-19-992955-9", citationKey: "duffy2013overcoming",
+      creators: [{ creatorType: "author", lastName: "Duffy", firstName: "Maureen" }] });
+    await syncZotero(c, zconfig);
+    const m = zoteroMatch(c, getBookRow("main:5"));
+    // Never matched on its own: a copyright page may print another edition's ISBN.
+    expect(m.match).toBeNull();
+    expect(m.candidates).toEqual([{ key: "OVER1111", citekey: "duffy2013overcoming", title: "Overcoming Mobbing", year: 2013, reason: "printed_isbn", printed_isbn: "9780199929559" }]);
+    expect(zoteroReport(c, zconfig).candidates.find((x) => x.book_id === "main:5")?.candidates[0]).toMatchObject({ key: "OVER1111", reason: "printed_isbn" });
+    expect(zoteroCiteInfo(c, getBookRow("main:5"))?.note).toMatch(/OVER1111, by an ISBN printed in it/);
+
+    // Same title too: one candidate, by title and first author, though Calibre's sort form is "Ph.D., Maureen Duffy".
+    db.prepare("UPDATE books SET title = 'Overcoming Mobbing' WHERE id = 'main:5'").run();
+    expect(zoteroMatch(c, getBookRow("main:5")).candidates).toMatchObject([{ key: "OVER1111", reason: "title" }]);
+
+    // Two items with the ISBN: for a person to sort out elsewhere, not a candidate here.
+    db.prepare("UPDATE books SET title = 'Mobbing Recovery' WHERE id = 'main:5'").run();
+    put("OVER2222", { title: "Overcoming Mobbing (paperback)", ISBN: "9780199929559" });
+    await syncZotero(c, zconfig);
+    expect(zoteroMatch(c, getBookRow("main:5")).candidates).toEqual([]);
+
+    // One item again; confirming it links the book and pins the item's key.
+    put("OVER2222", { title: "Overcoming Mobbing (paperback)", ISBN: "9780199929559", deleted: 1 });
+    await syncZotero(c, zconfig);
+    expect(linkZotero(c, { book_id: "main:5", key: "OVER1111", action: "confirm" }, "me")).toMatchObject({
+      pinned: ["duffy2013overcoming"], match: { key: "OVER1111", matched_by: "confirmed" },
+    });
   });
 
   it("keeps the last error and the library version when a sync fails", async () => {
