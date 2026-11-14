@@ -30,6 +30,8 @@ import unicodedata
 import zipfile
 
 MAX_ITEMS = 100
+MAX_UPLOAD_BYTES = 250 * 1024 * 1024
+MAX_BATCH_BYTES = 250 * 1024 * 1024
 MAX_UNCOMPRESSED_ZIP_BYTES = 250 * 1024 * 1024
 MAX_ZIP_ENTRIES = 10000
 ALLOWED_EXTS = {'epub', 'pdf', 'mobi', 'azw', 'azw3', 'prc', 'kfx', 'kfx-zip'}
@@ -132,6 +134,7 @@ def read_plan(stream):
     if len(items) > MAX_ITEMS:
         raise UploadReviewError(f'Upload at most {MAX_ITEMS} files at a time.')
     seen_ids, seen_hashes, seen_targets = set(), set(), set()
+    total_size = 0
     for item in items:
         if not isinstance(item, dict):
             raise UploadReviewError('Invalid upload item.')
@@ -145,8 +148,11 @@ def read_plan(stream):
             raise UploadReviewError('Invalid upload file identity.')
         if ext not in ALLOWED_EXTS:
             raise UploadReviewError(f'Unsupported file extension: {ext!r}')
-        if not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{64}', sha) or type(size) is not int or size < 1:
+        if not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{64}', sha) or type(size) is not int or not 1 <= size <= MAX_UPLOAD_BYTES:
             raise UploadReviewError('Invalid file checksum or size.')
+        total_size += size
+        if total_size > MAX_BATCH_BYTES:
+            raise UploadReviewError('Selected files exceed the 250 MB batch limit.')
         if item_id in seen_ids or sha in seen_hashes:
             raise UploadReviewError('Each uploaded file may appear only once in a batch.')
         seen_ids.add(item_id)
@@ -434,21 +440,41 @@ def apply_review(api, library, review, saved, backup):
         target = review.target_state
         book_id = target['id']
         folder = api.field_for('path', book_id)
+        book_root = inside(library, folder)
         book_dir = saved / str(book_id)
         if not book_dir.exists():
-            shutil.copytree(inside(library, folder), book_dir, symlinks=True)
+            shutil.copytree(book_root, book_dir, symlinks=True)
         added_fmts = []
-        for fmt in review.add_formats:
-            fpath = files_by_fmt.get(fmt)
-            if not fpath:
-                continue
-            expected = digest(fpath)
-            if not api.add_format(book_id, fmt, str(fpath), replace=False, run_hooks=False):
-                raise UploadReviewError(f'Could not add format {fmt} to book {book_id}.')
-            if digest(pathlib.Path(api.format_abspath(book_id, fmt))) != expected:
-                raise UploadReviewError(f'Checksum verification failed after adding {fmt} to book {book_id}.')
-            added_fmts.append(fmt)
-        api.dump_metadata([book_id])
+        try:
+            for fmt in review.add_formats:
+                fpath = files_by_fmt.get(fmt)
+                if not fpath:
+                    continue
+                expected = digest(fpath)
+                if not api.add_format(book_id, fmt, str(fpath), replace=False, run_hooks=False):
+                    raise UploadReviewError(f'Could not add format {fmt} to book {book_id}.')
+                if digest(pathlib.Path(api.format_abspath(book_id, fmt))) != expected:
+                    raise UploadReviewError(f'Checksum verification failed after adding {fmt} to book {book_id}.')
+                added_fmts.append(fmt)
+            if not added_fmts:
+                raise UploadReviewError(f'No format could be added to book {book_id}.')
+            api.dump_metadata([book_id])
+        except BaseException:
+            if added_fmts:
+                with contextlib.suppress(Exception):
+                    api.remove_formats({book_id: added_fmts})
+                with contextlib.suppress(Exception):
+                    if (book_dir / 'metadata.opf').is_file():
+                        shutil.copy2(book_dir / 'metadata.opf', book_root / 'metadata.opf')
+                remaining = [f for f in added_fmts if f in {x.upper() for x in (api.formats(book_id) or ())}]
+                if remaining:
+                    event(
+                        book_id, target['uuid'], target['title'],
+                        added_format=remaining[-1].lower(),
+                        source_format=review.source_format.lower(),
+                        upload_partial={'id': item['id'], 'backup': str(backup), 'message': f'Format upload interrupted on book {book_id}; inspect formats ({", ".join(remaining)}) before retrying.'},
+                    )
+            raise
         primary_added = added_fmts[-1] if added_fmts else review.source_format
         event(
             book_id, target['uuid'], target['title'],

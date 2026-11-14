@@ -405,11 +405,21 @@ class LibraryDatabase:
  def add_format(self, book_id, fmt, src, replace=False, run_hooks=False):
   if self.books[book_id]['title'] == 'Fail Add Format':
    return False
+  if book_id == 1 and fmt.upper() == 'EPUB' and (self.lib / 'fail_second_format').exists():
+   return False
   rel = f"{self.books[book_id]['path']}/book.{fmt.lower()}"
   dst = self.lib / rel
   shutil.copy2(src, dst)
   self.books[book_id]['formats'][fmt.upper()] = rel
   return True
+ def remove_formats(self, fmt_map):
+  for bid, fmts in fmt_map.items():
+   for f in fmts:
+    rel = self.books[bid]['formats'].pop(f.upper(), None)
+    if rel:
+     (self.lib / rel).unlink(missing_ok=True)
+   with (self.lib / 'removed_formats.log').open('a') as out:
+    out.write(f"{bid}:{','.join(f.upper() for f in fmts)}\\n")
  def remove_books(self, ids, permanent=False):
   for bid in ids:
    b = self.books.pop(bid, None)
@@ -555,6 +565,29 @@ class LibraryDatabase:
   expect(failApply.stderr).toContain("Could not add EPUB to new book 10.");
   expect(fs.readFileSync(path.join(libDir, "removed.log"), "utf8").trim()).toBe("10:permanent=True");
   expect(fs.existsSync(path.join(libDir, "New", "Fail Add Format (10)"))).toBe(false);
+
+  // 6. Rollback of partial add_format when MOBI succeeds on book 1 but converted EPUB fails
+  fs.writeFileSync(path.join(libDir, "fail_second_format"), "1");
+  const partialFmtPlan = {
+    library: "main",
+    items: [{
+      id: "u5", filename: "Same.mobi", ext: "mobi", format: "MOBI",
+      target_formats: ["MOBI", "EPUB"], primary_format: "EPUB", converts_to: "EPUB",
+      sha256: createHash("sha256").update(mobiBytes).digest("hex"), size: mobiBytes.length,
+      action: "add_format", target: { id: 1, uuid: "uuid-1", title: "The Same Book" },
+      title: "The Same Book", authors: ["Ada Lovelace"], year: 2021, tags: [],
+      known_matches: [], data_base64: mobiBytes.toString("base64"),
+    }],
+  };
+  const partialPrev = JSON.parse(runPy(JSON.stringify(partialFmtPlan), false).stdout.trim().slice(9));
+  const partialApply = runPy(JSON.stringify({
+    library: "main",
+    items: [{ ...partialPrev.upload_review.plan, data_base64: partialFmtPlan.items[0].data_base64 }],
+  }), true);
+  expect(partialApply.status).toBe(1);
+  expect(partialApply.stderr).toContain("Could not add format EPUB to book 1.");
+  expect(fs.readFileSync(path.join(libDir, "removed_formats.log"), "utf8").trim()).toBe("1:MOBI");
+  expect(fs.existsSync(path.join(libDir, "Ada Lovelace/The Same Book (1)/book.mobi"))).toBe(false);
 });
 
 it("renders the upload page script and keeps unmatched uploads ready immediately even with PDF workers active", async () => {

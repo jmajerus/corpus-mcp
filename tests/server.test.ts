@@ -491,6 +491,7 @@ it("serves duplicate review and upload pages and protects their write routes wit
  for(const route of ["files","clear","preview"]){
   expect((await fetch(`${base}/api/upload/${route}`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).status).toBe(401);
  }
+ expect((await fetch(`${base}/api/upload/files`,{method:"POST",headers:{"content-type":"application/json","cf-access-jwt-assertion":token},body:"{}"})).status).toBe(400);
  expect((await fetch(`${base}/api/upload/files`,{method:"POST",headers:{"content-type":"application/octet-stream","x-upload-filename":"Networks.pdf","cf-access-jwt-assertion":token},body:makePdf({pages:[["Weak ties carry novel information"]]})})).status).toBe(201);
  const staged = await (await fetch(`${base}/api/upload`)).json();
  expect(staged.items).toHaveLength(1);

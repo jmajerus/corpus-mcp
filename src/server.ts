@@ -489,12 +489,8 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
         try { filename = decodeURIComponent(rawHeader); } catch { filename = rawHeader; }
         const data = await readBytes(req);
         sendJson(res, 201, stageUpload(c, config, filename, data, by));
-      } else if (contentType.startsWith("application/json")) {
-        const body = (await readJson(req, 16 * 1024 * 1024)) as { filename?: unknown; data_base64?: unknown };
-        if (typeof body.filename !== "string" || typeof body.data_base64 !== "string") throw new ToolError("Send filename and data_base64.");
-        sendJson(res, 201, stageUpload(c, config, body.filename, Buffer.from(body.data_base64, "base64"), by));
       } else {
-        sendJson(res, 400, { error: "Send application/octet-stream or application/json." });
+        sendJson(res, 400, { error: "Send application/octet-stream with the x-upload-filename header." });
       }
     }
     else if (req.method === "POST" && uploadItemPath && !uploadItemPath[2]) {

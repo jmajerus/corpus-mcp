@@ -61,6 +61,7 @@ export interface JobItem {
     blockers: string[];
   };
   upload_skipped?: { filename: string; message: string };
+  upload_partial?: { id: string; backup: string; message: string };
   upload_applied?: { id: string; action: "add_book" | "add_format"; formats: string[]; backup: string };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string; source_sha256?: string;
   /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */

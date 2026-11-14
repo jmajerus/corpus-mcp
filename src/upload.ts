@@ -18,6 +18,9 @@ export type UploadExtension = (typeof UPLOAD_EXTENSIONS)[number];
 export type UploadAction = "skip" | "add_format" | "add_book";
 
 export const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
+export const MAX_BATCH_BYTES = 250 * 1024 * 1024;
+export const MAX_STAGED_TOTAL_BYTES = 500 * 1024 * 1024;
+export const MAX_STAGED_FILES = 100;
 export const MAX_UNCOMPRESSED_ZIP_BYTES = 250 * 1024 * 1024;
 export const MAX_ZIP_ENTRY_BYTES = 100 * 1024 * 1024;
 export const MAX_ZIP_ENTRIES = 10_000;
@@ -537,21 +540,31 @@ function estimateAuthorSorts(authors: string[]): { sorts: string[]; provisional:
 function readStagedRecords(dir: string): StagedUploadRecord[] {
   if (!fs.existsSync(dir)) return [];
   const now = Date.now();
+  const entries = fs.readdirSync(dir).sort();
   const records: StagedUploadRecord[] = [];
-  for (const entry of fs.readdirSync(dir).sort()) {
+  const validFiles = new Set<string>();
+  for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
     const jsonPath = path.join(dir, entry);
     try {
       const rec = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as StagedUploadRecord;
-      const binPath = path.join(dir, `${rec.id}.${rec.ext}`);
+      const binName = `${rec.id}.${rec.ext}`;
+      const binPath = path.join(dir, binName);
       if (!fs.existsSync(binPath) || now - Date.parse(rec.staged_at) > STAGED_TTL_MS) {
         fs.rmSync(jsonPath, { force: true });
         fs.rmSync(binPath, { force: true });
         continue;
       }
+      validFiles.add(entry);
+      validFiles.add(binName);
       records.push(rec);
     } catch {
       fs.rmSync(jsonPath, { force: true });
+    }
+  }
+  for (const entry of entries) {
+    if (!validFiles.has(entry)) {
+      fs.rmSync(path.join(dir, entry), { force: true });
     }
   }
   return records.sort((a, b) => a.staged_at.localeCompare(b.staged_at) || a.id.localeCompare(b.id));
@@ -571,7 +584,16 @@ export function stageUpload(c: Corpus, config: Config, filename: string, data: B
   const dir = uploadDir(config);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const sha256 = createHash("sha256").update(data).digest("hex");
-  const existing = readStagedRecords(dir).find(r => r.sha256 === sha256);
+  const allStaged = readStagedRecords(dir);
+  const existing = allStaged.find(r => r.sha256 === sha256);
+  const others = allStaged.filter(r => r.id !== existing?.id);
+  if (others.length + 1 > MAX_STAGED_FILES) {
+    throw new ToolError(`At most ${MAX_STAGED_FILES} files may be staged at once. Apply or clear staged files first.`);
+  }
+  const otherBytes = others.reduce((sum, r) => sum + r.size, 0);
+  if (otherBytes + data.length > MAX_STAGED_TOTAL_BYTES) {
+    throw new ToolError("Staged uploads exceed the 500 MB staging storage limit. Apply or clear staged files first.");
+  }
   const id = existing?.id ?? `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
   const binPath = path.join(dir, `${id}.${ext}`);
   if (existing && existing.ext !== ext) {
@@ -967,6 +989,7 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
   const seenIds = new Set<string>();
   const seenHashes = new Set<string>();
   const seenTargetFormats = new Set<string>();
+  let batchBytes = 0;
 
   const items: UploadItemPlan[] = selections.map(sel => {
     if (!sel || typeof sel.id !== "string" || typeof sel.sha256 !== "string") {
@@ -985,6 +1008,10 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
       throw new ToolError(`Duplicate file ${rec.filename} appears more than once in this batch.`);
     }
     seenHashes.add(rec.sha256);
+    batchBytes += rec.size;
+    if (batchBytes > MAX_BATCH_BYTES) {
+      throw new ToolError("Selected files exceed the 250 MB batch limit. Preview and apply them in smaller batches.");
+    }
 
     if (sel.title !== undefined) rec.draft.title = String(sel.title).trim();
     if (Array.isArray(sel.authors)) rec.draft.authors = sel.authors.map(a => String(a).trim()).filter(Boolean);
@@ -1091,6 +1118,7 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
 /** Attaches the binary payload of each staged file to the plan sent over SSH stdin (never stored in data.db). */
 export function attachUploadPayloads(config: Config, plan: UploadBatchPlan) {
   const dir = uploadDir(config);
+  let totalBytes = 0;
   return {
     library: plan.library,
     items: plan.items.map(item => {
@@ -1098,9 +1126,17 @@ export function attachUploadPayloads(config: Config, plan: UploadBatchPlan) {
       if (!fs.existsSync(binPath)) {
         throw new ToolError(`Staged file ${item.filename} is no longer available. Upload it again.`);
       }
+      const st = fs.statSync(binPath);
+      if (st.size !== item.size || st.size > MAX_UPLOAD_BYTES) {
+        throw new ToolError(`Staged file ${item.filename} changed since preview. Preview again.`);
+      }
+      totalBytes += st.size;
+      if (totalBytes > MAX_BATCH_BYTES) {
+        throw new ToolError("Selected files exceed the 250 MB batch limit. Preview and apply them in smaller batches.");
+      }
       const data = fs.readFileSync(binPath);
       const actualHash = createHash("sha256").update(data).digest("hex");
-      if (data.length !== item.size || actualHash !== item.sha256) {
+      if (actualHash !== item.sha256) {
         throw new ToolError(`Staged file ${item.filename} changed since preview. Preview again.`);
       }
       return { ...item, data_base64: data.toString("base64") };
