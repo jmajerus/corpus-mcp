@@ -940,16 +940,24 @@ and the two link to each other by a convention, not shared code.
   run `--source-setup`, set `CORPUS_SOURCE=corpus-sync@calibre-web.localdomain`
   in `/etc/corpus-mcp/env`, then delete the key line from
   `~authoring/.ssh/authorized_keys` on CT 115.
-- **Verify's section on a split location.** `section` comes from the page's
-  single `section_path`, so when a heading starts partway through a reading
-  location, a passage before it on that location gets the later heading (seen
-  on Reconciliation, main:572, location 47: a subsection given as the chapter).
-  Fix: record each outline entry's offset within its start page at index time,
-  and pick the last entry at or before the anchor's `start_offset` on
-  `start_page`. quote-mcp needs no change; its `locators --apply` corrects saved
-  locators afterwards. Reported by the holdings-mcp coordinator, 2026-11-14.
 - **Native build.** `better-sqlite3` 13 has no prebuilt binaries, so the LXC
   needs `build-essential` and `python3`. `provision.sh` installs them.
+
+## Sections within a page (fixed 2026-11-14)
+
+An anchor's `section` used to be its start page's single `section_path`, the
+deepest heading starting at or before the page. When a heading starts partway
+through a reading location, a passage before it on that location got the later
+heading (Reconciliation, main:572, location 47: a subsection given as the
+chapter). `sectionAt` (src/anchors.ts) now finds each heading that starts on the
+anchor's page in the page's text, by its title at the start of a paragraph
+(after at most its numbering, and also without the outline's "Chapter 3: "
+prefix), and takes the last one at or before the anchor's `start_offset`. A
+heading it can't find counts as starting at the top of the page, as before. No
+re-extraction or schema change. Verify, storing, and re-anchoring all use it,
+and each scan's re-anchoring corrects the section of anchors stored earlier,
+logging a `reanchored` change for quote-mcp. Search hits and `cite_passage`'s
+`position.section` still name the page's section: they have no offset.
 
 ## Departures from the draft
 
