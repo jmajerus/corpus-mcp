@@ -294,15 +294,15 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
     if (byIsbn.length === 1) return found(byIsbn[0], "isbn");
   }
   const candidates: ZoteroCandidate[] = lookalikes().map((x) => ({ ...x, reason: "title" as const }));
-  // ISBNs printed in the text, other than Calibre's: a candidate only when one live item has the ISBN, since
-  // copyright pages print other editions' ISBNs and the last pages advertise other books.
+  // ISBNs printed in the text, other than Calibre's: a candidate only when one live item that could be this
+  // book has the ISBN (not one rejected for it, nor one filed for another book), since copyright pages print
+  // other editions' ISBNs and the last pages advertise other books.
   const own = isbn ? isbn13(isbn) : null;
-  const holders = c.data.prepare("SELECT i.key FROM zotero_isbns z JOIN zotero_items i ON i.key = z.key WHERE z.isbn = ? AND i.trashed = 0").pluck();
   for (const printed of new Set(printedIsbns(book).map((p) => p.isbn13).filter((i) => i !== own))) {
-    const keys = holders.all(printed) as string[];
-    if (keys.length !== 1 || candidates.some((x) => x.key === keys[0])) continue;
-    const [i] = item("key = ?", keys[0]);
-    if (i) candidates.push({ key: i.key, citekey: i.citekey, title: i.title, year: i.year, reason: "printed_isbn", printed_isbn: printed });
+    const holders = item("key IN (SELECT key FROM zotero_isbns WHERE isbn = ?)", printed);
+    if (holders.length !== 1 || candidates.some((x) => x.key === holders[0].key)) continue;
+    const [i] = holders;
+    candidates.push({ key: i.key, citekey: i.citekey, title: i.title, year: i.year, reason: "printed_isbn", printed_isbn: printed });
   }
   return { match: null, candidates, duplicates: [] };
 }
@@ -554,7 +554,13 @@ export function filingState(c: Corpus, book: BookRow, library: string | undefine
   } else {
     reasons.push(`No Zotero item carries this book's Calibre UUID (${book.uuid}) in Extra${citekey ? ` or the citekey "${citekey}"` : ""}.`);
   }
-  if (candidates.length) reasons.push(`${candidates.length} item(s) share its title and author (${candidates.map((x) => x.key).join(", ")}).`);
+  const byTitle = candidates.filter((x) => x.reason === "title");
+  const byPrinted = candidates.filter((x) => x.reason === "printed_isbn");
+  if (byTitle.length) reasons.push(`${byTitle.length} item(s) share its title and author (${byTitle.map((x) => x.key).join(", ")}).`);
+  if (byPrinted.length) {
+    reasons.push(`${byPrinted.map((x) => `Item ${x.key} has the ISBN ${x.printed_isbn} printed in the book`).join("; ")}; it may be another edition.`);
+  }
+  if (candidates.length) reasons.push("Confirm or reject on the admin Zotero page.");
   if (trouble) reasons.push(later);
   return { zotero: null, zotero_state: "not_matched" as FilingState, zotero_note: reasons.join(" ") };
 }

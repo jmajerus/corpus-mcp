@@ -23,7 +23,7 @@ import { type ZoteroConfig, ZoteroSync, commitPin, linkZotero, syncZotero, zoter
 import { Vocabulary, type VocabularyFile, VocabularySource, vocabularyProblems } from "../src/vocabulary.js";
 import { scanLibraries } from "../src/indexer.js";
 import {
-  type Corpus, ToolError, authorState, citePassage, corpusStatus, getBook, getBookOutline, titlePageScan, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus,
+  type Corpus, ToolError, authorState, citePassage, corpusStatus, getBook, getBookOutline, titlePageScan, listBooks, listShelves, listTags, pinCitekey, readBook, renderPage, searchCorpus, unpinCitekey,
   tagCleanupPlan, toFtsQuery, validIsbn,
 } from "../src/tools.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -1354,6 +1354,16 @@ describe("zotero mirror", () => {
     put("OVER2222", { title: "Overcoming Mobbing (paperback)", ISBN: "9780199929559" });
     await syncZotero(c, zconfig);
     expect(zoteroMatch(c, getBookRow("main:5")).candidates).toEqual([]);
+
+    // The second holder rejected for this book: one eligible holder again, so a candidate again.
+    linkZotero(c, { book_id: "main:5", key: "OVER2222", action: "reject" }, "me");
+    expect(zoteroMatch(c, getBookRow("main:5")).candidates).toMatchObject([{ key: "OVER1111", reason: "printed_isbn" }]);
+    // Pinning explains the candidate by its ISBN, not by a title it doesn't share.
+    const pinned = await commitPin(c, { book_id: "main:5", citekey: "duffy2013overcoming" }, null);
+    expect(pinned.zotero_note).toMatch(/Item OVER1111 has the ISBN 9780199929559 printed in the book/);
+    expect(pinned.zotero_note).not.toMatch(/share its title/);
+    unpinCitekey(c, "main:5", "me");
+    linkZotero(c, { book_id: "main:5", key: "OVER2222", action: "clear" }, "me");
 
     // One item again; confirming it links the book and pins the item's key.
     put("OVER2222", { title: "Overcoming Mobbing (paperback)", ISBN: "9780199929559", deleted: 1 });
