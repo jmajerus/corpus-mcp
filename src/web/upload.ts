@@ -27,7 +27,7 @@ export const UPLOAD_HTML = page({
 `,
   body: `
 <h1>Upload books to Calibre</h1>
-<p class="sub">Stage ebook files (.epub, .pdf, .mobi, .azw, .azw3, .prc, .kfx, .kfx-zip) to check them against the library by file hash, ISBN/ASIN, title and authors, and text overlap before anything is added to Calibre. Exact duplicates are blocked; when a book is already in the library without the uploaded format, you can attach the new format to the existing record instead of creating a duplicate. MOBI, AZW, AZW3, PRC, KFX, and KFX-ZIP files are decrypted through DeDRM and converted to EPUB or PDF on apply.</p>
+<p class="sub">Stage ebook files (.epub, .pdf, .mobi, .azw, .azw3, .prc, .kfx, .kfx-zip) to check them against the library by file hash, ISBN/ASIN, and title and authors before anything is added to Calibre, comparing EPUB/PDF contents when a candidate match is found. Exact duplicates are blocked; when a book is already in the library without the uploaded format, you can attach the new format to the existing record instead of creating a duplicate. MOBI, AZW, AZW3, PRC, KFX, and KFX-ZIP files are decrypted through DeDRM and converted to EPUB or PDF on apply.</p>
 <div class="actions">
   <button type="button" id="refresh-source" disabled>Refresh from Calibre</button>
   <span id="freshness" class="note"></span>
@@ -40,8 +40,8 @@ export const UPLOAD_HTML = page({
 </div>
 <datalist id="vocab"></datalist>
 <div class="batch actions">
-  <button type="button" id="select-ready">Select all ready</button>
-  <button type="button" id="select-none">Clear selection</button>
+  <button type="button" id="select-ready" disabled>Select all ready</button>
+  <button type="button" id="select-none" disabled>Clear selection</button>
   <button type="button" id="clear-staged" class="danger" disabled>Remove all staged</button>
   <button type="button" id="preview-batch" class="primary" disabled>Preview selected</button>
   <span id="count" class="note"></span>
@@ -54,10 +54,14 @@ const pending = (it) => (it.contents_pending || []).length > 0;
 const actionable = (it) => canWrite && !it.blockers.length && !pending(it) && (it.draft.action === "add_book" || it.draft.action === "add_format");
 
 function initItem(it) {
-  if (picked[it.id] === undefined) {
-    picked[it.id] = !it.blockers.length && (it.draft.action === "add_book" || it.draft.action === "add_format");
+  if (!actionable(it)) {
+    picked[it.id] = false;
+    return;
   }
-  if (!actionable(it)) picked[it.id] = false;
+  if (picked[it.id] === undefined || (picked[it.id] === false && it.was_pending)) {
+    picked[it.id] = true;
+  }
+  it.was_pending = false;
 }
 
 function formatPlanBadge(it) {
@@ -131,7 +135,8 @@ function contentsTable(it) {
 }
 
 function updateBatch() {
-  const chosen = items.filter((it) => picked[it.id] && actionable(it));
+  const readyItems = items.filter((it) => actionable(it));
+  const chosen = readyItems.filter((it) => picked[it.id]);
   const addBooks = chosen.filter((it) => it.draft.action === "add_book").length;
   const addFormats = chosen.filter((it) => it.draft.action === "add_format").length;
   const blocked = items.filter((it) => it.blockers.length || (it.matches.length && it.draft.action === "skip")).length;
@@ -141,6 +146,8 @@ function updateBatch() {
   if (addBooks) parts.push(addBooks + " new book" + (addBooks === 1 ? "" : "s"));
   if (addFormats) parts.push(addFormats + " format addition" + (addFormats === 1 ? "" : "s"));
   btn.textContent = chosen.length ? "Preview " + chosen.length + " file" + (chosen.length === 1 ? "" : "s") + " (" + parts.join(", ") + ")" : "Preview selected";
+  document.getElementById("select-ready").disabled = !readyItems.length;
+  document.getElementById("select-none").disabled = !chosen.length;
   document.getElementById("clear-staged").disabled = !canWrite || !items.length;
   document.getElementById("count").textContent = items.length
     ? items.length + " staged file" + (items.length === 1 ? "" : "s") + (blocked ? " · " + blocked + " duplicate/blocked file" + (blocked === 1 ? "" : "s") + " intercepted" : "")
@@ -233,13 +240,17 @@ function render() {
 
 async function load() {
   try {
+    const prevPending = new Set(items.filter(pending).map((x) => x.id));
     const data = await api("/api/upload");
     items = data.items;
     calibreWebUrl = data.calibre_web_url;
     writableLibrary = data.writable_library;
     clearTimeout(pendingTimer);
     if (items.some(pending)) pendingTimer = setTimeout(() => { if (!document.hidden) load(); }, 3000);
-    items.forEach(initItem);
+    items.forEach((it) => {
+      if (prevPending.has(it.id) || pending(it)) it.was_pending = true;
+      initItem(it);
+    });
     document.getElementById("freshness").textContent = (data.last_scan ? "Catalogue refreshed " + when(data.last_scan) + ". " : "No completed catalogue refresh yet. ") + "Preview also checks the live Calibre database directly.";
     render();
   } catch (e) {

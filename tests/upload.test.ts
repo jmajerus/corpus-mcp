@@ -10,6 +10,7 @@ import { openDatabase } from "../src/db.js";
 import { profilesSettled } from "../src/duplicate-contents.js";
 import { scanLibraries } from "../src/indexer.js";
 import { type JobCommands, JobRunner } from "../src/jobs.js";
+import { usePdfWorkers } from "../src/pdf-runner.js";
 import { Vocabulary } from "../src/vocabulary.js";
 import {
   clearStagedUploads,
@@ -555,8 +556,15 @@ class LibraryDatabase:
   expect(fs.existsSync(path.join(libDir, "New", "Fail Add Format (10)"))).toBe(false);
 });
 
-it("renders the upload page script and loads staged items", async () => {
+it("renders the upload page script and keeps unmatched uploads ready immediately even with PDF workers active", async () => {
   const scripts = [...UPLOAD_HTML.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
   expect(scripts).toHaveLength(2);
   expect(() => new Function(scripts.join("\n;\n"))).not.toThrow();
+
+  usePdfWorkers();
+  const unmatchedPdf = makePdf({ pages: [["Completely unrelated brand new upload", "Copyright 2024 by Someone Else"]] });
+  const staged = stageUpload(c, config, "Unrelated New Upload.pdf", unmatchedPdf, "me@example.com");
+  expect(staged.matches).toEqual([]);
+  expect(staged.contents_pending).toEqual([]);
+  expect(staged.draft.action).toBe("add_book");
 });

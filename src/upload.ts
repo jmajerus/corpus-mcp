@@ -6,7 +6,7 @@ import { XMLParser } from "fast-xml-parser";
 import * as mupdf from "mupdf";
 import { DEFAULT_PRESET, proposeCitekey } from "./citekey.js";
 import type { Config } from "./config.js";
-import { type BookContents, type ContentProfile, contentFindings, contentProfile, isPending, textOverlap } from "./duplicate-contents.js";
+import { type BookContents, type ContentProfile, contentFindings, contentProfile, isPending } from "./duplicate-contents.js";
 import { type DuplicateBook, GREYSCALE_COVER, candidateBooks, coverColour, identifierKey, normal, sizeWarnings } from "./duplicates.js";
 import { findPrintedIsbns, isbn13, validIsbn } from "./isbn.js";
 import { mangledTitle, personName, scanTitlePage } from "./titlepage.js";
@@ -681,12 +681,6 @@ function stripSketch(contents: BookContents): BookContents {
 export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploadRecord, books: DuplicateBook[]) {
   const dir = uploadDir(config);
   const binPath = path.join(dir, `${rec.id}.${rec.ext}`);
-  const uploadContents: BookContents = {};
-  if (!rec.problem && (rec.ext === "epub" || rec.ext === "pdf")) {
-    uploadContents[rec.ext.toUpperCase() as "EPUB" | "PDF"] = contentProfile(binPath, rec.ext.toUpperCase() as "EPUB" | "PDF", c.data);
-  }
-  const uploadProfile = uploadContents[rec.ext.toUpperCase() as "EPUB" | "PDF"];
-  const uploadSketch = uploadProfile && !isPending(uploadProfile) && !("error" in uploadProfile) ? uploadProfile.sketch : null;
 
   // Keys for identifier and title/author matching (from both extracted and draft metadata).
   const uploadIdKeys = new Set<string>();
@@ -754,22 +748,16 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
         addEvidence(b, "Matching title");
       }
     }
-
-    // 4. Text overlap sketch match for EPUB/PDF uploads when not already matched.
-    if (uploadSketch?.length && !candidateMap.has(b.id)) {
-      const fmt = rec.ext.toUpperCase() as "EPUB" | "PDF";
-      if (b.files[fmt]) {
-        const prof = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt, c.data);
-        if (!isPending(prof) && !("error" in prof) && prof.sketch.length) {
-          const overlap = textOverlap(uploadSketch, prof.sketch);
-          if (overlap !== null && overlap >= 0.7) {
-            b.contents[fmt] = prof;
-            addEvidence(b, "Shared text");
-          }
-        }
-      }
-    }
   }
+
+  // Only profile EPUB/PDF contents when there are candidate matches to compare against (just like
+  // duplicateGroups in src/duplicates.ts), so unmatched new uploads are ready immediately and never
+  // queue full-library PDF profiling on the background worker.
+  const uploadContents: BookContents = {};
+  if (!rec.problem && candidateMap.size > 0 && (rec.ext === "epub" || rec.ext === "pdf")) {
+    uploadContents[rec.ext.toUpperCase() as "EPUB" | "PDF"] = contentProfile(binPath, rec.ext.toUpperCase() as "EPUB" | "PDF", c.data);
+  }
+  const uploadProfile = uploadContents[rec.ext.toUpperCase() as "EPUB" | "PDF"];
 
   // Load cover colour and content profiles for every matched book so we can compare contents and rank targets.
   for (const { book } of candidateMap.values()) {
@@ -794,7 +782,7 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
         content_warnings: [],
         content_notes: [],
         content_overlap: {},
-        contents_pending: Object.values(uploadContents).some(isPending) ? [rec.ext.toUpperCase() as "EPUB" | "PDF"] : [],
+        contents_pending: [],
         size_warnings: [],
       };
 

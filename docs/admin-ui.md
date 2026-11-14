@@ -345,8 +345,8 @@ Calibre:
 1. Choose or drop one or more `.epub`, `.pdf`, `.mobi`, `.azw`, `.azw3`, `.prc`, `.kfx`,
    or `.kfx-zip` files.
 2. Each staged file is checked against the library by SHA-256 file hash (across all
-   existing format files), ISBN/ASIN identifiers, normalized title and authors, and
-   EPUB/PDF text-sketch overlap:
+   existing format files), ISBN/ASIN identifiers, and normalized title and authors, and
+   candidate matches are compared by EPUB/PDF content profile:
    - **Exact file match:** blocked immediately, linking to the existing Calibre record.
    - **Matches an existing book that lacks the uploaded format:** defaults to **Add
      format to existing book** (`add_format` with `replace=False`), attaching the new
