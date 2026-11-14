@@ -6,11 +6,12 @@
 
 import { FAVICON_LINK } from "./favicon.js";
 
-export type NavKey = "duplicates" | "dashboard" | "books" | "quotes" | "categories" | "taxonomy" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes" | "zotero" | "about";
+export type NavKey = "upload" | "duplicates" | "dashboard" | "books" | "quotes" | "categories" | "taxonomy" | "citekeys" | "proposals" | "shelves" | "jobs" | "changes" | "zotero" | "about";
 
 const NAV: [NavKey, string, string][] = [
   ["dashboard", "Dashboard", "/admin"],
   ["books", "Books", "/admin/books"],
+  ["upload", "Upload", "/admin/upload"],
   ["duplicates", "Duplicates", "/admin/duplicates"],
   ["quotes", "Quotes", "/admin/quotes"],
   ["categories", "Categories", "/admin/categories"],

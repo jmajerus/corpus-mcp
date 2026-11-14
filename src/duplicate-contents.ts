@@ -72,8 +72,31 @@ function spine(files: Record<string, Uint8Array>): string[] {
   } catch { return []; }
 }
 
+export const MAX_EPUB_UNCOMPRESSED_BYTES = 250 * 1024 * 1024;
+export const MAX_EPUB_ENTRIES = 10_000;
+
 export function epubProfile(data: Uint8Array): ContentProfile {
-  const files = unzipSync(data);
+  let entries = 0;
+  let totalUncompressed = 0;
+  const files = unzipSync(data, {
+    filter(file) {
+      if (++entries > MAX_EPUB_ENTRIES) throw new Error("EPUB archive contains too many entries.");
+      if (file.originalSize < 0 || file.size < 0 || !Number.isFinite(file.originalSize)) {
+        throw new Error("EPUB archive has an invalid entry size.");
+      }
+      if (file.compression !== 0 && file.size > 0 && file.originalSize === 0) {
+        throw new Error("EPUB archive has an invalid compressed entry size.");
+      }
+      if (file.originalSize > 1024 * 1024 && file.originalSize / Math.max(1, file.size) > 200) {
+        throw new Error("EPUB archive compression ratio exceeds safety limit.");
+      }
+      totalUncompressed += file.originalSize;
+      if (totalUncompressed > MAX_EPUB_UNCOMPRESSED_BYTES) {
+        throw new Error("EPUB archive uncompressed size exceeds the 250 MB limit.");
+      }
+      return true;
+    },
+  });
   const p = { words: 0, contents: 0, links: 0, sample: false, page_list: 0, images: 0, image_bytes: 0, font_bytes: 0, text_bytes: 0, sketch: [] as number[] };
   const count = (source: string, tag: RegExp) => source.match(tag)?.length ?? 0;
   const texts = new Map<string, string>(), sketch = new Sketcher();

@@ -4,6 +4,7 @@ import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicateBatchPlan, duplicateContents, assertDuplicateUnreferenced, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
+import { attachUploadPayloads, removeAppliedUploads, uploadBatchPlan, type UploadBatchPlan, type UploadItemPlan, type UploadSelection } from "./upload.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
 import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
@@ -15,12 +16,13 @@ import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates" | "upload";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
+  upload: { title: "Upload books to Calibre", calibre: true, previewable: true },
   duplicates: { title: "Resolve reviewed duplicate groups", calibre: true, previewable: true },
   metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
@@ -48,6 +50,19 @@ export interface JobItem {
   duplicate_skipped?: { message: string };
   duplicate_partial?: {backup:string;message:string};
   duplicate_resolved?: { removed_id:number; removed_uuid:string; backup:string; trash:boolean; shelves?: { shelf: string; action: string }[] };
+  upload_review?: {
+    plan: UploadItemPlan & { reviewed?: string };
+    action: "add_book" | "add_format";
+    filename: string;
+    source_format: string;
+    convert_to: string | null;
+    add_formats: string[];
+    target?: { id: number; uuid: string; title: string; formats: string[] } | null;
+    blockers: string[];
+  };
+  upload_skipped?: { filename: string; message: string };
+  upload_partial?: { id: string; backup: string; message: string };
+  upload_applied?: { id: string; action: "add_book" | "add_format"; formats: string[]; backup: string };
   added?: string[]; removed?: string[]; added_format?: string; source_format?: string; source_sha256?: string;
   /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */
   convert_skipped?: string;
@@ -146,7 +161,7 @@ export class JobRunner {
   }
 
   /** Starts a job and returns its id at once; the job runs in the background. */
-  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection; duplicates?: DuplicateGroupSelection[] } = {}, requestedBy?: string): number {
+  start(kind: JobKind, mode: JobMode, opts: { previewOf?: number; also?: string[]; books?: string[]; metadata?: MetadataCorrection; duplicates?: DuplicateGroupSelection[]; upload?: UploadSelection[] } = {}, requestedBy?: string): number {
     if (mode !== "preview" && mode !== "apply") throw new ToolError("Choose preview or apply.");
     const spec = JOB_KINDS[kind];
     if (!spec) throw new ToolError(`Unknown job "${kind}".`);
@@ -180,11 +195,19 @@ export class JobRunner {
         for (const g of groups) for (const r of g.remove) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);
         params = { plan: { library: (preview.params.plan as DuplicateBatchPlan).library, groups } };
       }
+      if (kind === "upload") {
+        const items = preview.items.flatMap(it => it.upload_review && !it.upload_review.blockers.length && it.upload_review.plan.reviewed ? [it.upload_review.plan] : []);
+        if (!items.length) throw new ToolError("Every file in that preview has blockers. Resolve them and preview again.");
+        params = { plan: { library: (preview.params.plan as UploadBatchPlan).library, items } };
+      }
     } else if (kind === "duplicates" && mode === "preview") {
       if (!opts.duplicates?.length) throw new ToolError("Choose a keeper on the duplicate review screen.");
       // Only the plan goes to the source; `contents` is for the preview page.
       params = { plan: duplicateBatchPlan(this.c, this.config.shelvesLibrary, opts.duplicates),
         contents: duplicateContents(this.c, this.config.shelvesLibrary, opts.duplicates.map(s => s.keep)) };
+    } else if (kind === "upload" && mode === "preview") {
+      if (!opts.upload?.length) throw new ToolError("Select at least one staged file to upload.");
+      params = { plan: uploadBatchPlan(this.c, this.config, opts.upload) };
     } else if (mode === "preview" && (kind === "tags" || kind === "cleanup")) {
       const library = this.config.shelvesLibrary;
       // A book page previews just that book (`books`); the dashboard previews every approved book.
@@ -196,7 +219,11 @@ export class JobRunner {
       VALUES (?, ?, ?, 'running', ?, ?, ?, '')`)
       .run(kind, mode, JSON.stringify(params), requestedBy ?? null, opts.previewOf ?? null, new Date().toISOString()).lastInsertRowid);
     this.running = id;
-    if (kind === "duplicates" && mode === "apply") this.c.writesPaused = "Duplicate resolution is running. Try again after its refresh finishes.";
+    if ((kind === "duplicates" || kind === "upload") && mode === "apply") {
+      this.c.writesPaused = kind === "upload"
+        ? "Book upload is running. Try again after its refresh finishes."
+        : "Duplicate resolution is running. Try again after its refresh finishes.";
+    }
     void this.execute(id, kind, mode, params).finally(() => {
       this.running = null;
       this.c.writesPaused = undefined;
@@ -241,6 +268,9 @@ export class JobRunner {
       if (mode === "apply" && !recorded) {
         recorded = true;
         this.recordItems(id, items);
+        if (kind === "upload") {
+          removeAppliedUploads(this.config, items.flatMap(it => it.upload_applied?.id ? [it.upload_applied.id] : []));
+        }
       }
     };
     try {
@@ -267,6 +297,11 @@ export class JobRunner {
       for (const tag of item.removed ?? []) changes.push({ ...base, kind: "tag_removed", detail: tag });
       if (item.duplicate_partial) changes.push({ ...base, kind: "duplicate_resolution_failed", detail: JSON.stringify(item.duplicate_partial) });
       if (item.duplicate_resolved) changes.push({ ...base, kind: "duplicate_resolved", detail: JSON.stringify(item.duplicate_resolved) });
+      if (item.upload_applied?.action === "add_book") {
+        changes.push({ ...base, kind: "book_added", detail: item.upload_applied.formats.map(f => f.toLowerCase()).join(" → ") });
+      } else if (item.upload_applied?.action === "add_format" && !item.added_format) {
+        changes.push({ ...base, kind: "format_added", detail: item.upload_applied.formats.map(f => f.toLowerCase()).join(" → ") });
+      }
       if (item.metadata) changes.push({ ...base, kind: "metadata_corrected", detail: JSON.stringify(item.metadata) });
       if (item.added_format) changes.push({ ...base, kind: "format_added", detail: `${item.source_format} → ${item.added_format}` });
     }
@@ -290,6 +325,18 @@ export class JobRunner {
         for (const r of removes) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);
         if (this.config.admin?.quoteMcpUrl) for (const r of removes) await assertNoBookQuotes(this.config.admin.quoteMcpUrl, r.uuid);
         try { await this.commands.calibre(mode === "apply" ? "duplicates-apply" : "duplicates-preview", JSON.stringify(params.plan), log); }
+        catch (error) {
+          if (mode === "apply") {
+            applied();
+            try { await this.commands.refresh(log); } catch (refreshError) { log(`Refresh also failed: ${String(refreshError)}\n`); }
+          }
+          throw error;
+        }
+        break;
+      }
+      case "upload": {
+        const payload = attachUploadPayloads(this.config, params.plan as UploadBatchPlan);
+        try { await this.commands.calibre(mode === "apply" ? "upload-apply" : "upload-preview", JSON.stringify(payload), log); }
         catch (error) {
           if (mode === "apply") {
             applied();

@@ -102,7 +102,9 @@ function renderActions() {
     convert: "Give every book with no EPUB or PDF a readable copy: an EPUB from MOBI, AZW, AZW3, PRC or KFX, or the PDF inside a print-replica KFX. DRM-encrypted files are listed, not converted.",
     zotero: "Fetch what changed in the Zotero library since the last sync (it also runs on its own timer), and pin the citekeys of matched books.",
   };
-  document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) => kind === "duplicates"
+  document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) => kind === "upload"
+    ? '<div class="card action"><h3>Upload books to Calibre</h3><p>Check ebook files against the library for duplicates before adding them or attaching a new format, with automatic MOBI/AZW/KFX conversion.</p><a href="/admin/upload">Upload books</a></div>'
+    : kind === "duplicates"
     ? '<div class="card action"><h3>Review duplicate books</h3><p>Compare candidates, keep different editions, or preview a merge into a keeper.</p><a href="/admin/duplicates">Review duplicates</a></div>'
     : kind === "metadata"
     ? '<div class="card action"><h3>Correct authors, titles, and years</h3><p>Review the suggested title, authors, and publication year beside each book’s cover.</p><a href="/admin/books?metadata=repair">Review books</a></div>'

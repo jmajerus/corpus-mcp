@@ -5,12 +5,13 @@ export const BOOKS_HTML = page({
   title: "Books",
   nav: "books",
   css: `
+.head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px; }
+.btn-link { display: inline-block; text-decoration: none; border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px; background: var(--accent); color: var(--accent-text); font-size: 0.9rem; font-weight: 500; }
 .title small { display: block; color: var(--muted); }
 td.state { min-width: 170px; }
 .filters input[name=q] { width: 220px; } .filters input[name=tag] { width: 160px; }`,
   body: `
-<h1>Books</h1>
-<p class="sub" id="summary">Loading…</p>
+<div class="head"><div><h1>Books</h1><p class="sub" id="summary">Loading…</p></div><a class="btn-link" href="/admin/upload">Upload books</a></div>
 <form class="filters" id="filters" role="search">
   <input type="search" name="q" placeholder="Title, author, id, ISBN, or citekey" aria-label="Search">
   <select name="library" aria-label="Library"><option value="">Any library</option></select>

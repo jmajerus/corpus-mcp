@@ -44,7 +44,7 @@ let kinds = {}, canWrite = false;
 
 async function load() {
   let j;
-  try { j = await api("/api/admin/jobs/" + id); } catch (e) { document.getElementById("title").textContent = e.message; return; }
+  try { j = await api("/api/admin/jobs/" + id); } catch (e) { document.getElementById("title").textContent = e.message; setTimeout(load, 2000); return; }
   const title = (kinds[j.kind] || {}).title || j.kind;
   document.title = "#" + j.id + " " + title + " · Corpus Admin";
   document.getElementById("title").textContent = "#" + j.id + " " + title + (j.mode === "preview" ? " — preview" : "");
@@ -57,9 +57,16 @@ async function load() {
   const nothing = j.status === "succeeded" && (plan?.books ? plan.books.length === 0 : items.every(it => it.convert_skipped));
   const actions = [];
   const reviews = items.filter(it => it.duplicate_review), clean = reviews.filter(it => !it.duplicate_review.blockers.length);
-  const applicable = reviews.length ? clean.length > 0 : !nothing;
-  if (j.mode === "preview" && j.status === "succeeded" && applicable) actions.push('<button type="button" class="primary" id="apply"' + (canWrite ? "" : " disabled") + ">" + (reviews.length > 1 ? "Apply " + num(clean.length) + " of " + num(reviews.length) + " groups" : "Apply this preview") + "</button>" + (reviews.length && clean.length < reviews.length ? ' <span class="note">Groups with blockers are skipped.</span>' : ""));
+  const uploads = items.filter(it => it.upload_review), cleanUploads = uploads.filter(it => !it.upload_review.blockers.length);
+  const applicable = reviews.length ? clean.length > 0 : uploads.length ? cleanUploads.length > 0 : !nothing;
+  const applyLabel = reviews.length > 1
+    ? "Apply " + num(clean.length) + " of " + num(reviews.length) + " groups"
+    : uploads.length > 1
+    ? "Apply " + num(cleanUploads.length) + " of " + num(uploads.length) + " uploads"
+    : "Apply this preview";
+  if (j.mode === "preview" && j.status === "succeeded" && applicable) actions.push('<button type="button" class="primary" id="apply"' + (canWrite ? "" : " disabled") + ">" + applyLabel + "</button>" + (reviews.length && clean.length < reviews.length ? ' <span class="note">Groups with blockers are skipped.</span>' : "") + (uploads.length && cleanUploads.length < uploads.length ? ' <span class="note">Files with blockers are skipped.</span>' : ""));
   if (j.mode === "preview" && j.status === "succeeded" && reviews.length && !clean.length) actions.push('<span class="note">Every group has blockers; resolve them and preview again.</span>');
+  if (j.mode === "preview" && j.status === "succeeded" && uploads.length && !cleanUploads.length) actions.push('<span class="note">Every file has blockers; resolve them and preview again.</span>');
   if (j.mode === "preview" && nothing) actions.push('<span class="note">Nothing to apply.</span>');
   if (j.mode === "apply" && items.length) actions.push('<a href="/admin/changes?job=' + j.id + '&range=all">These changes in the change log</a>');
   document.getElementById("actions").innerHTML = actions.join(" ");
@@ -67,13 +74,17 @@ async function load() {
   const library = (j.params && j.params.plan && j.params.plan.library) || "main";
   document.getElementById("items").innerHTML = items.length
     ? "<h2>" + num(items.length) + " book" + (items.length === 1 ? "" : "s") + (j.mode === "preview" ? " would change" : " changed") + '</h2><div class="scroll"><table><thead><tr><th>Book</th><th>Changes</th></tr></thead><tbody>' +
-      items.map((it) => "<tr><td>" + bookLink(library + ":" + it.calibre_id, it.title) + '<br><span class="note">' + esc(library + ":" + it.calibre_id) + "</span></td><td>" +
+      items.map((it) => "<tr><td>" + (it.calibre_id ? bookLink(library + ":" + it.calibre_id, it.title) + '<br><span class="note">' + esc(library + ":" + it.calibre_id) + "</span>" : "<strong>" + esc(it.title) + '</strong><br><span class="note">new book in ' + esc(library) + "</span>") + "</td><td>" +
         (it.added || []).map((t) => '<span class="chg add" title="' + esc(t) + '"><b>+</b>' + esc(LABELS.get(t) || t) + "</span>").join("") +
         (it.removed || []).map((t) => '<span class="chg del" title="' + esc(t) + '"><b>−</b>' + esc(LABELS.get(t) || t) + "</span>").join("") +
         (it.duplicate_review ? duplicateReview(it.duplicate_review, library, calibreLink, ((j.params && j.params.contents) || {})[it.duplicate_review.plan.keep.id]) : '') +
         (it.duplicate_skipped ? '<p class="status-failed">Skipped without changes: ' + esc(it.duplicate_skipped.message) + '</p>' : '') +
         (it.duplicate_partial ? '<p class="status-failed">' + esc(it.duplicate_partial.message) + ' Backup: ' + esc(it.duplicate_partial.backup) + '</p>' : '') +
         (it.duplicate_resolved ? '<p>Duplicate ' + esc(it.duplicate_resolved.removed_id) + ' moved to Calibre’s trash' + ((it.duplicate_resolved.shelves || []).length ? '; shelves ' + esc(it.duplicate_resolved.shelves.map(s => s.shelf + ' ' + (s.action === 'moved' ? 'moved to the keeper' : 'already had the keeper')).join(', ')) : '') + '. Backup: ' + esc(it.duplicate_resolved.backup) + '</p>' : '') +
+        (it.upload_review ? uploadReview(it.upload_review, library, calibreLink) : '') +
+        (it.upload_skipped ? '<p class="status-failed">Skipped (' + esc(it.upload_skipped.filename) + '): ' + esc(it.upload_skipped.message) + '</p>' : '') +
+        (it.upload_partial ? '<p class="status-failed">' + esc(it.upload_partial.message) + ' Backup: ' + esc(it.upload_partial.backup) + '</p>' : '') +
+        (it.upload_applied ? '<p>' + (it.upload_applied.action === 'add_book' ? 'Added new book with ' : 'Added format to existing book: ') + esc((it.upload_applied.formats || []).join(', ')) + '. Backup: ' + esc(it.upload_applied.backup) + '</p>' : '') +
         (it.metadata ? '<div>' + (it.metadata.partial ? '<strong>Partially applied</strong><br>' : '') + '<span class="chg del">' + esc(it.metadata.before.title) + ' · ' + esc(it.metadata.before.authors.join("; ")) + " · " + esc(it.metadata.before.year ?? "year unknown") + '</span><br><span class="chg add">' + esc(it.metadata.after.title) + ' · ' + esc(it.metadata.after.authors.join("; ")) + " · " + esc(it.metadata.after.year ?? "year unknown") + '</span></div>' : "") +
         (it.convert_skipped ? '<span class="status-failed">Not converted: ' + esc(it.convert_skipped === "encrypted" ? "DRM-encrypted; download it again and add it through DeDRM" : it.convert_skipped === "unrecognized" ? "unrecognized file" : it.convert_skipped) + (it.source_format ? " (" + esc(String(it.source_format).toUpperCase()) + ")" : "") + "</span>" : "") +
         (it.added_format ? '<span class="chg add"><b>+</b>' + esc(String(it.added_format).toUpperCase()) + " from " + esc(String(it.source_format).toUpperCase()) + "</span>" : "") +
@@ -100,6 +111,19 @@ function duplicateReview(r, library, calibreLink, contents) {
     ((contents && contents.notes) || []).map(w => '<p class="note">' + esc(w) + '</p>').join('') +
     r.blockers.map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +
     (members.length > 1 ? '<details><summary>Compare source metadata and formats</summary><div class="scroll"><table><thead><tr><th>Field</th>' + members.map((m, i) => '<th>' + (i ? 'Duplicate ' : 'Keeper ') + esc(m.id) + '</th>').join('') + '</tr></thead><tbody>' + ['title','authors','pubdate','publisher','comments','series','languages','rating','tags','identifiers'].map(k => '<tr><th>' + esc(k) + '</th>' + members.map(m => '<td>' + esc(JSON.stringify(m.values[k] ?? '')) + '</td>').join('') + '</tr>').join('') + '<tr><th>formats</th>' + members.map(m => '<td>' + esc(Object.keys(m.formats).join(', ')) + '</td>').join('') + '</tr></tbody></table></div><p>The keeper’s populated fields take precedence. Missing descriptive fields and identifiers are copied from the first duplicate that has them.</p></details>' : '') + '</div>';
+}
+
+function uploadReview(r, library, calibreLink) {
+  const fmts = (r.add_formats || []).join(', ') || r.source_format;
+  const conv = r.convert_to && r.convert_to !== r.source_format ? ' (converted from ' + r.source_format + ' to ' + r.convert_to + ')' : '';
+  const head = r.action === 'add_format' && r.target
+    ? '<strong>Add ' + esc(fmts) + ' to ' + esc(library + ':' + r.target.id) + ' (' + esc(r.target.title) + ')</strong> · ' + calibreLink(r.target.id, 'Open in Calibre-Web')
+    : '<strong>Add new book: ' + esc(r.plan.title) + '</strong> · ' + esc((r.plan.authors || []).join('; ')) + (r.plan.year ? ' · ' + esc(r.plan.year) : '');
+  const tags = (r.plan.tags || []).map(t => '<span class="chg add"><b>+</b>' + esc(LABELS.get(t) || t) + '</span>').join('');
+  return '<div><p>' + head + '</p><p>File: <code>' + esc(r.filename) + '</code> → ' + esc(fmts + conv) + '</p>' +
+    (tags ? '<p>Tags: ' + tags + '</p>' : '') +
+    (r.blockers || []).map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +
+    '</div>';
 }
 
 document.getElementById("actions").addEventListener("click", async (e) => {

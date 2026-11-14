@@ -139,6 +139,13 @@ EOF
     fi
     exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-duplicates.py" -- "$LIBRARY" "$APP_DB"
     ;;
+  upload-preview|upload-apply)
+    require_unsplit
+    if [ "$SSH_ORIGINAL_COMMAND" = upload-apply ]; then
+      exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-upload.py" -- "$LIBRARY" --apply
+    fi
+    exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-upload.py" -- "$LIBRARY"
+    ;;
   metadata-preview)
     require_unsplit
     exec python3 "$TOOLS_DIR/calibre-metadata.py" "$LIBRARY"
@@ -159,7 +166,7 @@ EOF
     exec bash "$TOOLS_DIR/calibre-convert.sh" --apply "$LIBRARY"
     ;;
   *)
-    echo "corpus-source: only 'library', 'calibre-library', 'catalogue', read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview and duplicates-apply" >&2
+    echo "corpus-source: only 'library', 'calibre-library', 'catalogue', read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview, duplicates-apply, upload-preview and upload-apply" >&2
     exit 1
     ;;
 esac

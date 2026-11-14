@@ -336,6 +336,33 @@ See [operator validation and recovery](dev-briefs/metadata-operator-validation.m
 for the tested procedure and its limits. File snapshots are excluded from corpus
 mirrors; they are retained on the source host until an operator removes them.
 
+### Uploading books (`/admin/upload`)
+
+**Upload** (`/admin/upload`, also linked from `/admin/books` and the dashboard) replaces
+Calibre-Web's upload button so duplicate books are intercepted before being added to
+Calibre:
+
+1. Choose or drop one or more `.epub`, `.pdf`, `.mobi`, `.azw`, `.azw3`, `.prc`, `.kfx`,
+   or `.kfx-zip` files.
+2. Each staged file is checked against the library by SHA-256 file hash (across all
+   existing format files), ISBN/ASIN identifiers, and normalized title and authors, and
+   candidate matches are compared by EPUB/PDF content profile:
+   - **Exact file match:** blocked immediately, linking to the existing Calibre record.
+   - **Matches an existing book that lacks the uploaded format:** defaults to **Add
+     format to existing book** (`add_format` with `replace=False`), attaching the new
+     format (and its converted EPUB/PDF for MOBI/AZW/KFX) to the existing record instead
+     of creating a duplicate.
+   - **Matches an existing book that already has the format:** defaults to **Skip** and
+     displays the side-by-side **Compare contents** table; you can explicitly select
+     **Add as separate book (another edition)** if it is a distinct edition to keep.
+   - **No match:** defaults to **Add as new book**, with editable title, authors,
+     publication year, tags, and a live generated citekey preview.
+3. Choose **Preview selected** to verify the batch against the live Calibre database on
+   the source host (`upload-preview`), then **Apply this preview** (`upload-apply` via
+   `tools/calibre-upload.py`) to back up `metadata.db`, run DeDRM and EPUB/PDF
+   conversion for MOBI/AZW/KFX files, write the new books or formats, remove the applied
+   staged files, and refresh the Corpus index.
+
 ### Reviewing duplicates
 
 **Duplicates** (`/admin/duplicates`, also linked from the dashboard) lists groups of
