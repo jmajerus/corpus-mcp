@@ -23,7 +23,8 @@ function init(g){
  state[g.key]={keep,trash,picked:old?.picked??false,conflicts:old?.conflicts??false};
 }
 function selection(g){const s=state[g.key];const ids=[s.keep,...s.trash];return {keep:s.keep,remove:s.trash,discard_conflicts:s.conflicts,fingerprints:Object.fromEntries(g.books.filter(b=>ids.includes(b.id)).map(b=>[b.id,b.fingerprint]))};}
-function ready(g){return canWrite&&state[g.key].trash.length>0;}
+function pending(g){return (g.contents_pending||[]).length>0;}
+function ready(g){return canWrite&&state[g.key].trash.length>0&&!pending(g);}
 function shown(){const q=document.getElementById('search').value.toLowerCase();return groups.filter(g=>g.books.some(b=>(b.id+' '+b.title+' '+b.authors.join(' ')).toLowerCase().includes(q)));}
 function updateBatch(){
  const picked=groups.filter(g=>state[g.key].picked&&ready(g)),records=picked.reduce((n,g)=>n+state[g.key].trash.length,0);
@@ -41,14 +42,14 @@ function contentsTable(g){
  const rows={EPUB:[['Shared text',(p,b)=>shared('EPUB',b),'text'],['Words',p=>num(p.words),'words'],['Contents entries',p=>num(p.contents),'contents'],['Print pages mapped',p=>p.page_list?num(p.page_list):'none','page_list'],['Internal links',p=>num(p.links),'links'],['Images',p=>num(p.images)+' ('+kb(p.image_bytes)+')','images'],['Fonts',p=>kb(p.font_bytes)],['Markup',p=>kb(p.text_bytes)],['Ends like a sample',p=>p.sample?'yes':'no','sample']],
   PDF:[['Shared text',(p,b)=>shared('PDF',b),'text'],['Pages',p=>num(p.pages),'pages'],['Pages with text',p=>num(p.text_pages),'text_pages'],['Words',p=>num(p.words),'words'],['Bookmarks',p=>num(p.contents),'contents'],['Printed page numbers',p=>p.page_labels?'yes':'no'],['Internal links',p=>num(p.links),'links'],['Ends like a sample',p=>p.sample?'yes':'no','sample']]};
  const short=(b,f,measure)=>(g.content_warnings||[]).some(w=>w.format===f&&w.measure===measure&&w.copy===b.id);
- return '<details'+((g.content_warnings||[]).length?' open':'')+'><summary>Compare contents</summary>'+fmts.map(f=>'<div class="scroll"><table class="contents"><thead><tr><th>'+f+'</th>'+g.books.map(b=>'<th>'+esc(b.id)+'</th>').join('')+'</tr></thead><tbody>'+rows[f].map(([label,show,key])=>'<tr><th>'+esc(label)+'</th>'+g.books.map(b=>{const p=b.contents&&b.contents[f];return !p?'<td>—</td>':p.error?'<td class="short">unreadable</td>':'<td'+(short(b,f,key)?' class="short"':'')+'>'+esc(show(p,b))+'</td>';}).join('')+'</tr>').join('')+'</tbody></table></div>').join('')+'</details>';
+ return '<details'+((g.content_warnings||[]).length?' open':'')+'><summary>Compare contents</summary>'+fmts.map(f=>'<div class="scroll"><table class="contents"><thead><tr><th>'+f+'</th>'+g.books.map(b=>'<th>'+esc(b.id)+'</th>').join('')+'</tr></thead><tbody>'+rows[f].map(([label,show,key])=>'<tr><th>'+esc(label)+'</th>'+g.books.map(b=>{const p=b.contents&&b.contents[f];return !p?'<td>—</td>':p.pending?'<td>checking…</td>':p.error?'<td class="short">unreadable</td>':'<td'+(short(b,f,key)?' class="short"':'')+'>'+esc(show(p,b))+'</td>';}).join('')+'</tr>').join('')+'</tbody></table></div>').join('')+'</details>';
 }
 function render() {
  document.getElementById('groups').innerHTML=shown().map(g=>{
   const n=groups.indexOf(g),s=state[g.key];
   const evidence=[...new Set(g.pairs.flatMap(p=>p.evidence))];
   const warnings=[...new Set(g.pairs.map(p=>p.edition_warning).filter(Boolean))].concat((g.content_warnings||[]).map(w=>w.message),g.size_warnings||[]);
-  return '<section class="card pair"><h2><label><input type="checkbox" data-pick="'+n+'" '+(s.picked?'checked ':'')+(ready(g)?'':'disabled')+'> '+g.books.length+' records</label> · '+evidence.map(esc).join(' · ')+'</h2>'+warnings.map(w=>'<p class="warning">'+esc(w)+'</p>').join('')+(g.content_notes||[]).map(w=>'<p class="note">'+esc(w)+'</p>').join('')+'<div class="compare">'+g.books.map(b=>{
+  return '<section class="card pair"><h2><label><input type="checkbox" data-pick="'+n+'" '+(s.picked?'checked ':'')+(ready(g)?'':'disabled')+'> '+g.books.length+' records</label> · '+evidence.map(esc).join(' · ')+'</h2>'+(pending(g)?'<p class="note">Checking the '+esc(g.contents_pending.join(' and '))+' contents of these copies; this page updates when it is done. Choose a keeper after that.</p>':'')+warnings.map(w=>'<p class="warning">'+esc(w)+'</p>').join('')+(g.content_notes||[]).map(w=>'<p class="note">'+esc(w)+'</p>').join('')+'<div class="compare">'+g.books.map(b=>{
    const keep=b.id===s.keep,trash=s.trash.includes(b.id),canTrash=trashable(g,s.keep,b);
    const looks=[b.shelves.length?'Shelves: '+b.shelves.join(', '):'On no public shelf',b.cover_colour===null?'no cover':b.cover_colour<5?'black-and-white cover':'colour cover'];
    const calibreLink=calibreWebUrl && b.library===writableLibrary ? '<p><a href="'+esc((calibreWebUrl.endsWith('/') ? calibreWebUrl.slice(0,-1) : calibreWebUrl)+'/book/'+b.calibre_id)+'" target="_blank" rel="noopener">Open this record in Calibre-Web</a></p>' : '';
@@ -62,7 +63,9 @@ function render() {
  }).join('') || '<p>No duplicate candidates match. Previously reviewed pairs reappear if their metadata, file hash, or references change.</p>';
  updateBatch();
 }
+let pendingTimer=null;
 async function load(){try{const data=await api('/api/duplicates?dismissed='+(document.getElementById('dismissed').checked?'1':'0'));groups=data.groups;calibreWebUrl=data.calibre_web_url;writableLibrary=data.writable_library;
+ clearTimeout(pendingTimer);if(groups.some(pending))pendingTimer=setTimeout(()=>{if(!document.hidden)load();},10000);
  groups.forEach(init);
  document.getElementById('freshness').textContent=(data.last_scan?'Catalogue refreshed '+when(data.last_scan)+'. ':'No completed catalogue refresh yet. ')+'Reloading this page does not pull changes from Calibre.';render();}catch(e){document.getElementById('groups').textContent=e.message;}}
 async function preview(list){

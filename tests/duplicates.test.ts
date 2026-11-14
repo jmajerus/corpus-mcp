@@ -10,7 +10,9 @@ import { scanLibraries } from "../src/indexer.js";
 import { zoteroMatch } from "../src/zotero.js";
 import { type Corpus, getBook } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
-import { coverColour, GREYSCALE_COVER, sizeWarnings, duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences } from "../src/duplicates.js";
+import { coverColour, GREYSCALE_COVER, sizeWarnings, duplicatePairs, duplicateGroups, duplicateBatchPlan, dismissDuplicate, duplicateCandidates, duplicateReferences, duplicateContents } from "../src/duplicates.js";
+import { profilesSettled } from "../src/duplicate-contents.js";
+import { stopPdfWorkers, usePdfWorkers } from "../src/pdf-runner.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
 import { DUPLICATES_HTML } from "../src/web/duplicates.js";
 import { JOB_HTML } from "../src/web/jobs.js";
@@ -354,4 +356,20 @@ it("compares the copies' contents, prefers the more complete one as keeper, and 
  const job=await wait(r,r.start("duplicates","preview",{duplicates:[select("main:2",["main:1"])]}));
  expect(job.params.contents).toEqual({2:{warnings:g.content_warnings.map(w=>w.message),notes:[]}});
  expect(Object.keys(sent[0])).toEqual(["library","groups"]);
+});
+it("shows groups at once while the server reads their files, and refuses a preview until it has",async()=>{
+ usePdfWorkers();
+ try{
+  const first=duplicateGroups(c,"main").groups[0];
+  expect(first.contents_pending).toEqual(["PDF"]);
+  expect(first.books[0].contents.PDF).toEqual({pending:true});
+  expect(()=>duplicateContents(c,"main",["main:1"])).toThrow(/PDF contents of main:1's group are still being checked/);
+  await profilesSettled();
+  const done=duplicateGroups(c,"main").groups[0];
+  expect(done.contents_pending).toEqual([]);
+  expect(done.books[0].contents.PDF).toMatchObject({pages:1});
+  expect(()=>duplicateContents(c,"main",["main:1"])).not.toThrow();
+  // Saved in data.db: a restarted server doesn't read the files again.
+  expect(c.data.prepare("SELECT COUNT(*) FROM file_profiles").pluck().get()).toBe(2);
+ }finally{stopPdfWorkers();}
 });
