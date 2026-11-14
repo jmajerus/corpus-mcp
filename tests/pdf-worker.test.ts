@@ -5,7 +5,12 @@ import { openDataStore } from "../src/data.js";
 import { contentFindings, contentProfile, pdfProfile, profilesSettled } from "../src/duplicate-contents.js";
 import { PdfRunner, PdfTimeout, stopPdfWorkers, usePdfWorkers } from "../src/pdf-runner.js";
 import { runPdfTask } from "../src/pdf-tasks.js";
-import { makePdf, tempDir } from "./fixtures.js";
+import { openDatabase } from "../src/db.js";
+import { scanLibraries } from "../src/indexer.js";
+import { type Corpus, ToolError, renderPageAsync } from "../src/tools.js";
+import { Vocabulary } from "../src/vocabulary.js";
+import type { Config } from "../src/config.js";
+import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
 // The server's MuPDF work in worker threads: a damaged PDF can keep MuPDF busy for many minutes, which
 // must never stop the server answering (2026-11-14: /admin/duplicates profiled every copy inline).
@@ -66,6 +71,46 @@ it("profiles in the background with workers, keeps the result in data.db, and re
     expect(contentProfile(slow, "PDF", data)).toEqual({ error: "Reading the PDF took longer than 0 s, so it was stopped; the file may be damaged." });
   } finally {
     stopPdfWorkers();
+    data.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("stops a render past its time limit, then refuses that file at once until it changes", async () => {
+  const root = tempDir();
+  makeLibrary(root, "main", [{ id: 1, title: "Damaged", authors: ["Dee Mage"], files: { pdf: pdf() } }]);
+  const vocabularyPath = path.join(import.meta.dirname, "vocabulary.json");
+  const config = {
+    booksRoot: root, libraries: ["main"], excludeTags: [], dbPath: path.join(root, "corpus.db"), dataDbPath: path.join(root, "data.db"),
+    backupDir: path.join(root, "backups"), shelvesFile: path.join(root, "shelves.json"), shelvesLibrary: "main", host: "127.0.0.1", port: 0,
+    citekeyPreset: "author-year-word", vocabularyPath,
+  } as Config;
+  const db = openDatabase(config.dbPath);
+  scanLibraries(config, db);
+  const data = openDataStore(config.dataDbPath);
+  const c: Corpus = { db, data, booksRoot: root, vocabulary: Vocabulary.load(vocabularyPath) };
+  try {
+    // As a damaged PDF behaves: MuPDF runs past the limit, and the worker is stopped.
+    usePdfWorkers({ renderTimeoutMs: 1 });
+    const first = renderPageAsync(c, { book_id: "main:1", file_page: 1 });
+    await expect(first).rejects.toBeInstanceOf(ToolError);
+    await expect(first).rejects.toThrow(/Rendering main:1 took longer than 0 s, so it was stopped; the PDF may be damaged/);
+
+    // With a limit any render meets, the same file is still refused, at once: no worker task is started.
+    stopPdfWorkers();
+    usePdfWorkers({ renderTimeoutMs: 30_000 });
+    const started = Date.now();
+    await expect(renderPageAsync(c, { book_id: "main:1", file_page: 1 })).rejects.toThrow(/took longer than 0 s/);
+    expect(Date.now() - started).toBeLessThan(50);
+
+    // A replaced file (new size or time) is rendered again.
+    const file = path.join(root, db.prepare("SELECT file_path FROM books WHERE id = 'main:1'").pluck().get() as string);
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(file, later, later);
+    expect(await renderPageAsync(c, { book_id: "main:1", file_page: 1, scale: 0.5 })).toMatchObject({ width: 306, file_page: 1 });
+  } finally {
+    stopPdfWorkers();
+    db.close();
     data.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
