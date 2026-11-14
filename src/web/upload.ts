@@ -343,18 +343,22 @@ document.getElementById("clear-staged").addEventListener("click", async () => {
   }
 });
 
-async function saveDraft(it) {
+async function saveDraft(it, explicitAction = false) {
   try {
-    const updated = await post("/api/upload/files/" + encodeURIComponent(it.id), {
+    const body = {
       title: it.draft.title,
       authors: it.draft.authors,
       year: it.draft.year,
       tags: it.draft.tags,
-      action: it.draft.action,
       target_book_id: it.draft.target_book_id,
-    });
+    };
+    if (explicitAction) body.action = it.draft.action;
+    const updated = await post("/api/upload/files/" + encodeURIComponent(it.id), body);
     const i = items.findIndex((x) => x.id === it.id);
     if (i >= 0) items[i] = updated;
+    if (updated.draft.action === "add_book" || updated.draft.action === "add_format") {
+      if (picked[updated.id] === undefined) picked[updated.id] = true;
+    }
     if (!actionable(updated)) picked[updated.id] = false;
     render();
   } catch (e) {
@@ -373,18 +377,18 @@ document.getElementById("items").addEventListener("change", (e) => {
     it.draft.action = t.value;
     if (t.value === "add_format" && !it.draft.target_book_id) it.draft.target_book_id = it.suggested_target;
     picked[it.id] = t.value === "add_book" || t.value === "add_format";
-    saveDraft(it);
+    saveDraft(it, true);
   } else if (d.target !== undefined) {
     const it = items[Number(d.target)];
     it.draft.target_book_id = t.value;
-    saveDraft(it);
+    saveDraft(it, false);
   } else if (d.field !== undefined) {
     const it = items[Number(d.idx)];
     if (d.field === "title") it.draft.title = t.value.trim();
     else if (d.field === "authors") it.draft.authors = t.value.split(";").map((s) => s.trim()).filter(Boolean);
     else if (d.field === "year") it.draft.year = t.value.trim() ? Number(t.value.trim()) : null;
     else if (d.field === "tags") it.draft.tags = t.value.split(",").map((s) => s.trim()).filter(Boolean);
-    saveDraft(it);
+    saveDraft(it, false);
   }
 });
 

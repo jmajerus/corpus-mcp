@@ -89,6 +89,7 @@ export interface StagedUploadDraft {
   year: number | null;
   tags: string[];
   action?: UploadAction;
+  action_explicit?: boolean;
   target_book_id?: string | null;
 }
 
@@ -674,6 +675,7 @@ export function updateStagedUpload(c: Corpus, config: Config, id: string, patch:
       throw new ToolError("Choose skip, add_format, or add_book.");
     }
     rec.draft.action = patch.action;
+    rec.draft.action_explicit = true;
   }
   if (patch.target_book_id !== undefined) {
     if (patch.target_book_id !== null && typeof patch.target_book_id !== "string") {
@@ -886,7 +888,9 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     allowed_actions.push("add_book");
   }
 
-  const chosenAction: UploadAction = rec.draft.action && allowed_actions.includes(rec.draft.action) ? rec.draft.action : suggested_action;
+  const chosenAction: UploadAction = rec.draft.action_explicit && rec.draft.action && allowed_actions.includes(rec.draft.action)
+    ? rec.draft.action
+    : suggested_action;
   const chosenTarget = chosenAction === "add_format"
     ? (matches.find(m => m.can_add_format && m.book.id === rec.draft.target_book_id)?.book.id ?? suggested_target)
     : null;
@@ -1017,8 +1021,7 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
     if (Array.isArray(sel.authors)) rec.draft.authors = sel.authors.map(a => String(a).trim()).filter(Boolean);
     if (sel.year !== undefined) rec.draft.year = sel.year;
     if (Array.isArray(sel.tags)) rec.draft.tags = [...new Set(sel.tags.map(t => String(t).trim()).filter(Boolean))];
-    rec.draft.action = sel.action;
-    rec.draft.target_book_id = sel.target_book_id ?? rec.draft.target_book_id ?? null;
+    if (sel.target_book_id !== undefined) rec.draft.target_book_id = sel.target_book_id;
     saveStagedRecord(dir, rec);
 
     const evaluated = evaluateStagedUpload(c, config, rec, books);

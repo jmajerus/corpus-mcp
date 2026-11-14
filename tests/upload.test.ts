@@ -260,6 +260,15 @@ it("extracts MOBI EXTH metadata, sniffs DRM and print-replica KFX, and validates
   expect(() => updateStagedUpload(c, config, stagedReplica.id, { authors: ["Jane & John"] })).toThrow(/reserved & separator/);
   expect(() => updateStagedUpload(c, config, stagedReplica.id, { year: 999 })).toThrow(/1001 to 9999/);
 
+  // Editing title/authors to match an existing book automatically switches the default action to add_format
+  // unless the user explicitly clicked the action radio button.
+  const unmatched = stageUpload(c, config, "Misnamed.epub", makeRichEpub({ title: "Temporary Title", author: "Ada Lovelace", year: "2021" }));
+  expect(unmatched.draft.action).toBe("add_book");
+  const afterTitleEdit = updateStagedUpload(c, config, unmatched.id, { title: "The Same Book" });
+  expect(afterTitleEdit.suggested_action).toBe("add_format");
+  expect(afterTitleEdit.draft.action).toBe("add_format");
+  expect(afterTitleEdit.draft.target_book_id).toBe("main:1");
+
   removeStagedUpload(config, lockedMobi.id);
   expect(listStagedUploads(c, config).items.some(i => i.id === lockedMobi.id)).toBe(false);
   clearStagedUploads(config);
