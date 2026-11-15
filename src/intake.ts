@@ -6,6 +6,7 @@ import type { Config } from "./config.js";
 import type { DataStore } from "./data.js";
 import { type Corpus, ToolError } from "./tools.js";
 import {
+  MAX_BATCH_BYTES,
   MAX_STAGED_FILES,
   MAX_STAGED_TOTAL_BYTES,
   MAX_UPLOAD_BYTES,
@@ -524,7 +525,10 @@ export function stageIntakeBatch(c: Corpus, config: Config, actor?: string, limi
   const maxBytes = limits.maxBytes ?? MAX_STAGED_TOTAL_BYTES;
   const state = stagedUploadState(config);
   let roomFiles = maxFiles - state.files;
-  let roomBytes = maxBytes - state.bytes;
+  // One preview holds 250 MB. Leave the rest of the 500 MB staging room for the next batch.
+  const storageRoom = maxBytes - state.bytes;
+  const previewRoom = MAX_BATCH_BYTES - state.bytes;
+  let roomBytes = Math.min(storageRoom, Math.max(0, previewRoom));
   const rows = c.data.prepare("SELECT * FROM intake_files WHERE status = 'candidate' ORDER BY path").all() as IntakeDbRow[];
   if (!rows.length) return { staged: 0, linked: 0, remaining: 0 };
   const mark = c.data.prepare("UPDATE intake_files SET status = 'staged', staged_id = ?, seen_at = ? WHERE path = ?");
@@ -569,7 +573,9 @@ export function stageIntakeBatch(c: Corpus, config: Config, actor?: string, limi
   }
   const remaining = c.data.prepare("SELECT COUNT(*) FROM intake_files WHERE status = 'candidate'").pluck().get() as number;
   if (!staged && !linked && rows.length) {
-    throw new ToolError("None of the ready files fit in the remaining staging room. Apply or clear staged files on the Upload page first.");
+    throw new ToolError(previewRoom < storageRoom
+      ? "None of the ready files fit in this preview. Preview and apply the files already staged (250 MB at a time), then stage the next batch."
+      : "None of the ready files fit in the remaining staging room. Apply or clear staged files on the Upload page first.");
   }
   return { staged, linked, remaining };
 }

@@ -17,6 +17,7 @@ import {
   clearStagedUploads,
   listStagedUploads,
   removeStagedUpload,
+  batchLimitError,
   stageUpload,
   unzipBounded,
   updateStagedUpload,
@@ -643,6 +644,12 @@ class LibraryDatabase:
   expect(partialApply.stderr).toContain("Could not add format EPUB to book 1.");
   expect(fs.readFileSync(path.join(libDir, "removed_formats.log"), "utf8").trim()).toBe("1:MOBI");
   expect(fs.existsSync(path.join(libDir, "Ada Lovelace/The Same Book (1)/book.mobi"))).toBe(false);
+});
+
+it("reports how far a preview selection is over the 250 MB limit", () => {
+  expect(batchLimitError(260 * 1024 * 1024)).toBe(
+    "Selected files are 260.0 MB, 10.0 MB over the 250.0 MB preview limit. Uncheck about 10.0 MB, then preview again.",
+  );
 });
 
 it("renders the upload page script and keeps unmatched uploads ready immediately even with PDF workers active", async () => {

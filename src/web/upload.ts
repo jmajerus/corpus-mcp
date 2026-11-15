@@ -44,11 +44,12 @@ export const UPLOAD_HTML = page({
   <button type="button" id="select-none" disabled>Clear selection</button>
   <button type="button" id="clear-staged" class="danger" disabled>Remove all staged</button>
   <button type="button" id="preview-batch" class="primary" disabled>Preview selected</button>
+  <span id="batch-size" class="note"></span>
   <span id="count" class="note"></span>
 </div>
 <div id="items">Loading…</div>`,
   script: `
-let items = [], picked = {}, canWrite = false, calibreWebUrl = null, writableLibrary = null, refreshRunning = false, pendingTimer = null;
+let items = [], picked = {}, freshPick = {}, canWrite = false, calibreWebUrl = null, writableLibrary = null, refreshRunning = false, pendingTimer = null, batchLimit = 250 * 1024 * 1024;
 
 const pending = (it) => (it.contents_pending || []).length > 0;
 const actionable = (it) => canWrite && !it.blockers.length && !pending(it) && (it.draft.action === "add_book" || it.draft.action === "add_format");
@@ -60,8 +61,21 @@ function initItem(it) {
   }
   if (picked[it.id] === undefined || (picked[it.id] === false && it.was_pending)) {
     picked[it.id] = true;
+    freshPick[it.id] = true;
   }
   it.was_pending = false;
+}
+
+/** A new batch arrives already checked, up to the preview limit. Later files wait for the next preview. */
+function keepSelectionWithinLimit() {
+  let total = items.reduce((sum, it) => sum + (picked[it.id] && actionable(it) ? it.size : 0), 0);
+  for (let i = items.length - 1; i >= 0 && total > batchLimit; i--) {
+    const it = items[i];
+    if (!freshPick[it.id] || !picked[it.id] || !actionable(it)) continue;
+    picked[it.id] = false;
+    total -= it.size;
+  }
+  freshPick = {};
 }
 
 function formatPlanBadge(it) {
@@ -140,12 +154,20 @@ function updateBatch() {
   const addBooks = chosen.filter((it) => it.draft.action === "add_book").length;
   const addFormats = chosen.filter((it) => it.draft.action === "add_format").length;
   const blocked = items.filter((it) => it.blockers.length || (it.matches.length && it.draft.action === "skip")).length;
+  const selectedBytes = chosen.reduce((sum, it) => sum + it.size, 0);
+  const over = selectedBytes - batchLimit;
   const btn = document.getElementById("preview-batch");
-  btn.disabled = !chosen.length;
+  btn.disabled = !chosen.length || over > 0;
   const parts = [];
   if (addBooks) parts.push(addBooks + " new book" + (addBooks === 1 ? "" : "s"));
   if (addFormats) parts.push(addFormats + " format addition" + (addFormats === 1 ? "" : "s"));
   btn.textContent = chosen.length ? "Preview " + chosen.length + " file" + (chosen.length === 1 ? "" : "s") + " (" + parts.join(", ") + ")" : "Preview selected";
+  const size = document.getElementById("batch-size");
+  size.className = over > 0 ? "warning" : "note";
+  const waiting = readyItems.filter((it) => !picked[it.id]).length;
+  size.textContent = !chosen.length ? "" : over > 0
+    ? "Selected " + bytes(selectedBytes) + ", " + bytes(over) + " over the " + bytes(batchLimit) + " preview limit."
+    : "Selected " + bytes(selectedBytes) + " of " + bytes(batchLimit) + "." + (waiting ? " " + waiting + " left for the next preview." : "");
   document.getElementById("select-ready").disabled = !readyItems.length;
   document.getElementById("select-none").disabled = !chosen.length;
   document.getElementById("clear-staged").disabled = !canWrite || !items.length;
@@ -243,6 +265,7 @@ async function load() {
     const prevPending = new Set(items.filter(pending).map((x) => x.id));
     const data = await api("/api/upload");
     items = data.items;
+    if (data.max_batch_bytes) batchLimit = data.max_batch_bytes;
     calibreWebUrl = data.calibre_web_url;
     writableLibrary = data.writable_library;
     clearTimeout(pendingTimer);
@@ -251,6 +274,7 @@ async function load() {
       if (prevPending.has(it.id) || pending(it)) it.was_pending = true;
       initItem(it);
     });
+    keepSelectionWithinLimit();
     document.getElementById("freshness").textContent = (data.last_scan ? "Catalogue refreshed " + when(data.last_scan) + ". " : "No completed catalogue refresh yet. ") + "Preview also checks the live Calibre database directly.";
     render();
   } catch (e) {
@@ -275,6 +299,7 @@ async function uploadFiles(fileList) {
       });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.error || "Upload failed (" + res.status + ")");
+      freshPick[out.id] = true;
       picked[out.id] = !out.blockers.length && (out.draft.action === "add_book" || out.draft.action === "add_format");
     }
     note.textContent = "Staged " + fileList.length + " file" + (fileList.length === 1 ? "" : "s") + ".";

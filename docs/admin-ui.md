@@ -362,7 +362,9 @@ Calibre:
    the source host (`upload-preview`), then **Apply this preview** (`upload-apply` via
    `tools/calibre-upload.py`) to back up `metadata.db`, run DeDRM and EPUB/PDF
    conversion for MOBI/AZW/KFX files, write the new books or formats, remove the applied
-   staged files, and refresh the Corpus index.
+   staged files, and refresh the Corpus index. Files are already checked, up to the
+   250 MB preview limit. Anything past that stays unchecked for the next preview, and
+   the bar shows the selected size.
 
 ### Intake from the master directory (`/admin/intake`)
 
@@ -381,8 +383,9 @@ EPUB and MOBI headers are read so the list can show a title. PDF title pages are
 left for the Upload page, which is where ISBN, title, and author matching decides
 add format or add book.
 
-**Stage next batch** copies ready files into the Upload staging area until it holds
-100 files or 500 MB. Folder names become suggested tags (generic names such as
+**Stage next batch** copies ready files into the Upload staging area until this
+batch reaches what one preview can hold (250 MB), and until the staging area
+holds 100 files or 500 MB. Folder names become suggested tags (generic names such as
 `ebooks` and `downloads` are dropped) and are not used to identify the book.
 **Leave selected on the NAS** marks files so the next scan does not offer them
 again until the file itself changes. A file that is gone on the next scan is

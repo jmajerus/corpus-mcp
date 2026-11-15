@@ -19,6 +19,13 @@ export type UploadAction = "skip" | "add_format" | "add_book";
 
 export const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 export const MAX_BATCH_BYTES = 250 * 1024 * 1024;
+
+/** Says how far a selection is past the preview limit, in MB, so the extra files are easy to uncheck. */
+export function batchLimitError(selectedBytes: number): string {
+  const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+  const over = selectedBytes - MAX_BATCH_BYTES;
+  return `Selected files are ${mb(selectedBytes)} MB, ${mb(over)} MB over the ${mb(MAX_BATCH_BYTES)} MB preview limit. Uncheck about ${mb(over)} MB, then preview again.`;
+}
 export const MAX_STAGED_TOTAL_BYTES = 500 * 1024 * 1024;
 export const MAX_STAGED_FILES = 100;
 export const MAX_UNCOMPRESSED_ZIP_BYTES = 250 * 1024 * 1024;
@@ -954,6 +961,7 @@ export function listStagedUploads(c: Corpus, config: Config) {
     last_scan: c.db.prepare("SELECT value FROM meta WHERE key='last_scan'").pluck().get() ?? null,
     calibre_web_url: config.admin?.calibreWebUrl ?? null,
     writable_library: config.shelvesLibrary,
+    max_batch_bytes: MAX_BATCH_BYTES,
   };
 }
 
@@ -1023,9 +1031,7 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
     }
     seenHashes.add(rec.sha256);
     batchBytes += rec.size;
-    if (batchBytes > MAX_BATCH_BYTES) {
-      throw new ToolError("Selected files exceed the 250 MB batch limit. Preview and apply them in smaller batches.");
-    }
+    if (batchBytes > MAX_BATCH_BYTES) throw new ToolError(batchLimitError(batchBytes));
 
     if (sel.title !== undefined) rec.draft.title = String(sel.title).trim();
     if (Array.isArray(sel.authors)) rec.draft.authors = sel.authors.map(a => String(a).trim()).filter(Boolean);
@@ -1144,9 +1150,7 @@ export function attachUploadPayloads(config: Config, plan: UploadBatchPlan) {
         throw new ToolError(`Staged file ${item.filename} changed since preview. Preview again.`);
       }
       totalBytes += st.size;
-      if (totalBytes > MAX_BATCH_BYTES) {
-        throw new ToolError("Selected files exceed the 250 MB batch limit. Preview and apply them in smaller batches.");
-      }
+      if (totalBytes > MAX_BATCH_BYTES) throw new ToolError(batchLimitError(totalBytes));
       const data = fs.readFileSync(binPath);
       const actualHash = createHash("sha256").update(data).digest("hex");
       if (actualHash !== item.sha256) {
