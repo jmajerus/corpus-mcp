@@ -2,12 +2,13 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { crc32, deflateRawSync } from "node:zlib";
 import { strToU8, zipSync } from "fflate";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
 import { notYetLogged, openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
-import { profilesSettled } from "../src/duplicate-contents.js";
+import { epubProfile, profilesSettled } from "../src/duplicate-contents.js";
 import { scanLibraries } from "../src/indexer.js";
 import { type JobCommands, JobRunner } from "../src/jobs.js";
 import { usePdfWorkers } from "../src/pdf-runner.js";
@@ -97,6 +98,47 @@ function makeRichEpub(opts: { title: string; author?: string; year?: string; isb
     "OEBPS/content.opf": strToU8(opf),
     "OEBPS/ch1.xhtml": strToU8(`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>${opts.title}</h1><p>${opts.text ?? "Chapter paragraph words."}</p></body></html>`),
   }));
+}
+
+/** A readable EPUB whose folder entries are deflated and empty, as Calibre and some publishers write them. */
+function deflatedDirectoryZip(): Uint8Array {
+  const chapter = Buffer.from(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>Visible chapter text.</p></body></html>`);
+  const container = Buffer.from(`<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`);
+  const opf = Buffer.from(`<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`);
+  const entries = [
+    { name: "mimetype", method: 0, raw: Buffer.from("application/epub+zip") },
+    { name: "META-INF/", method: 8, raw: Buffer.alloc(0) },
+    { name: "META-INF/container.xml", method: 0, raw: container },
+    { name: "OEBPS/", method: 8, raw: Buffer.alloc(0) },
+    { name: "OEBPS/content.opf", method: 0, raw: opf },
+    { name: "OEBPS/ch1.xhtml", method: 0, raw: chapter },
+  ].map(entry => ({ ...entry, stored: entry.method === 8 ? deflateRawSync(entry.raw) : entry.raw }));
+  const le = (n: number, bytes: number) => { const b = Buffer.alloc(bytes); b.writeUIntLE(n, 0, bytes); return b; };
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name);
+    const crc = crc32(entry.raw);
+    const local = Buffer.concat([
+      le(0x04034b50, 4), le(20, 2), le(0, 2), le(entry.method, 2), le(0, 2), le(0, 2),
+      le(crc, 4), le(entry.stored.length, 4), le(entry.raw.length, 4), le(name.length, 2), le(0, 2),
+      name, entry.stored,
+    ]);
+    locals.push(local);
+    centrals.push(Buffer.concat([
+      le(0x02014b50, 4), le(20, 2), le(20, 2), le(0, 2), le(entry.method, 2), le(0, 2), le(0, 2),
+      le(crc, 4), le(entry.stored.length, 4), le(entry.raw.length, 4), le(name.length, 2), le(0, 2), le(0, 2),
+      le(0, 2), le(0, 2), le(0, 4), le(offset, 4), name,
+    ]));
+    offset += local.length;
+  }
+  const central = Buffer.concat(centrals);
+  const end = Buffer.concat([
+    le(0x06054b50, 4), le(0, 2), le(0, 2), le(entries.length, 2), le(entries.length, 2),
+    le(central.length, 4), le(offset, 4), le(0, 2),
+  ]);
+  return new Uint8Array(Buffer.concat([...locals, central, end]));
 }
 
 beforeEach(() => {
@@ -231,6 +273,10 @@ it("extracts MOBI EXTH metadata, sniffs DRM and print-replica KFX, and validates
   expect(() => unzipBounded(ratioZip)).toThrow(/compression ratio exceeds safety limit/);
   expect(() => unzipBounded(new Uint8Array(existingEpub), { maxTotalBytes: 10 })).toThrow(/uncompressed size exceeds/);
   expect(() => unzipBounded(new Uint8Array(existingEpub), { maxEntries: 1 })).toThrow(/more than 1 entries/);
+  // Publishers and Calibre store META-INF/ and OEBPS/ as deflated empty directories. Those entries are readable.
+  const deflatedDir = deflatedDirectoryZip();
+  expect(unzipBounded(deflatedDir)["META-INF/"]).toEqual(new Uint8Array());
+  expect(epubProfile(deflatedDir).words).toBeGreaterThan(0);
   const bombEpub = stageUpload(c, config, "bomb.epub", Buffer.from(ratioZip));
   expect(bombEpub.blockers[0]).toMatch(/compression ratio exceeds safety limit/);
 

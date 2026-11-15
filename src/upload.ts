@@ -54,9 +54,8 @@ export function unzipBounded(
       if (file.originalSize < 0 || file.size < 0 || !Number.isFinite(file.originalSize) || !Number.isFinite(file.size)) {
         throw new Error("Archive has an invalid entry size.");
       }
-      if (file.compression !== 0 && file.size > 0 && file.originalSize === 0) {
-        throw new Error("Archive has an invalid compressed entry size.");
-      }
+      // An uncompressed size of 0 with a few compressed bytes is a normal empty directory entry
+      // (META-INF/ and OEBPS/ in many EPUBs). fflate allocates the output to the declared size, so it cannot expand.
       if (file.originalSize > maxEntry) {
         throw new Error(`Archive entry ${file.name} exceeds the ${Math.round(maxEntry / (1024 * 1024))} MB uncompressed limit.`);
       }

@@ -84,9 +84,8 @@ export function epubProfile(data: Uint8Array): ContentProfile {
       if (file.originalSize < 0 || file.size < 0 || !Number.isFinite(file.originalSize)) {
         throw new Error("EPUB archive has an invalid entry size.");
       }
-      if (file.compression !== 0 && file.size > 0 && file.originalSize === 0) {
-        throw new Error("EPUB archive has an invalid compressed entry size.");
-      }
+      // Empty directory entries are often deflated (a couple of compressed bytes, uncompressed size 0).
+      // fflate allocates the output to the declared size, so a declared size of 0 cannot expand.
       if (file.originalSize > 1024 * 1024 && file.originalSize / Math.max(1, file.size) > 200) {
         throw new Error("EPUB archive compression ratio exceeds safety limit.");
       }
@@ -191,8 +190,11 @@ export function contentProfile(file: string, format: "EPUB" | "PDF", data?: Data
   const saved = data?.prepare("SELECT profile FROM file_profiles WHERE stamp = ?").pluck().get(stamp) as string | undefined;
   if (saved) {
     result = JSON.parse(saved) as ContentProfile | { error: string };
-    profiles.set(stamp, result);
-    return result;
+    // Older builds refused a deflated empty directory. That refusal was stored; read the file again.
+    if (!("error" in result) || !result.error.includes("invalid compressed entry size")) {
+      profiles.set(stamp, result);
+      return result;
+    }
   }
   const keep = (value: ContentProfile | { error: string }) => {
     profiles.set(stamp, value);
