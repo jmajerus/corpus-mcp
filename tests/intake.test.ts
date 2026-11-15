@@ -296,6 +296,75 @@ it("treats an exact copy of a non-indexed format as already in the library", asy
   expect(row).toEqual({ status: "present", book_id: "main:1" });
 });
 
+it("treats an exact copy from a Calibre library the index does not contain as already in the library", async () => {
+  const hidden = makePdf({ pages: [["A book the index never stored"]] });
+  const excluded = makePdf({ pages: [["A configured book excluded by tag"]] });
+  makeLibrary(books, "shelf", [
+    { id: 1, title: "Off to the Side", authors: ["Grace Hopper"], files: { pdf: hidden } },
+  ]);
+  makeLibrary(books, "quiet", [
+    { id: 1, title: "Left Out", authors: ["Grace Hopper"], tags: ["private"], files: { pdf: excluded } },
+  ]);
+  config.libraries = ["main", "quiet"];
+  config.excludeTags = ["private"];
+  const db = openDatabase(config.dbPath);
+  scanLibraries(config, db);
+  db.close();
+  c.db.close();
+  c.db = openDatabase(config.dbPath, { readonly: true });
+  expect(c.db.prepare("SELECT id FROM books WHERE library IN ('shelf', 'quiet')").all()).toEqual([]);
+  fs.writeFileSync(path.join(intake, "Off to the Side.pdf"), hidden);
+  fs.writeFileSync(path.join(intake, "Left Out.pdf"), excluded);
+  await scanIntake(c, config, () => {});
+  const rows = c.data.prepare("SELECT path, status, book_id FROM intake_files WHERE path IN ('Off to the Side.pdf', 'Left Out.pdf') ORDER BY path").all();
+  expect(rows).toEqual([
+    { path: "Left Out.pdf", status: "present", book_id: "quiet:1" },
+    { path: "Off to the Side.pdf", status: "present", book_id: "shelf:1" },
+  ]);
+});
+
+it("hashes a file again when it returns after being marked absent", async () => {
+  const file = path.join(intake, "Returns.pdf");
+  const first = makePdf({ pages: [["Bytes before the file disappeared"]] });
+  fs.writeFileSync(file, first);
+  await scanIntake(c, config, () => {});
+  const before = c.data.prepare("SELECT sha256, size, mtime_ms FROM intake_files WHERE path = ?").get("Returns.pdf") as { sha256: string; size: number; mtime_ms: number };
+  fs.rmSync(file);
+  await scanIntake(c, config, () => {});
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get("Returns.pdf")).toBe("absent");
+  const padded = Buffer.alloc(before.size);
+  const second = makePdf({ pages: [["Different bytes in the same length"]] });
+  second.subarray(0, Math.min(second.length, padded.length)).copy(padded);
+  if (padded.equals(first)) padded[padded.length - 1] ^= 0xff;
+  fs.writeFileSync(file, padded);
+  fs.utimesSync(file, before.mtime_ms / 1000, before.mtime_ms / 1000);
+  await scanIntake(c, config, () => {});
+  const after = c.data.prepare("SELECT status, sha256 FROM intake_files WHERE path = ?").get("Returns.pdf") as { status: string; sha256: string };
+  expect(after.status).toBe("candidate");
+  expect(after.sha256).not.toBe(before.sha256);
+  expect(after.sha256).toBe(createHash("sha256").update(padded).digest("hex"));
+});
+
+it("offers a file again after its Calibre copy is removed, and leaves an applied row alone", async () => {
+  fs.writeFileSync(path.join(intake, "Already.pdf"), indexedPdf);
+  fs.writeFileSync(path.join(intake, "Added.pdf"), indexedPdf);
+  await scanIntake(c, config, () => {});
+  c.data.prepare("UPDATE intake_files SET status = 'applied' WHERE path = ?").run("Added.pdf");
+  const folder = path.join(books, "main", "Ada Lovelace", "The Same Book (1)");
+  fs.rmSync(path.join(folder, "The Same Book - Ada Lovelace.pdf"));
+  const catalogue = new Database(path.join(books, "main", "metadata.db"));
+  catalogue.prepare("DELETE FROM data WHERE book = 1").run();
+  catalogue.close();
+  const db = openDatabase(config.dbPath);
+  scanLibraries(config, db);
+  db.close();
+  c.db.close();
+  c.db = openDatabase(config.dbPath, { readonly: true });
+  await scanIntake(c, config, () => {});
+  expect(c.data.prepare("SELECT status, book_id FROM intake_files WHERE path = ?").get("Already.pdf")).toEqual({ status: "candidate", book_id: null });
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get("Added.pdf")).toBe("applied");
+});
+
 it("refuses to stage or skip while a scan is running", () => {
   c.intakePaused = "An intake scan is running. Stage or skip files after it finishes.";
   expect(() => stageIntakeBatch(c, config, "me@example.com")).toThrow(/intake scan is running/);

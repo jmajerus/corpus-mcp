@@ -217,8 +217,26 @@ function adoptIntakeRoot(c: Corpus, config: Config): { root: string; reset: bool
   return { root, reset: Boolean(stored) };
 }
 
+/** Libraries on the book mirror, including one the index skipped because every book is excluded or the library is not in `CORPUS_LIBRARIES`. */
+function catalogueLibraries(c: Corpus, config: Config): string[] {
+  const names = new Set<string>();
+  const add = (name: string) => {
+    if (name && !name.includes("/") && !name.includes("\\") && !name.includes("\0") && name !== "." && name !== "..") names.add(name);
+  };
+  for (const name of config.libraries) add(name);
+  let entries: fs.Dirent[] = [];
+  try { entries = fs.readdirSync(c.booksRoot, { withFileTypes: true }); } catch { entries = []; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    try {
+      if (fs.statSync(path.join(c.booksRoot, entry.name, "metadata.db")).isFile()) add(entry.name);
+    } catch { /* not a Calibre library */ }
+  }
+  return [...names];
+}
+
 /** SHA-256 of every Calibre format file, not only the one format the index selected. */
-async function libraryHashes(c: Corpus): Promise<Map<string, string>> {
+async function libraryHashes(c: Corpus, config: Config): Promise<Map<string, string>> {
   const byHash = new Map<string, string>();
   const add = (hash: string | null | undefined, bookId: string) => {
     if (hash && !byHash.has(hash)) byHash.set(hash, bookId);
@@ -228,7 +246,7 @@ async function libraryHashes(c: Corpus): Promise<Map<string, string>> {
   }
   const cached = c.data.prepare("SELECT sha256 FROM intake_format_hashes WHERE stamp = ?").pluck();
   const store = c.data.prepare("INSERT OR REPLACE INTO intake_format_hashes (stamp, sha256) VALUES (?, ?)");
-  for (const library of c.db.prepare("SELECT DISTINCT library FROM books").pluck().all() as string[]) {
+  for (const library of catalogueLibraries(c, config)) {
     let catalogue;
     try { catalogue = readCatalogue(path.join(c.booksRoot, library)); }
     catch { continue; }
@@ -331,7 +349,7 @@ export async function scanIntake(c: Corpus, config: Config, log: (text: string) 
     const root = adopted.root;
     if (adopted.reset) log("The intake directory changed, so the previous ledger was cleared.\n");
     reconcileStaged(c, config);
-    const byHash = await libraryHashes(c);
+    const byHash = await libraryHashes(c, config);
     const live = stagedUploadState(config).ids;
     const walked = walkIntake(root);
     const existing = new Map(
@@ -351,23 +369,25 @@ export async function scanIntake(c: Corpus, config: Config, log: (text: string) 
       seen++;
       seenPaths.add(file.rel);
       const row = existing.get(file.rel);
-      const held = row && row.size === file.size && row.mtime_ms === file.mtimeMs && (row.sha256 !== null || row.status === "too_large" || row.status === "absent");
+      const held = row && row.status !== "absent" && row.size === file.size && row.mtime_ms === file.mtimeMs && (row.sha256 !== null || row.status === "too_large");
       if (held && row) {
         let status = row.status;
         let bookId = row.book_id;
         let stagedId = row.staged_id;
-        if (status === "absent") {
-          status = row.problem ? "problem" : row.size > MAX_UPLOAD_BYTES ? "too_large" : "candidate";
-          stagedId = null;
-        }
         if (status === "staged" && (!stagedId || !live.has(stagedId))) {
           status = "candidate";
           stagedId = null;
         }
-        if (row.sha256 && byHash.has(row.sha256) && status !== "staged" && status !== "applied") {
-          status = "present";
-          bookId = byHash.get(row.sha256) ?? bookId;
-          stagedId = null;
+        if (status !== "staged" && status !== "applied") {
+          if (row.sha256 && byHash.has(row.sha256)) {
+            status = "present";
+            bookId = byHash.get(row.sha256) ?? bookId;
+            stagedId = null;
+          } else if (status === "present") {
+            status = "candidate";
+            bookId = null;
+            stagedId = null;
+          }
         }
         touch.run(status, bookId, stagedId, now(), file.rel, row.status, row.staged_id);
         unchanged++;

@@ -376,7 +376,7 @@ apply a batch on the Upload page.
 and ignoring a symlink whose target leaves the mount. It records each ebook in
 `data.db` (path, size, modification time, and SHA-256). A later scan hashes a file
 again only when its path, size, or modification time changed. A file whose bytes
-match a hash of any format already in Calibre (not only the format the index selected) is **Already in the library** and is not offered.
+match a hash of any format in a Calibre library on the mirror (including a book the index leaves out, and not only the format the index selected) is **Already in the library** and is not offered. After that copy is removed from Calibre and the index is refreshed, the next scan offers the file again.
 EPUB and MOBI headers are read so the list can show a title. PDF title pages are
 left for the Upload page, which is where ISBN, title, and author matching decides
 add format or add book.
@@ -386,7 +386,7 @@ add format or add book.
 `ebooks` and `downloads` are dropped) and are not used to identify the book.
 **Leave selected on the NAS** marks files so the next scan does not offer them
 again until the file itself changes. A file that is gone on the next scan is
-**No longer on the NAS** and drops out of the ready list. Changing
+**No longer on the NAS** and drops out of the ready list. A file that comes back is hashed again. Changing
 `CORPUS_INTAKE_ROOT` clears the ledger, because the same relative path would
 otherwise be treated as the same file. Damaged and DRM-blocked files stay on the
 list and are not copied until you deal with them. Apply is the Upload apply: when

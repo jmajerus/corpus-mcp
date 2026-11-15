@@ -179,7 +179,7 @@ Do not point the mount at the Calibre library or at `CORPUS_BOOKS_ROOT`. The sca
 refuses a root that resolves inside the book mirror, or that contains it, and it
 ignores a symlink that leaves the mount. The ledger belongs to that one directory:
 pointing `CORPUS_INTAKE_ROOT` somewhere else clears it. A file whose bytes match any
-format in Calibre, not only the format the index selected, is already in the library.
+format in a Calibre library on the mirror, including a book the index leaves out, is already in the library. A file that was already in the library is offered again after that copy leaves Calibre and the index is refreshed. A file that disappears and later returns is hashed again.
 Hashing and the upload matcher run on the
 Corpus host. DeDRM and conversion still happen only in `upload-apply` on the
 Calibre host. Staging copies a review-sized batch (100 files, 500 MB) into the
