@@ -4,6 +4,7 @@ import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicateBatchPlan, duplicateContents, assertDuplicateUnreferenced, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
+import { markIntakeApplied, scanIntake } from "./intake.js";
 import { attachUploadPayloads, removeAppliedUploads, uploadBatchPlan, type UploadBatchPlan, type UploadItemPlan, type UploadSelection } from "./upload.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
 import { tagPlan } from "./tagging.js";
@@ -16,13 +17,14 @@ import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates" | "upload";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates" | "upload" | "intake";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
   upload: { title: "Upload books to Calibre", calibre: true, previewable: true },
+  intake: { title: "Scan the master ebook directory", calibre: false, previewable: false },
   duplicates: { title: "Resolve reviewed duplicate groups", calibre: true, previewable: true },
   metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
@@ -270,6 +272,7 @@ export class JobRunner {
         this.recordItems(id, items);
         if (kind === "upload") {
           removeAppliedUploads(this.config, items.flatMap(it => it.upload_applied?.id ? [it.upload_applied.id] : []));
+          markIntakeApplied(this.c.data, this.config.shelvesLibrary, items);
         }
       }
     };
@@ -319,6 +322,9 @@ export class JobRunner {
         return this.commands.zotero(log);
       case "backup":
         log(`Backed up to ${await backupDataStore(this.c.data, this.config.backupDir)}\n`);
+        return;
+      case "intake":
+        await scanIntake(this.c, this.config, log);
         return;
       case "duplicates": {
         const removes = (params.plan as DuplicateBatchPlan).groups.flatMap(g => g.remove);

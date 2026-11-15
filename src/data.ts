@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 11;
+export const DATA_SCHEMA_VERSION = 12;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -165,6 +165,21 @@ CREATE TABLE IF NOT EXISTS file_profiles (
   profile TEXT NOT NULL,              -- JSON: a ContentProfile, or { error }
   profiled_at TEXT NOT NULL
 );
+-- One row per ebook file seen under CORPUS_INTAKE_ROOT (src/intake.ts). Survives a reindex.
+CREATE TABLE IF NOT EXISTS intake_files (
+  path TEXT PRIMARY KEY,             -- relative to the intake root, "/" separators
+  size INTEGER NOT NULL,
+  mtime_ms INTEGER NOT NULL,
+  sha256 TEXT,
+  status TEXT NOT NULL CHECK (status IN ('present', 'candidate', 'staged', 'applied', 'skipped', 'problem', 'too_large')),
+  title TEXT,
+  authors TEXT,                      -- JSON array
+  problem TEXT,
+  staged_id TEXT,                    -- upload staging id, once copied for review
+  book_id TEXT,                      -- index id once the bytes are in the library, or after Apply
+  seen_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS intake_files_status ON intake_files(status, path);
 -- A person's verdict on a title-only match: this Zotero item is (or is not) this Calibre book.
 CREATE TABLE IF NOT EXISTS zotero_links (
   calibre_uuid TEXT NOT NULL,

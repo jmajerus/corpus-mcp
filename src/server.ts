@@ -12,7 +12,9 @@ import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
 import { duplicateGroups, dismissDuplicate, type DuplicateGroupSelection } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
+import { listIntake, releaseIntakeStaging, skipIntakeFiles, stageIntakeBatch } from "./intake.js";
 import { MAX_UPLOAD_BYTES, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
+import { INTAKE_HTML } from "./web/intake.js";
 import { UPLOAD_HTML } from "./web/upload.js";
 import { metadataCitekeyPreview } from "./metadata-repair.js";
 import { adminMetrics } from "./admin.js";
@@ -393,7 +395,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     if (req.method !== "GET" && c.writesPaused) throw new ToolError(c.writesPaused);
     const path = url.pathname;
     const pages: Record<string, string> = {
-      "/admin/upload": UPLOAD_HTML, "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
+      "/admin/upload": UPLOAD_HTML, "/admin/intake": INTAKE_HTML, "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
@@ -477,6 +479,33 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     else if (req.method === "GET" && path === "/api/upload") {
       sendJson(res, 200, listStagedUploads(c, config));
     }
+    else if (req.method === "GET" && path === "/api/intake") {
+      const p = url.searchParams;
+      sendJson(res, 200, listIntake(c, config, {
+        status: p.get("status") ?? undefined,
+        q: p.get("q") ?? undefined,
+        limit: p.has("limit") ? Number(p.get("limit")) : undefined,
+        offset: p.has("offset") ? Number(p.get("offset")) : undefined,
+      }));
+    }
+    else if (req.method === "POST" && path === "/api/intake/scan") {
+      const by = await writer(); if (by === null) return;
+      await readJson(req);
+      sendJson(res, 202, { id: runner.start("intake", "apply", {}, by) });
+    }
+    else if (req.method === "POST" && path === "/api/intake/stage") {
+      const by = await writer(); if (by === null) return;
+      await readJson(req);
+      sendJson(res, 200, stageIntakeBatch(c, config, by));
+    }
+    else if (req.method === "POST" && path === "/api/intake/skip") {
+      const by = await writer(); if (by === null) return;
+      const body = (await readJson(req)) as { paths?: unknown };
+      if (!Array.isArray(body.paths) || !body.paths.length || body.paths.some(p => typeof p !== "string")) {
+        throw new ToolError("Choose files to leave on the NAS.");
+      }
+      sendJson(res, 200, skipIntakeFiles(c, config, body.paths));
+    }
     else if (req.method === "POST" && path === "/api/upload/files") {
       const auth = await accessIdentity(req, admin.access, web.options.accessKeys);
       if ("error" in auth) { sendJson(res, auth.status, { error: auth.error }); return; }
@@ -501,12 +530,17 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     else if (req.method === "POST" && uploadItemPath?.[2] === "/remove") {
       const by = await writer(); if (by === null) return;
       await readJson(req);
-      sendJson(res, 200, removeStagedUpload(config, decodeURIComponent(uploadItemPath[1])));
+      const id = decodeURIComponent(uploadItemPath[1]);
+      const removed = removeStagedUpload(config, id);
+      releaseIntakeStaging(c.data, id);
+      sendJson(res, 200, removed);
     }
     else if (req.method === "POST" && path === "/api/upload/clear") {
       const by = await writer(); if (by === null) return;
       await readJson(req);
-      sendJson(res, 200, clearStagedUploads(config));
+      const cleared = clearStagedUploads(config);
+      releaseIntakeStaging(c.data);
+      sendJson(res, 200, cleared);
     }
     else if (req.method === "POST" && path === "/api/upload/preview") {
       const by = await writer(); if (by === null) return;

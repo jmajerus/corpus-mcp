@@ -3,8 +3,8 @@
 The admin pages are corpus-mcp's web interface, served by the corpus server
 at `/admin`. They show the current state of the corpus, and anything an MCP agent
 can change, a person can change here too. Every page shares one navigation bar:
-Dashboard, Books, Quotes, Categories, Taxonomy, Citekeys, Zotero, Proposals,
-Shelves, Jobs, Changes, and About.
+Dashboard, Books, Upload, Intake, Duplicates, Quotes, Categories, Taxonomy,
+Citekeys, Zotero, Proposals, Shelves, Jobs, Changes, and About.
 
 ## Where to find them
 
@@ -68,6 +68,7 @@ Amber and red numbers are the ones that need attention.
 | Remove non-subject tags from Calibre | Preview, then apply; type extra tags to remove in the box |
 | Convert books that have no EPUB or PDF | Preview, then apply |
 | Sync from Zotero now | Run at once; normally every 30 minutes |
+| Scan the master ebook directory | Opens Intake. The scan runs only when you start it there |
 
 The convert job covers books with neither an EPUB nor a PDF. It reads each file
 rather than trusting its extension. MOBI, AZW, AZW3, PRC and reflowable KFX
@@ -362,6 +363,31 @@ Calibre:
    `tools/calibre-upload.py`) to back up `metadata.db`, run DeDRM and EPUB/PDF
    conversion for MOBI/AZW/KFX files, write the new books or formats, remove the applied
    staged files, and refresh the Corpus index.
+
+### Intake from the master directory (`/admin/intake`)
+
+**Intake** scans a read-only mount of a master ebook directory (`CORPUS_INTAKE_ROOT`)
+and offers files that are not already in Calibre. It is not `calibre-import.sh`. That
+script calls `calibredb add` and moves each file into `_done/`, `_duplicates/`, or
+`_failed/`. Intake never writes to the NAS, and it does not add a book until you
+apply a batch on the Upload page.
+
+**Scan directory** walks the mount, skipping directories whose names start with `_`,
+and ignoring a symlink whose target leaves the mount. It records each ebook in
+`data.db` (path, size, modification time, and SHA-256). A later scan hashes a file
+again only when its path, size, or modification time changed. A file whose bytes
+match a hash already in the index is **Already in the library** and is not offered.
+EPUB and MOBI headers are read so the list can show a title. PDF title pages are
+left for the Upload page, which is where ISBN, title, and author matching decides
+add format or add book.
+
+**Stage next batch** copies ready files into the Upload staging area until it holds
+100 files or 500 MB. Folder names become suggested tags (generic names such as
+`ebooks` and `downloads` are dropped) and are not used to identify the book.
+**Leave selected on the NAS** marks files so the next scan does not offer them
+again until the file itself changes. Damaged and DRM-blocked files stay on the
+list and are not copied until you deal with them. Apply is the Upload apply: when
+it succeeds, those NAS paths are recorded as added and the NAS copies stay put.
 
 ### Reviewing duplicates
 

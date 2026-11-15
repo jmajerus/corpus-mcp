@@ -104,6 +104,8 @@ function renderActions() {
   };
   document.getElementById("actions").innerHTML = Object.entries(kinds).map(([kind, spec]) => kind === "upload"
     ? '<div class="card action"><h3>Upload books to Calibre</h3><p>Check ebook files against the library for duplicates before adding them or attaching a new format, with automatic MOBI/AZW/KFX conversion.</p><a href="/admin/upload">Upload books</a></div>'
+    : kind === "intake"
+    ? '<div class="card action"><h3>Scan the master ebook directory</h3><p>Find ebook files on the read-only NAS mount that are not already in Calibre, then stage a batch for review. Nothing is added until you apply it on the Upload page.</p><a href="/admin/intake">Review intake</a></div>'
     : kind === "duplicates"
     ? '<div class="card action"><h3>Review duplicate books</h3><p>Compare candidates, keep different editions, or preview a merge into a keeper.</p><a href="/admin/duplicates">Review duplicates</a></div>'
     : kind === "metadata"

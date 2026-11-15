@@ -44,6 +44,8 @@ export interface PublicConfig {
 export interface Config {
   /** Directory holding one folder per Calibre library. */
   booksRoot: string;
+  /** Read-only mount of the master ebook directory. Unset leaves intake off. */
+  intakeRoot?: string;
   /** Library folder names to index. Anything else under booksRoot is ignored. */
   libraries: string[];
   /** Books carrying any of these Calibre tags (case-insensitive) are never indexed. */
@@ -120,6 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const excludeTags = (env.CORPUS_EXCLUDE_TAGS ?? "private").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   return {
     booksRoot: path.resolve(env.CORPUS_BOOKS_ROOT ?? "/srv/corpus/books"),
+    intakeRoot: env.CORPUS_INTAKE_ROOT?.trim() ? path.resolve(env.CORPUS_INTAKE_ROOT.trim()) : undefined,
     libraries,
     excludeTags,
     dbPath: path.resolve(env.CORPUS_DB ?? "/var/lib/corpus-mcp/corpus.db"),

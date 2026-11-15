@@ -69,6 +69,7 @@ async function load() {
   if (j.mode === "preview" && j.status === "succeeded" && uploads.length && !cleanUploads.length) actions.push('<span class="note">Every file has blockers; resolve them and preview again.</span>');
   if (j.mode === "preview" && nothing) actions.push('<span class="note">Nothing to apply.</span>');
   if (j.mode === "apply" && items.length) actions.push('<a href="/admin/changes?job=' + j.id + '&range=all">These changes in the change log</a>');
+  if (j.kind === "intake" && j.status !== "running") actions.push('<a href="/admin/intake">Back to Intake</a>');
   document.getElementById("actions").innerHTML = actions.join(" ");
   const calibreLink = (bookId,label) => j.calibre_web_url ? '<a href="'+esc((j.calibre_web_url.endsWith('/') ? j.calibre_web_url.slice(0,-1) : j.calibre_web_url)+'/book/'+bookId)+'" target="_blank" rel="noopener">'+esc(label)+'</a>' : '';
   const library = (j.params && j.params.plan && j.params.plan.library) || "main";
