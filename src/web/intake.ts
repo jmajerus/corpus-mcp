@@ -26,6 +26,7 @@ export const INTAKE_HTML = page({
 <div class="actions">
   <input type="search" id="q" placeholder="Path or title" aria-label="Filter the list">
   <button type="button" id="skip" disabled>Leave selected on the NAS</button>
+  <button type="button" id="unskip" disabled hidden>Offer selected again</button>
 </div>
 <div class="scroll"><table><thead><tr><th></th><th>File</th><th>Title</th><th class="num">Size</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
 <button type="button" class="more" id="more" hidden>Load more</button>`,
@@ -38,6 +39,7 @@ const STATUS_LABELS = {
 };
 const ORDER = ["candidate", "present", "staged", "applied", "skipped", "problem", "too_large", "absent"];
 const dismissible = (row) => row.status === "candidate" || row.status === "problem" || row.status === "too_large";
+const selectable = (row) => dismissible(row) || row.status === "skipped";
 
 function query() {
   const params = new URLSearchParams();
@@ -60,7 +62,7 @@ function renderRows() {
     body.innerHTML = '<tr><td colspan="5" class="empty">' + (enabled ? "Nothing in this list." : "Intake is off.") + "</td></tr>";
   } else {
     body.innerHTML = items.map((row) => "<tr><td>" +
-      (dismissible(row) ? '<input type="checkbox" data-path="' + esc(row.path) + '" aria-label="Select ' + esc(row.path) + '">' : "") +
+      (selectable(row) ? '<input type="checkbox" data-path="' + esc(row.path) + '" aria-label="Select ' + esc(row.path) + '">' : "") +
       '</td><td class="path">' + esc(row.path) + "</td><td>" + esc(row.title || "") +
       (row.authors && row.authors.length ? '<br><span class="note">' + esc(row.authors.join(", ")) + "</span>" : "") +
       (row.problem ? '<br><span class="warning">' + esc(row.problem) + "</span>" : "") +
@@ -70,7 +72,11 @@ function renderRows() {
       "</td></tr>").join("");
   }
   document.getElementById("more").hidden = offset + items.length >= total;
+  const skippedView = statusFilter === "skipped";
+  document.getElementById("skip").hidden = skippedView;
   document.getElementById("skip").disabled = !canWrite;
+  document.getElementById("unskip").hidden = !skippedView;
+  document.getElementById("unskip").disabled = !canWrite;
   document.getElementById("stage").disabled = !canWrite || !enabled || !(counts.candidate > 0);
   document.getElementById("scan").disabled = !canWrite || !enabled;
 }
@@ -129,6 +135,16 @@ document.getElementById("skip").addEventListener("click", async () => {
   try {
     const out = await post("/api/intake/skip", { paths });
     toast("Left " + num(out.skipped) + " on the NAS.");
+    await load(true);
+  } catch (e) { toast(e.message); }
+});
+
+document.getElementById("unskip").addEventListener("click", async () => {
+  const paths = [...document.querySelectorAll("#rows input:checked")].map((box) => box.getAttribute("data-path"));
+  if (!paths.length) { toast("Select files to offer again."); return; }
+  try {
+    const out = await post("/api/intake/unskip", { paths });
+    toast("Offered " + num(out.restored) + " again.");
     await load(true);
   } catch (e) { toast(e.message); }
 });

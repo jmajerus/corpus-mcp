@@ -12,7 +12,7 @@ import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
 import { duplicateGroups, dismissDuplicate, type DuplicateGroupSelection } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
-import { listIntake, releaseIntakeStaging, skipIntakeFiles, stageIntakeBatch } from "./intake.js";
+import { listIntake, skipIntakeFiles, skipIntakeStaging, stageIntakeBatch, unskipIntakeFiles } from "./intake.js";
 import { MAX_UPLOAD_BYTES, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
 import { INTAKE_HTML } from "./web/intake.js";
 import { UPLOAD_HTML } from "./web/upload.js";
@@ -506,6 +506,14 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       }
       sendJson(res, 200, skipIntakeFiles(c, config, body.paths));
     }
+    else if (req.method === "POST" && path === "/api/intake/unskip") {
+      const by = await writer(); if (by === null) return;
+      const body = (await readJson(req)) as { paths?: unknown };
+      if (!Array.isArray(body.paths) || !body.paths.length || body.paths.some(p => typeof p !== "string")) {
+        throw new ToolError("Choose files to offer again.");
+      }
+      sendJson(res, 200, unskipIntakeFiles(c, config, body.paths));
+    }
     else if (req.method === "POST" && path === "/api/upload/files") {
       const auth = await accessIdentity(req, admin.access, web.options.accessKeys);
       if ("error" in auth) { sendJson(res, auth.status, { error: auth.error }); return; }
@@ -532,14 +540,14 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       await readJson(req);
       const id = decodeURIComponent(uploadItemPath[1]);
       const removed = removeStagedUpload(config, id);
-      releaseIntakeStaging(c.data, id);
+      skipIntakeStaging(c.data, id);
       sendJson(res, 200, removed);
     }
     else if (req.method === "POST" && path === "/api/upload/clear") {
       const by = await writer(); if (by === null) return;
       await readJson(req);
       const cleared = clearStagedUploads(config);
-      releaseIntakeStaging(c.data);
+      skipIntakeStaging(c.data);
       sendJson(res, 200, cleared);
     }
     else if (req.method === "POST" && path === "/api/upload/preview") {

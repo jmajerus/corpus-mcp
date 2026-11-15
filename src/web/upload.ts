@@ -358,7 +358,7 @@ document.getElementById("select-none").addEventListener("click", () => {
   render();
 });
 document.getElementById("clear-staged").addEventListener("click", async () => {
-  if (!items.length || !confirm("Remove all staged upload files?")) return;
+  if (!items.length || !confirm("Remove all staged upload files? Files staged from the Intake page are marked as left on the NAS and are not staged again.")) return;
   try {
     await post("/api/upload/clear", {});
     picked = {};
