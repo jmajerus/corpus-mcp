@@ -2,6 +2,12 @@ import os from "node:os";
 import { expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 
+it("leaves intake off until CORPUS_INTAKE_ROOT is set", () => {
+  expect(loadConfig({}).intakeRoot).toBeUndefined();
+  expect(loadConfig({ CORPUS_INTAKE_ROOT: "  /mnt/ebooks  " }).intakeRoot).toBe("/mnt/ebooks");
+  expect(loadConfig({ CORPUS_INTAKE_ROOT: "   " }).intakeRoot).toBeUndefined();
+});
+
 it("gives the public catalogue its own port unless it's turned off", () => {
   expect(loadConfig({ CORPUS_PUBLIC: "catalogue" }).public?.port).toBe(8001);
   expect(loadConfig({ CORPUS_PUBLIC: "catalogue", CORPUS_PUBLIC_PORT: "8080" }).public?.port).toBe(8080);

@@ -165,6 +165,31 @@ the add is removed again and counts as failed. The convert job then gives
 every book without an EPUB or PDF one: an EPUB from MOBI, AZW, AZW3, PRC or KFX
 (for chapter locators), or the PDF inside a print-replica KFX. For browser uploads, use `/admin/upload` (`upload-preview` / `upload-apply`, backed by `tools/calibre-upload.py`), which checks for duplicates first, attaches missing formats to existing records, and converts MOBI/AZW/KFX files automatically.
 
+## Master ebook directory
+
+A read-only scan of a master ebook tree lives at `/admin/intake`. It is separate
+from `calibre-import.sh`: the scan does not call `calibredb add`, and it does not
+move files into `_done/`. Mount the directory read-only on the Corpus host and set
+`CORPUS_INTAKE_ROOT`. Prefer a Proxmox host mount of the NFS or CIFS share, then a
+read-only bind into the container, with `nosuid` and `nodev`. Leave the variable
+unset until that mount exists; intake stays off, and the server does not start a
+scan on its own.
+
+Do not point the mount at the Calibre library or at `CORPUS_BOOKS_ROOT`. The scan
+refuses a root that resolves inside the book mirror, or that contains it, and it
+ignores a symlink that leaves the mount. The ledger belongs to that one directory:
+pointing `CORPUS_INTAKE_ROOT` somewhere else clears it. A file whose bytes match any
+format in a Calibre library on the mirror, including a book the index leaves out, is already in the library. A file that was already in the library is offered again after that copy leaves Calibre and the index is refreshed. A file that disappears and later returns is hashed again.
+Hashing and the upload matcher run on the
+Corpus host. DeDRM and conversion still happen only in `upload-apply` on the
+Calibre host. Staging copies a review-sized batch (100 files, 500 MB) into the
+Upload page; Apply is that page's existing preview and apply. The NAS files stay
+where they are.
+
+If the container cannot see the share, a later step can mount it read-only on the
+Calibre host and add a forced command that only walks that one root. Copying the
+tree over SSH into the staging area is not viable.
+
 ## Configuration
 
 EPUB re-extraction uses [Pandoc](dev-briefs/pandoc-extraction.md) as the preferred candidate backend.
@@ -176,6 +201,7 @@ normal refresh; changing backends or Pandoc versions requires staging and anchor
 |---|---|---|
 | `CORPUS_PANDOC_PATH` | `pandoc` | Pandoc executable path for EPUB profile 3; no shell arguments |
 | `CORPUS_BOOKS_ROOT` | `/srv/corpus/books` | Directory containing one folder per Calibre library |
+| `CORPUS_INTAKE_ROOT` | unset | Read-only mount of the master ebook directory. Unset leaves `/admin/intake` off |
 | `CORPUS_LIBRARIES` | `main` | Comma-separated library folders to index |
 | `CORPUS_EXCLUDE_TAGS` | `private` | Calibre tags that keep a book out of the index |
 | `CORPUS_DB` | `/var/lib/corpus-mcp/corpus.db` | Index file (derived; can be rebuilt) |

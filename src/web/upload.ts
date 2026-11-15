@@ -27,7 +27,7 @@ export const UPLOAD_HTML = page({
 `,
   body: `
 <h1>Upload books to Calibre</h1>
-<p class="sub">Stage ebook files (.epub, .pdf, .mobi, .azw, .azw3, .prc, .kfx, .kfx-zip) to check them against the library by file hash, ISBN/ASIN, and title and authors before anything is added to Calibre, comparing EPUB/PDF contents when a candidate match is found. Exact duplicates are blocked; when a book is already in the library without the uploaded format, you can attach the new format to the existing record instead of creating a duplicate. MOBI, AZW, AZW3, PRC, KFX, and KFX-ZIP files are decrypted through DeDRM and converted to EPUB or PDF on apply.</p>
+<p class="sub">Stage ebook files (.epub, .pdf, .mobi, .azw, .azw3, .prc, .kfx, .kfx-zip) to check them against the library by file hash, ISBN/ASIN, and title and authors before anything is added to Calibre, comparing EPUB/PDF contents when a candidate match is found. Exact duplicates are blocked; when a book is already in the library without the uploaded format, you can attach the new format to the existing record instead of creating a duplicate. MOBI, AZW, AZW3, PRC, KFX, and KFX-ZIP files are decrypted through DeDRM and converted to EPUB or PDF on apply. Files from the master directory are staged from <a href="/admin/intake">Intake</a>.</p>
 <div class="actions">
   <button type="button" id="refresh-source" disabled>Refresh from Calibre</button>
   <span id="freshness" class="note"></span>

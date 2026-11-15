@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 11;
+export const DATA_SCHEMA_VERSION = 13;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -165,6 +165,26 @@ CREATE TABLE IF NOT EXISTS file_profiles (
   profile TEXT NOT NULL,              -- JSON: a ContentProfile, or { error }
   profiled_at TEXT NOT NULL
 );
+-- One row per ebook file seen under CORPUS_INTAKE_ROOT (src/intake.ts). Survives a reindex.
+CREATE TABLE IF NOT EXISTS intake_files (
+  path TEXT PRIMARY KEY,             -- relative to the intake root, "/" separators
+  size INTEGER NOT NULL,
+  mtime_ms INTEGER NOT NULL,
+  sha256 TEXT,
+  status TEXT NOT NULL CHECK (status IN ('present', 'candidate', 'staged', 'applied', 'skipped', 'problem', 'too_large', 'absent')),
+  title TEXT,
+  authors TEXT,                      -- JSON array
+  problem TEXT,
+  staged_id TEXT,                    -- upload staging id, once copied for review
+  book_id TEXT,                      -- index id once the bytes are in the library, or after Apply
+  seen_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS intake_files_status ON intake_files(status, path);
+-- SHA-256 of each Calibre format file, keyed by path|size|mtime, so a later intake scan does not read it again.
+CREATE TABLE IF NOT EXISTS intake_format_hashes (
+  stamp TEXT PRIMARY KEY,
+  sha256 TEXT NOT NULL
+);
 -- A person's verdict on a title-only match: this Zotero item is (or is not) this Calibre book.
 CREATE TABLE IF NOT EXISTS zotero_links (
   calibre_uuid TEXT NOT NULL,
@@ -216,6 +236,29 @@ export function openDataStore(dbPath: string): DataStore {
   }
   // Schemas 5 to 7 categorized quotes; since 8 a quote's subject is its book's, and tags do the rest.
   for (const column of ["category_mode", "categories"]) if (quoteColumns.has(column)) db.exec(`ALTER TABLE quotes DROP COLUMN ${column}`);
+  // Intake gained an "absent" status after the table first shipped. SQLite cannot widen a CHECK, so rebuild.
+  const intakeSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'intake_files'").pluck().get() as string | undefined;
+  if (intakeSql && !intakeSql.includes("'absent'")) {
+    db.exec(`
+      CREATE TABLE intake_files_new (
+        path TEXT PRIMARY KEY,
+        size INTEGER NOT NULL,
+        mtime_ms INTEGER NOT NULL,
+        sha256 TEXT,
+        status TEXT NOT NULL CHECK (status IN ('present', 'candidate', 'staged', 'applied', 'skipped', 'problem', 'too_large', 'absent')),
+        title TEXT,
+        authors TEXT,
+        problem TEXT,
+        staged_id TEXT,
+        book_id TEXT,
+        seen_at TEXT NOT NULL
+      );
+      INSERT INTO intake_files_new SELECT path, size, mtime_ms, sha256, status, title, authors, problem, staged_id, book_id, seen_at FROM intake_files;
+      DROP TABLE intake_files;
+      ALTER TABLE intake_files_new RENAME TO intake_files;
+      CREATE INDEX IF NOT EXISTS intake_files_status ON intake_files(status, path);
+    `);
+  }
   db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(DATA_SCHEMA_VERSION));
   return db;
 }

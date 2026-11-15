@@ -935,6 +935,17 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   };
 }
 
+/** How much of the staging quota is already used, and which hashes are already staged. */
+export function stagedUploadState(config: Config): { files: number; bytes: number; ids: Set<string>; hashes: Map<string, string> } {
+  const records = readStagedRecords(uploadDir(config));
+  return {
+    files: records.length,
+    bytes: records.reduce((sum, rec) => sum + rec.size, 0),
+    ids: new Set(records.map(rec => rec.id)),
+    hashes: new Map(records.map(rec => [rec.sha256, rec.id])),
+  };
+}
+
 export function listStagedUploads(c: Corpus, config: Config) {
   const records = readStagedRecords(uploadDir(config));
   const books = records.length ? candidateBooks(c) : [];
