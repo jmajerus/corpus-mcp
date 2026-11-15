@@ -82,13 +82,25 @@ export interface JobCommands {
   zotero?(log: (text: string) => void): Promise<void>;
 }
 
-function run(cmd: string, args: string[], log: (text: string) => void, stdin?: string): Promise<number> {
+export function run(cmd: string, args: string[], log: (text: string) => void, stdin?: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
     child.stdout.on("data", (d) => log(String(d)));
     child.stderr.on("data", (d) => log(String(d)));
-    child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", (error) => finish(() => reject(error)));
+    // The command can exit before this write finishes (ssh cannot connect, or it reads
+    // nothing). The pipe then fails with EPIPE, and with no listener Node exits the process.
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EPIPE" || error.code === "ECONNRESET") return;
+      finish(() => reject(error));
+    });
+    child.on("close", (code) => finish(() => resolve(code ?? 1)));
     child.stdin.end(stdin ?? "");
   });
 }
