@@ -30,6 +30,8 @@ export class ToolError extends Error {}
 /** The read-only index, the read-write primary data, the mirrored book files, and the tag vocabulary. */
 export interface Corpus {
   writesPaused?: string;
+  /** Set while an intake scan is walking the NAS, so stage and skip cannot overwrite its ledger rows. */
+  intakePaused?: string;
   db: DB; data: DataStore; booksRoot: string; vocabulary: Vocabulary;
   /** Where the vocabulary comes from, when it is a file (the server); tests pass a Vocabulary alone. */
   vocabularySource?: VocabularySource;

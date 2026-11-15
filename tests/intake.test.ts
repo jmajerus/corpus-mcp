@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import Database from "better-sqlite3";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
@@ -17,7 +18,7 @@ import {
   stageIntakeBatch,
 } from "../src/intake.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
-import { listStagedUploads } from "../src/upload.js";
+import { listStagedUploads, uploadDir } from "../src/upload.js";
 import { INTAKE_HTML } from "../src/web/intake.js";
 import { Vocabulary } from "../src/vocabulary.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -226,6 +227,80 @@ it("runs the scan as an admin job and does not refresh Calibre", async () => {
   const log = c.data.prepare("SELECT log FROM jobs WHERE id = ?").pluck().get(id) as string;
   expect(log).toContain("to review");
   expect(log).toContain("Nothing was copied");
+});
+
+it("clears the ledger when the intake directory changes, even if path, size, and mtime match", async () => {
+  const file = path.join(intake, "Same.pdf");
+  const first = makePdf({ pages: [["Bytes from the first mount"]] });
+  fs.writeFileSync(file, first);
+  await scanIntake(c, config, () => {});
+  c.data.prepare("UPDATE intake_files SET status = 'skipped' WHERE path = ?").run("Same.pdf");
+  const before = c.data.prepare("SELECT sha256, size, mtime_ms FROM intake_files WHERE path = ?").get("Same.pdf") as { sha256: string; size: number; mtime_ms: number };
+  const other = path.join(root, "other-intake");
+  fs.mkdirSync(other);
+  const padded = Buffer.alloc(before.size);
+  const second = makePdf({ pages: [["Bytes from a different mount"]] });
+  second.subarray(0, Math.min(second.length, padded.length)).copy(padded);
+  if (padded.equals(first)) padded[padded.length - 1] ^= 0xff;
+  fs.writeFileSync(path.join(other, "Same.pdf"), padded);
+  fs.utimesSync(path.join(other, "Same.pdf"), before.mtime_ms / 1000, before.mtime_ms / 1000);
+  config.intakeRoot = other;
+  await scanIntake(c, config, () => {});
+  const after = c.data.prepare("SELECT sha256, status FROM intake_files WHERE path = ?").get("Same.pdf") as { sha256: string; status: string };
+  expect(after.sha256).not.toBe(before.sha256);
+  expect(after.status).toBe("candidate");
+  config.intakeRoot = intake;
+});
+
+it("drops the staged upload when the NAS file changes, then records the new bytes", async () => {
+  const file = path.join(intake, "Swap.pdf");
+  fs.writeFileSync(file, makePdf({ pages: [["Original staged bytes"]] }));
+  await scanIntake(c, config, () => {});
+  stageIntakeBatch(c, config, "me@example.com");
+  const stagedId = c.data.prepare("SELECT staged_id FROM intake_files WHERE path = ?").pluck().get("Swap.pdf") as string;
+  expect(fs.existsSync(path.join(uploadDir(config), `${stagedId}.json`))).toBe(true);
+  const row = c.data.prepare("SELECT sha256, mtime_ms FROM intake_files WHERE path = ?").get("Swap.pdf") as { sha256: string; mtime_ms: number };
+  fs.writeFileSync(file, makePdf({ pages: [["Replacement bytes after staging"]] }));
+  fs.utimesSync(file, (row.mtime_ms + 5000) / 1000, (row.mtime_ms + 5000) / 1000);
+  await scanIntake(c, config, () => {});
+  expect(fs.existsSync(path.join(uploadDir(config), `${stagedId}.json`))).toBe(false);
+  const after = c.data.prepare("SELECT status, sha256, staged_id FROM intake_files WHERE path = ?").get("Swap.pdf") as { status: string; sha256: string; staged_id: string | null };
+  expect(after.status).toBe("candidate");
+  expect(after.sha256).not.toBe(row.sha256);
+  expect(after.staged_id).toBeNull();
+});
+
+it("marks a file that disappeared as absent and leaves it out of the ready list", async () => {
+  fs.writeFileSync(path.join(intake, "Keep.pdf"), makePdf({ pages: [["Still on the NAS"]] }));
+  fs.writeFileSync(path.join(intake, "Gone.pdf"), makePdf({ pages: [["Removed before the next scan"]] }));
+  await scanIntake(c, config, () => {});
+  fs.rmSync(path.join(intake, "Gone.pdf"));
+  await scanIntake(c, config, () => {});
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get("Gone.pdf")).toBe("absent");
+  expect(listIntake(c, config, { status: "candidate" }).items.map(item => item.path)).toEqual(["Keep.pdf"]);
+});
+
+it("treats an exact copy of a non-indexed format as already in the library", async () => {
+  const epub = makeEpub("Side Format", [{ title: "One", paragraphs: ["The EPUB beside the indexed PDF."] }]);
+  const folder = path.join(books, "main", "Ada Lovelace", "The Same Book (1)");
+  const name = "The Same Book - Ada Lovelace";
+  fs.writeFileSync(path.join(folder, `${name}.epub`), epub);
+  const catalogue = new Database(path.join(books, "main", "metadata.db"));
+  catalogue.prepare("INSERT INTO data (book, format, name) VALUES (1, 'EPUB', ?)").run(name);
+  catalogue.close();
+  const indexed = c.db.prepare("SELECT sha256 FROM books WHERE id = 'main:1'").pluck().get() as string;
+  expect(indexed).not.toBe(createHash("sha256").update(epub).digest("hex"));
+  fs.writeFileSync(path.join(intake, "Side Format.epub"), epub);
+  await scanIntake(c, config, () => {});
+  const row = c.data.prepare("SELECT status, book_id FROM intake_files WHERE path = ?").get("Side Format.epub") as { status: string; book_id: string };
+  expect(row).toEqual({ status: "present", book_id: "main:1" });
+});
+
+it("refuses to stage or skip while a scan is running", () => {
+  c.intakePaused = "An intake scan is running. Stage or skip files after it finishes.";
+  expect(() => stageIntakeBatch(c, config, "me@example.com")).toThrow(/intake scan is running/);
+  expect(() => skipIntakeFiles(c, config, ["Keep.pdf"])).toThrow(/intake scan is running/);
+  c.intakePaused = undefined;
 });
 
 it("renders the intake page", () => {

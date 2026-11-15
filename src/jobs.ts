@@ -221,6 +221,9 @@ export class JobRunner {
       VALUES (?, ?, ?, 'running', ?, ?, ?, '')`)
       .run(kind, mode, JSON.stringify(params), requestedBy ?? null, opts.previewOf ?? null, new Date().toISOString()).lastInsertRowid);
     this.running = id;
+    if (kind === "intake") {
+      this.c.intakePaused = "An intake scan is running. Stage or skip files after it finishes.";
+    }
     if ((kind === "duplicates" || kind === "upload") && mode === "apply") {
       this.c.writesPaused = kind === "upload"
         ? "Book upload is running. Try again after its refresh finishes."
@@ -229,6 +232,7 @@ export class JobRunner {
     void this.execute(id, kind, mode, params).finally(() => {
       this.running = null;
       this.c.writesPaused = undefined;
+      this.c.intakePaused = undefined;
     });
     return id;
   }

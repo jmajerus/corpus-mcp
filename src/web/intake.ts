@@ -33,9 +33,10 @@ export const INTAKE_HTML = page({
 let statusFilter = "candidate", offset = 0, items = [], total = 0, canWrite = false, enabled = false, counts = {};
 const STATUS_LABELS = {
   candidate: "Ready to review", present: "Already in the library", staged: "Staged for upload",
-  applied: "Added", skipped: "Left on the NAS", problem: "Damaged or DRM", too_large: "Too large"
+  applied: "Added", skipped: "Left on the NAS", problem: "Damaged or DRM", too_large: "Too large",
+  absent: "No longer on the NAS"
 };
-const ORDER = ["candidate", "present", "staged", "applied", "skipped", "problem", "too_large"];
+const ORDER = ["candidate", "present", "staged", "applied", "skipped", "problem", "too_large", "absent"];
 const dismissible = (row) => row.status === "candidate" || row.status === "problem" || row.status === "too_large";
 
 function query() {
@@ -86,7 +87,9 @@ async function load(reset) {
   const err = document.getElementById("root-error");
   err.hidden = !data.error;
   err.textContent = data.error || "";
-  document.getElementById("root").textContent = data.root ? "Directory: " + data.root : "";
+  document.getElementById("root").textContent = data.reset
+    ? "The intake directory changed, so the previous list was cleared. Scan the directory to fill it again."
+    : (data.root ? "Directory: " + data.root : "");
   const room = data.staging || {};
   document.getElementById("room").textContent = data.enabled
     ? num(room.files) + " of " + num(room.max_files) + " files staged, " + bytes(room.bytes) + " of " + bytes(room.max_bytes)

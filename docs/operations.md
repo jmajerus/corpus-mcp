@@ -177,7 +177,10 @@ scan on its own.
 
 Do not point the mount at the Calibre library or at `CORPUS_BOOKS_ROOT`. The scan
 refuses a root that resolves inside the book mirror, or that contains it, and it
-ignores a symlink that leaves the mount. Hashing and the upload matcher run on the
+ignores a symlink that leaves the mount. The ledger belongs to that one directory:
+pointing `CORPUS_INTAKE_ROOT` somewhere else clears it. A file whose bytes match any
+format in Calibre, not only the format the index selected, is already in the library.
+Hashing and the upload matcher run on the
 Corpus host. DeDRM and conversion still happen only in `upload-apply` on the
 Calibre host. Staging copies a review-sized batch (100 files, 500 MB) into the
 Upload page; Apply is that page's existing preview and apply. The NAS files stay

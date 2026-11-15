@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { readCatalogue } from "./calibre.js";
 import type { Config } from "./config.js";
 import type { DataStore } from "./data.js";
 import { type Corpus, ToolError } from "./tools.js";
@@ -11,13 +12,14 @@ import {
   UPLOAD_EXTENSIONS,
   type UploadExtension,
   extractUploadMetadata,
+  removeStagedUpload,
   sniffUpload,
   stageUpload,
   stagedUploadState,
   updateStagedUpload,
 } from "./upload.js";
 
-export const INTAKE_STATUSES = ["present", "candidate", "staged", "applied", "skipped", "problem", "too_large"] as const;
+export const INTAKE_STATUSES = ["present", "candidate", "staged", "applied", "skipped", "problem", "too_large", "absent"] as const;
 export type IntakeStatus = (typeof INTAKE_STATUSES)[number];
 
 const GENERIC_TAGS = new Set(["ebooks", "ebook", "books", "book", "downloads", "download", "documents", "docs"]);
@@ -195,10 +197,57 @@ export function walkIntake(root: string): { files: WalkedFile[]; outside: number
   return { files, outside, unreadable };
 }
 
-function indexedHashes(c: Corpus): Map<string, string> {
+const INTAKE_PAUSE = "An intake scan is running. Stage or skip files after it finishes.";
+const ROOT_KEY = "intake_root";
+
+function assertIntakeIdle(c: Corpus): void {
+  if (c.intakePaused) throw new ToolError(c.intakePaused);
+}
+
+/**
+ * Remembers the canonical intake directory. A different mount reuses relative paths, so the
+ * previous ledger is dropped rather than treated as the same files.
+ */
+function adoptIntakeRoot(c: Corpus, config: Config): { root: string; reset: boolean } {
+  const root = assertIntakeRoot(config);
+  const stored = c.data.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(ROOT_KEY) as string | undefined;
+  if (stored === root) return { root, reset: false };
+  if (stored) c.data.prepare("DELETE FROM intake_files").run();
+  c.data.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(ROOT_KEY, root);
+  return { root, reset: Boolean(stored) };
+}
+
+/** SHA-256 of every Calibre format file, not only the one format the index selected. */
+async function libraryHashes(c: Corpus): Promise<Map<string, string>> {
   const byHash = new Map<string, string>();
+  const add = (hash: string | null | undefined, bookId: string) => {
+    if (hash && !byHash.has(hash)) byHash.set(hash, bookId);
+  };
   for (const row of c.db.prepare("SELECT id, sha256 FROM books WHERE sha256 IS NOT NULL").all() as { id: string; sha256: string }[]) {
-    if (!byHash.has(row.sha256)) byHash.set(row.sha256, row.id);
+    add(row.sha256, row.id);
+  }
+  const cached = c.data.prepare("SELECT sha256 FROM intake_format_hashes WHERE stamp = ?").pluck();
+  const store = c.data.prepare("INSERT OR REPLACE INTO intake_format_hashes (stamp, sha256) VALUES (?, ?)");
+  for (const library of c.db.prepare("SELECT DISTINCT library FROM books").pluck().all() as string[]) {
+    let catalogue;
+    try { catalogue = readCatalogue(path.join(c.booksRoot, library)); }
+    catch { continue; }
+    for (const entry of catalogue) {
+      const bookId = `${library}:${entry.metadata.calibreId}`;
+      for (const rel of Object.values(entry.files)) {
+        const full = path.join(c.booksRoot, library, rel);
+        let st: fs.Stats;
+        try { st = fs.statSync(full); } catch { continue; }
+        if (!st.isFile()) continue;
+        const stamp = `${library}/${rel.split(path.sep).join("/")}|${st.size}|${Math.round(st.mtimeMs)}`;
+        let hash = cached.get(stamp) as string | undefined;
+        if (!hash) {
+          try { hash = await hashFile(full); } catch { continue; }
+          store.run(stamp, hash);
+        }
+        add(hash, bookId);
+      }
+    }
   }
   return byHash;
 }
@@ -275,83 +324,111 @@ export interface IntakeScanSummary {
 
 /** Hash ebook files under the intake root and record which bytes are already indexed. Does not copy or add anything. */
 export async function scanIntake(c: Corpus, config: Config, log: (text: string) => void = () => {}): Promise<IntakeScanSummary> {
-  const root = assertIntakeRoot(config);
-  reconcileStaged(c, config);
-  const byHash = indexedHashes(c);
-  const live = stagedUploadState(config).ids;
-  const walked = walkIntake(root);
-  const existing = new Map(
-    (c.data.prepare("SELECT * FROM intake_files").all() as IntakeDbRow[]).map(row => [row.path, row]),
-  );
-  const upsert = c.data.prepare(UPSERT);
-  const touch = c.data.prepare("UPDATE intake_files SET status = ?, book_id = ?, staged_id = ?, seen_at = ? WHERE path = ?");
-  const now = () => new Date().toISOString();
-  let unchanged = 0;
-  let seen = 0;
-  for (const file of walked.files) {
-    seen++;
-    const row = existing.get(file.rel);
-    const held = row && row.size === file.size && row.mtime_ms === file.mtimeMs && (row.sha256 !== null || row.status === "too_large");
-    if (held && row) {
-      let status = row.status;
-      let bookId = row.book_id;
-      let stagedId = row.staged_id;
-      if (status === "staged" && (!stagedId || !live.has(stagedId))) {
-        status = "candidate";
-        stagedId = null;
-      }
-      if (row.sha256 && byHash.has(row.sha256) && status !== "staged" && status !== "applied") {
-        status = "present";
-        bookId = byHash.get(row.sha256) ?? bookId;
-        stagedId = null;
-      }
-      touch.run(status, bookId, stagedId, now(), file.rel);
-      unchanged++;
-    } else {
-      try {
-        const classified = await classifyFile(file, byHash);
-        upsert.run({
-          path: file.rel,
-          size: file.size,
-          mtime_ms: file.mtimeMs,
-          sha256: classified.sha256,
-          status: classified.status,
-          title: classified.title,
-          authors: JSON.stringify(classified.authors),
-          problem: classified.problem,
-          staged_id: null,
-          book_id: classified.book_id,
-          seen_at: now(),
-        });
-        if (classified.status === "problem" || classified.status === "too_large") {
-          log(`${classified.status === "too_large" ? "too large" : "problem"}  ${file.rel}${classified.problem ? `: ${classified.problem}` : ""}\n`);
+  const previousPause = c.intakePaused;
+  c.intakePaused = INTAKE_PAUSE;
+  try {
+    const adopted = adoptIntakeRoot(c, config);
+    const root = adopted.root;
+    if (adopted.reset) log("The intake directory changed, so the previous ledger was cleared.\n");
+    reconcileStaged(c, config);
+    const byHash = await libraryHashes(c);
+    const live = stagedUploadState(config).ids;
+    const walked = walkIntake(root);
+    const existing = new Map(
+      (c.data.prepare("SELECT * FROM intake_files").all() as IntakeDbRow[]).map(row => [row.path, row]),
+    );
+    const upsert = c.data.prepare(UPSERT);
+    // A stage or skip that landed after the snapshot (status or staged_id changed) is left alone.
+    const touch = c.data.prepare(`
+      UPDATE intake_files SET status = ?, book_id = ?, staged_id = ?, seen_at = ?
+      WHERE path = ? AND status = ? AND staged_id IS ?`);
+    const currentRow = c.data.prepare("SELECT status, staged_id FROM intake_files WHERE path = ?");
+    const now = () => new Date().toISOString();
+    let unchanged = 0;
+    let seen = 0;
+    const seenPaths = new Set<string>();
+    for (const file of walked.files) {
+      seen++;
+      seenPaths.add(file.rel);
+      const row = existing.get(file.rel);
+      const held = row && row.size === file.size && row.mtime_ms === file.mtimeMs && (row.sha256 !== null || row.status === "too_large" || row.status === "absent");
+      if (held && row) {
+        let status = row.status;
+        let bookId = row.book_id;
+        let stagedId = row.staged_id;
+        if (status === "absent") {
+          status = row.problem ? "problem" : row.size > MAX_UPLOAD_BYTES ? "too_large" : "candidate";
+          stagedId = null;
         }
-      } catch (error) {
-        upsert.run({
-          path: file.rel, size: file.size, mtime_ms: file.mtimeMs, sha256: null, status: "problem",
-          title: filenameTitle(path.posix.basename(file.rel), file.ext), authors: "[]",
-          problem: (error as Error).message, staged_id: null, book_id: null, seen_at: now(),
-        });
-        log(`problem  ${file.rel}: ${(error as Error).message}\n`);
+        if (status === "staged" && (!stagedId || !live.has(stagedId))) {
+          status = "candidate";
+          stagedId = null;
+        }
+        if (row.sha256 && byHash.has(row.sha256) && status !== "staged" && status !== "applied") {
+          status = "present";
+          bookId = byHash.get(row.sha256) ?? bookId;
+          stagedId = null;
+        }
+        touch.run(status, bookId, stagedId, now(), file.rel, row.status, row.staged_id);
+        unchanged++;
+      } else {
+        const current = currentRow.get(file.rel) as { status: IntakeStatus; staged_id: string | null } | undefined;
+        if (current?.status === "staged" && current.staged_id) removeStagedUpload(config, current.staged_id);
+        try {
+          const classified = await classifyFile(file, byHash);
+          upsert.run({
+            path: file.rel,
+            size: file.size,
+            mtime_ms: file.mtimeMs,
+            sha256: classified.sha256,
+            status: classified.status,
+            title: classified.title,
+            authors: JSON.stringify(classified.authors),
+            problem: classified.problem,
+            staged_id: null,
+            book_id: classified.book_id,
+            seen_at: now(),
+          });
+          if (classified.status === "problem" || classified.status === "too_large") {
+            log(`${classified.status === "too_large" ? "too large" : "problem"}  ${file.rel}${classified.problem ? `: ${classified.problem}` : ""}\n`);
+          }
+        } catch (error) {
+          upsert.run({
+            path: file.rel, size: file.size, mtime_ms: file.mtimeMs, sha256: null, status: "problem",
+            title: filenameTitle(path.posix.basename(file.rel), file.ext), authors: "[]",
+            problem: (error as Error).message, staged_id: null, book_id: null, seen_at: now(),
+          });
+          log(`problem  ${file.rel}: ${(error as Error).message}\n`);
+        }
       }
+      if (seen % 50 === 0) log(`Scanned ${seen} files…\n`);
+      await new Promise(resolve => setImmediate(resolve));
     }
-    if (seen % 50 === 0) log(`Scanned ${seen} files…\n`);
-    await new Promise(resolve => setImmediate(resolve));
+    const hide = c.data.prepare(`
+      UPDATE intake_files SET status = 'absent', seen_at = ?
+      WHERE path = ? AND status IN ('candidate', 'problem', 'too_large')`);
+    let missing = 0;
+    for (const rel of c.data.prepare("SELECT path FROM intake_files WHERE status IN ('candidate', 'problem', 'too_large')").pluck().all() as string[]) {
+      if (!seenPaths.has(rel)) { hide.run(now(), rel); missing++; }
+    }
+    const counts = emptyCounts();
+    for (const row of c.data.prepare("SELECT status, COUNT(*) AS n FROM intake_files GROUP BY status").all() as { status: IntakeStatus; n: number }[]) {
+      counts[row.status] = row.n;
+    }
+    log(`Scanned ${seen} ebook files (${unchanged} unchanged). ` +
+      `${counts.present} already in the library, ${counts.candidate} to review, ${counts.problem} damaged or blocked, ${counts.too_large} too large` +
+      (missing ? `, ${missing} no longer on the NAS` : "") + ". " +
+      (walked.outside ? `Ignored ${walked.outside} symlink${walked.outside === 1 ? "" : "s"} that left the mount. ` : "") +
+      (walked.unreadable ? `${walked.unreadable} path${walked.unreadable === 1 ? "" : "s"} could not be read. ` : "") +
+      `Nothing was copied.\n`);
+    return { root, seen, unchanged, outside: walked.outside, unreadable: walked.unreadable, counts };
+  } finally {
+    c.intakePaused = previousPause;
   }
-  const counts = emptyCounts();
-  for (const row of c.data.prepare("SELECT status, COUNT(*) AS n FROM intake_files GROUP BY status").all() as { status: IntakeStatus; n: number }[]) {
-    counts[row.status] = row.n;
-  }
-  log(`Scanned ${seen} ebook files (${unchanged} unchanged). ` +
-    `${counts.present} already in the library, ${counts.candidate} to review, ${counts.problem} damaged or blocked, ${counts.too_large} too large. ` +
-    (walked.outside ? `Ignored ${walked.outside} symlink${walked.outside === 1 ? "" : "s"} that left the mount. ` : "") +
-    (walked.unreadable ? `${walked.unreadable} path${walked.unreadable === 1 ? "" : "s"} could not be read. ` : "") +
-    `Nothing was copied.\n`);
-  return { root, seen, unchanged, outside: walked.outside, unreadable: walked.unreadable, counts };
 }
 
 function emptyCounts(): Record<IntakeStatus, number> {
-  return { present: 0, candidate: 0, staged: 0, applied: 0, skipped: 0, problem: 0, too_large: 0 };
+  return { present: 0, candidate: 0, staged: 0, applied: 0, skipped: 0, problem: 0, too_large: 0, absent: 0 };
 }
 
 function presentRow(row: IntakeDbRow): IntakeFile {
@@ -363,7 +440,11 @@ function presentRow(row: IntakeDbRow): IntakeFile {
 export function listIntake(c: Corpus, config: Config, query: { status?: string; q?: string; limit?: number; offset?: number } = {}) {
   const availability = intakeAvailability(config);
   const counts = emptyCounts();
-  if (availability.enabled && !availability.error) reconcileStaged(c, config);
+  let reset = false;
+  if (availability.enabled && !availability.error) {
+    reset = adoptIntakeRoot(c, config).reset;
+    if (!reset) reconcileStaged(c, config);
+  }
   for (const row of c.data.prepare("SELECT status, COUNT(*) AS n FROM intake_files GROUP BY status").all() as { status: IntakeStatus; n: number }[]) {
     if (row.status in counts) counts[row.status] = row.n;
   }
@@ -389,6 +470,7 @@ export function listIntake(c: Corpus, config: Config, query: { status?: string; 
     limit,
     offset,
     items,
+    reset,
     staging: { files: staging.files, bytes: staging.bytes, max_files: MAX_STAGED_FILES, max_bytes: MAX_STAGED_TOTAL_BYTES },
   };
 }
@@ -415,7 +497,8 @@ export interface StageIntakeOptions { maxFiles?: number; maxBytes?: number }
 
 /** Copy the next ready files into upload staging, stopping at the staging quota. Does not modify the NAS copy. */
 export function stageIntakeBatch(c: Corpus, config: Config, actor?: string, limits: StageIntakeOptions = {}) {
-  const root = assertIntakeRoot(config);
+  assertIntakeIdle(c);
+  const root = adoptIntakeRoot(c, config).root;
   reconcileStaged(c, config);
   const maxFiles = limits.maxFiles ?? MAX_STAGED_FILES;
   const maxBytes = limits.maxBytes ?? MAX_STAGED_TOTAL_BYTES;
@@ -473,7 +556,8 @@ export function stageIntakeBatch(c: Corpus, config: Config, actor?: string, limi
 
 /** Remember that these files should stay on the NAS. Does not delete them. */
 export function skipIntakeFiles(c: Corpus, config: Config, paths: string[]): { skipped: number } {
-  assertIntakeRoot(config);
+  assertIntakeIdle(c);
+  adoptIntakeRoot(c, config);
   const update = c.data.prepare(`
     UPDATE intake_files SET status = 'skipped', seen_at = ?
     WHERE path = ? AND status IN ('candidate', 'problem', 'too_large')`);
