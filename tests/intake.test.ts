@@ -200,6 +200,14 @@ it("stages only a quota-sized batch, suggests folder tags, and leaves the NAS pa
   expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("skipped");
   expect(unskipIntakeFiles(c, config, [removedPath]).restored).toBe(1);
   expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("candidate");
+  // A skipped file with a recorded problem goes back to the problem list, not the ready list.
+  c.data.prepare("UPDATE intake_files SET status = 'skipped', problem = 'DRM-protected.' WHERE path = ?").run(removedPath);
+  expect(unskipIntakeFiles(c, config, [removedPath]).restored).toBe(1);
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("problem");
+  // So does one too large to stage.
+  c.data.prepare("UPDATE intake_files SET status = 'skipped', problem = NULL, sha256 = NULL, size = ? WHERE path = ?").run(300 * 1024 * 1024, removedPath);
+  expect(unskipIntakeFiles(c, config, [removedPath]).restored).toBe(1);
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("too_large");
 });
 
 it("records an applied upload and a decision to leave a file on the NAS", async () => {

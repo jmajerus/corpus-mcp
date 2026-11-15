@@ -607,17 +607,23 @@ export function markIntakeApplied(data: DataStore, library: string, items: { cal
   }
 }
 
-/** Offer files that were left on the NAS again, so the next batch can stage them. */
+/**
+ * Offer files that were left on the NAS again. Each goes back to the status the scan gave it: a file
+ * too large to stage or with a recorded problem returns to that list, not to the ready list.
+ */
 export function unskipIntakeFiles(c: Corpus, config: Config, paths: string[]): { restored: number } {
   assertIntakeIdle(c);
   adoptIntakeRoot(c, config);
   const update = c.data.prepare(`
-    UPDATE intake_files SET status = 'candidate', seen_at = ?
-    WHERE path = ? AND status = 'skipped'`);
+    UPDATE intake_files SET seen_at = @now, status = CASE
+      WHEN size > @maxBytes THEN 'too_large'
+      WHEN problem IS NOT NULL OR sha256 IS NULL THEN 'problem'
+      ELSE 'candidate' END
+    WHERE path = @path AND status = 'skipped'`);
   const now = new Date().toISOString();
   let restored = 0;
   for (const rel of paths) {
-    restored += update.run(now, safeRelative(rel)).changes;
+    restored += update.run({ now, maxBytes: MAX_UPLOAD_BYTES, path: safeRelative(rel) }).changes;
   }
   return { restored };
 }
