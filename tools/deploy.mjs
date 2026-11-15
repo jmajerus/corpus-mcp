@@ -53,19 +53,21 @@ function sshEnv() {
 
 const sshOptions = ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"];
 
-/** Runs a bash script as root on a host; resolves with its stdout (also echoed). */
+/**
+ * Runs a bash script as root on a host; resolves with its stdout (also echoed).
+ * The script is the remote command's stdin. Linux rejects one argument longer than 128KB
+ * (E2BIG), and the Calibre scripts together are larger than that.
+ */
 function runAsRoot(host, script, env = {}) {
   const exports = Object.entries(env).map(([k, v]) => `export ${k}=${shellQuote(v)}\n`).join("");
-  const encoded = Buffer.from(exports + script).toString("base64");
-  const command = `sudo -S -p '' bash -c "$(printf %s '${encoded}' | base64 -d)"`;
   return new Promise((resolve, reject) => {
-    const ssh = spawn("ssh", [...sshOptions, host, command], { env: sshEnv(), stdio: ["pipe", "pipe", "inherit"] });
+    const ssh = spawn("ssh", [...sshOptions, host, "sudo -S -p '' bash -s"], { env: sshEnv(), stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     ssh.stdout.on("data", (chunk) => {
       out += chunk;
       process.stdout.write(chunk);
     });
-    ssh.stdin.end(`${password}\n`);
+    ssh.stdin.end(`${password}\n${exports}${script}`);
     ssh.on("error", reject);
     ssh.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`${host}: remote script exited with ${code}`))));
   });
@@ -103,12 +105,13 @@ async function sourceSetup({ quiet = false } = {}) {
   if (!quiet) console.log("\nSource ready. Next: npm run deploy");
 }
 
-/** Runs a command as the login user (no sudo); resolves with its stdout. */
-function runAsUser(host, command) {
+/** Runs a bash script as the login user (no sudo); resolves with its stdout. The script is stdin, for the same reason as runAsRoot. */
+function runAsUser(host, script) {
   return new Promise((resolve, reject) => {
-    const ssh = spawn("ssh", [...sshOptions, host, command], { env: sshEnv(), stdio: ["ignore", "pipe", "inherit"] });
+    const ssh = spawn("ssh", [...sshOptions, host, "bash -s"], { env: sshEnv(), stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
     ssh.stdout.on("data", (chunk) => (out += chunk));
+    ssh.stdin.end(script);
     ssh.on("error", reject);
     ssh.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`${host}: exited with ${code}`))));
   });
