@@ -607,11 +607,30 @@ export function markIntakeApplied(data: DataStore, library: string, items: { cal
   }
 }
 
-/** A staged upload was removed before Apply, so the NAS file can be offered again. */
-export function releaseIntakeStaging(data: DataStore, stagedId?: string): { released: number } {
+/** Offer files that were left on the NAS again, so the next batch can stage them. */
+export function unskipIntakeFiles(c: Corpus, config: Config, paths: string[]): { restored: number } {
+  assertIntakeIdle(c);
+  adoptIntakeRoot(c, config);
+  const update = c.data.prepare(`
+    UPDATE intake_files SET status = 'candidate', seen_at = ?
+    WHERE path = ? AND status = 'skipped'`);
+  const now = new Date().toISOString();
+  let restored = 0;
+  for (const rel of paths) {
+    restored += update.run(now, safeRelative(rel)).changes;
+  }
+  return { restored };
+}
+
+/**
+ * A staged upload was removed on the Upload page before Apply. Removing is a decision about the file,
+ * so its NAS path is recorded as left on the NAS rather than offered again in the next batch;
+ * the Intake page can offer it again.
+ */
+export function skipIntakeStaging(data: DataStore, stagedId?: string): { skipped: number } {
   const now = new Date().toISOString();
   const info = stagedId
-    ? data.prepare("UPDATE intake_files SET status = 'candidate', staged_id = NULL, seen_at = ? WHERE status = 'staged' AND staged_id = ?").run(now, stagedId)
-    : data.prepare("UPDATE intake_files SET status = 'candidate', staged_id = NULL, seen_at = ? WHERE status = 'staged'").run(now);
-  return { released: info.changes };
+    ? data.prepare("UPDATE intake_files SET status = 'skipped', staged_id = NULL, seen_at = ? WHERE status = 'staged' AND staged_id = ?").run(now, stagedId)
+    : data.prepare("UPDATE intake_files SET status = 'skipped', staged_id = NULL, seen_at = ? WHERE status = 'staged'").run(now);
+  return { skipped: info.changes };
 }

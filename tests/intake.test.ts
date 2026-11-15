@@ -12,9 +12,10 @@ import {
   intakeTags,
   listIntake,
   markIntakeApplied,
-  releaseIntakeStaging,
   scanIntake,
   skipIntakeFiles,
+  skipIntakeStaging,
+  unskipIntakeFiles,
   stageIntakeBatch,
 } from "../src/intake.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
@@ -186,9 +187,19 @@ it("stages only a quota-sized batch, suggests folder tags, and leaves the NAS pa
   expect(staged.items).toHaveLength(2);
   expect(staged.items.every(item => item.draft.tags.length === 1 && item.draft.tags[0] === "Vendor")).toBe(true);
   expect(() => stageIntakeBatch(c, config, "me@example.com", { maxFiles: 2, maxBytes: 50 * 1024 * 1024 })).toThrow(/staging room/);
-  releaseIntakeStaging(c.data);
-  const released = c.data.prepare("SELECT COUNT(*) FROM intake_files WHERE status = 'candidate'").pluck().get();
-  expect(released).toBe(4);
+  // Removing one staged file on the Upload page leaves it on the NAS: the next batch does not stage it again.
+  const removedId = staged.items[0].id;
+  const removedPath = c.data.prepare("SELECT path FROM intake_files WHERE staged_id = ?").pluck().get(removedId) as string;
+  expect(skipIntakeStaging(c.data, removedId).skipped).toBe(1);
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("skipped");
+  expect(skipIntakeStaging(c.data).skipped).toBe(1);
+  expect(c.data.prepare("SELECT COUNT(*) FROM intake_files WHERE status = 'skipped'").pluck().get()).toBe(2);
+  expect(c.data.prepare("SELECT COUNT(*) FROM intake_files WHERE status = 'candidate'").pluck().get()).toBe(2);
+  // A rescan keeps the decision; Offer again brings the file back.
+  await scanIntake(c, config, () => {});
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("skipped");
+  expect(unskipIntakeFiles(c, config, [removedPath]).restored).toBe(1);
+  expect(c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(removedPath)).toBe("candidate");
 });
 
 it("records an applied upload and a decision to leave a file on the NAS", async () => {

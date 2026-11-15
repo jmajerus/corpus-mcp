@@ -184,7 +184,9 @@ Hashing and the upload matcher run on the
 Corpus host. DeDRM and conversion still happen only in `upload-apply` on the
 Calibre host. Staging copies a review-sized batch (100 files, 500 MB) into the
 Upload page; Apply is that page's existing preview and apply. The NAS files stay
-where they are.
+where they are. Removing a staged file on the Upload page (one, or Remove all staged)
+records its NAS path as left on the NAS, so the next batch does not stage it again;
+the Intake page's "Left on the NAS" list can offer it again.
 
 If the container cannot see the share, a later step can mount it read-only on the
 Calibre host and add a forced command that only walks that one root. Copying the
