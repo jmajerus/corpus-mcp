@@ -35,6 +35,8 @@ beforeAll(async () => {
   quoteMcp = http.createServer(async (req, res) => {
     const send = (status: number, body: unknown) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
     if (req.method === "GET" && req.url?.startsWith("/api/corpus/quotes?book=")) return send(200, { book: {}, quotes: quoteMcpQuotes });
+    // The dashboard's probe of quote-mcp: any answer counts as up.
+    if (req.method === "GET") return send(200, {});
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw) as Record<string, unknown>;
@@ -205,6 +207,7 @@ it("serves the admin dashboard and metrics, read-only without Access", async () 
   expect(await (await fetch(`${base}/admin`)).text()).toContain("<title>Corpus Admin</title>");
   const metrics = await (await fetch(`${base}/api/admin/metrics`)).json();
   expect(metrics).toMatchObject({ service: { access_configured: true }, index: { counts: expect.any(Array) }, neighbors: [] });
+  expect(metrics.dependencies.find((d: { name: string }) => d.name === "quote-mcp")).toMatchObject({ up: true, setting: "CORPUS_QUOTE_MCP_URL" });
   expect(metrics.index.runs[0]).toMatchObject({ extracted: 1 });
   expect(await (await fetch(`${base}/api/whoami`)).json()).toMatchObject({ can_write: false });
   expect(await (await fetch(`${base}/api/whoami`, { headers: { "cf-access-jwt-assertion": token } })).json())
