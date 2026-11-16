@@ -544,13 +544,19 @@ it("records what a metadata job wrote to Calibre as sync baselines",async()=>{
 });
 it("records the tags a tag job leaves on a book as its sync baseline",async()=>{
  c.data.prepare("INSERT INTO tag_proposals(calibre_uuid,book_id,title,tags,rationale,status,approved_tags,proposed_at) VALUES('uuid-1','main:1','The Same Book','[\"social-sciences.sociology\"]','why','approved','[\"social-sciences.sociology\"]','now')").run();
+ // As calibre-tags.sh: the whole list it wrote, read from Calibre at apply time. Here Calibre has a tag
+ // the index has not seen yet ("Edited in Calibre"), so only the event's list is what was written.
+ let sendTags=true;
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
-  for(const b of JSON.parse(stdin!).books)log('@@change '+JSON.stringify({calibre_id:b.calibre_id,uuid:b.uuid,title:b.title,added:b.add??[],removed:b.remove??[]})+'\n');
+  for(const b of JSON.parse(stdin!).books)log('@@change '+JSON.stringify({calibre_id:b.calibre_id,uuid:b.uuid,title:b.title,added:b.add??[],removed:b.remove??[],...(sendTags?{tags:["social-sciences.sociology","Edited in Calibre"]}:{})})+'\n');
  }});
- const preview=await wait(r,r.start("tags","preview"));
- const job=await wait(r,r.start("tags","apply",{previewOf:preview.id}));
- expect(job.status).toBe("succeeded");
- const before=JSON.parse(c.db.prepare("SELECT tags FROM books WHERE id='main:1'").pluck().get() as string) as string[];
- expect(c.data.prepare("SELECT value FROM sync_baselines WHERE calibre_uuid='uuid-1' AND surface='calibre' AND field='tags'").pluck().get())
-  .toBe(JSON.stringify([...new Set([...before,"social-sciences.sociology"])].sort((a,b)=>a.localeCompare(b))));
+ const baseline=()=>c.data.prepare("SELECT value FROM sync_baselines WHERE calibre_uuid='uuid-1' AND surface='calibre' AND field='tags'").pluck().get();
+ let preview=await wait(r,r.start("tags","preview"));
+ expect((await wait(r,r.start("tags","apply",{previewOf:preview.id}))).status).toBe("succeeded");
+ expect(baseline()).toBe(JSON.stringify(["Edited in Calibre","social-sciences.sociology"]));
+ // An event without the list (an older script) records nothing rather than a guess.
+ c.data.prepare("DELETE FROM sync_baselines").run();sendTags=false;
+ preview=await wait(r,r.start("tags","preview"));
+ expect((await wait(r,r.start("tags","apply",{previewOf:preview.id}))).status).toBe("succeeded");
+ expect(baseline()).toBeUndefined();
 });

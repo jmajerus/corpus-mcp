@@ -45,7 +45,8 @@ for book in plan["books"]:
         continue
     if add or removed:
         change = " | ".join([f"+ {t}" for t in add] + [f"- {t}" for t in removed])
-        item = json.dumps({"calibre_id": book_id, "uuid": book["uuid"], "title": title, "added": add, "removed": removed})
+        # "tags" is the whole list set_metadata writes, so corpus-mcp records what Calibre now holds (its sync baseline).
+        item = json.dumps({"calibre_id": book_id, "uuid": book["uuid"], "title": title, "added": add, "removed": removed, "tags": kept + add})
         print("\x1f".join([str(book_id), title, ",".join(kept + add), change, item]))
 EOF
 )

@@ -882,7 +882,8 @@ describe("tag vocabulary and proposals", () => {
     expect(result.stdout).toMatch(/1\s+Networks\n\s+\+ social-sciences\.sociology/);
     // The structured line /admin turns into its change table.
     const item = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("@@change "))!.slice("@@change ".length));
-    expect(item).toEqual({ calibre_id: 1, uuid: "uuid-1", title: "Networks", added: ["social-sciences.sociology"], removed: [] });
+    // tags: the whole list set_metadata writes (kept + added), corpus-mcp's sync baseline for the book.
+    expect(item).toEqual({ calibre_id: 1, uuid: "uuid-1", title: "Networks", added: ["social-sciences.sociology"], removed: [], tags: ["sociology", "social-sciences.sociology"] });
     expect(result.stderr).toMatch(/skip 2 Echoes: that Calibre id no longer belongs to this book/);
   });
 });

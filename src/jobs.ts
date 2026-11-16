@@ -66,7 +66,10 @@ export interface JobItem {
   upload_skipped?: { filename: string; message: string };
   upload_partial?: { id: string; backup: string; message: string };
   upload_applied?: { id: string; action: "add_book" | "add_format"; formats: string[]; backup: string };
-  added?: string[]; removed?: string[]; added_format?: string; source_format?: string; source_sha256?: string;
+  added?: string[]; removed?: string[];
+  /** With added/removed: the book's whole tag list as the tag script wrote it. */
+  tags?: string[];
+  added_format?: string; source_format?: string; source_sha256?: string;
   /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */
   convert_skipped?: string;
 }
@@ -352,24 +355,19 @@ export class JobRunner {
 
   /**
    * What an apply just wrote to Calibre, per field, as the values a later sync compares against (PLAN.md,
-   * Calibre downstream). Tags: the book's tags as indexed before this job, with the job's changes applied.
+   * Calibre downstream). Only values the script reports writing: tags from the whole list it set (an event
+   * without one, from an older script, records nothing rather than a guess from the index, which may be
+   * older than what the script read from Calibre).
    */
   private baselines(jobId: number, items: JobItem[]): SyncBaseline[] {
     const out: SyncBaseline[] = [];
-    const tagsOf = this.c.db.prepare<[string], string>("SELECT tags FROM books WHERE uuid = ?").pluck();
     for (const item of items) {
       if (!item.uuid) continue;
       const base = { calibre_uuid: item.uuid, surface: "calibre" as const, job_id: jobId };
       if (item.metadata && !item.metadata.partial) {
         for (const field of ["title", "authors", "year"] as const) out.push({ ...base, field, value: item.metadata.after[field] });
       }
-      if (item.added?.length || item.removed?.length) {
-        const before = tagsOf.get(item.uuid);
-        if (before === undefined) continue;
-        const removed = new Set(item.removed ?? []);
-        const tags = [...new Set([...(JSON.parse(before) as string[]), ...(item.added ?? [])])].filter((t) => !removed.has(t)).sort((a, b) => a.localeCompare(b));
-        out.push({ ...base, field: "tags", value: tags });
-      }
+      if (Array.isArray(item.tags)) out.push({ ...base, field: "tags", value: [...item.tags].sort((a, b) => a.localeCompare(b)) });
     }
     return out;
   }
