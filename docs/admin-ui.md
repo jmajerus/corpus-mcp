@@ -92,7 +92,10 @@ Jobs that change Calibre never run directly:
    tags to add (+) and remove (−).
 2. Read the list. If it's right, press **Apply this preview** and confirm.
 3. The apply runs exactly that list, nothing newer. It backs up Calibre's
-   `metadata.db` first and refreshes the index afterwards.
+   `metadata.db` first and refreshes the index afterwards. Backups go to a
+   `.corpus-backups/<library>` folder beside the library, not inside it, and
+   each apply prunes that folder to the newest 20 backups plus any from the
+   last 30 days.
 
 A preview with nothing to do says *Nothing to apply*. An applied job links to
 its entries in the change log.
@@ -394,6 +397,37 @@ again until the file itself changes. A file that is gone on the next scan is
 otherwise be treated as the same file. Damaged and DRM-blocked files stay on the
 list and are not copied until you deal with them. Apply is the Upload apply: when
 it succeeds, those NAS paths are recorded as added and the NAS copies stay put.
+
+### Library health (`/admin/health`)
+
+**Library health** compares Calibre's catalogue (`metadata.db`) with the folders
+on disk and Calibre-Web's links. The check runs on the Calibre-Web host and only
+reads; it changes nothing, and unlike Calibre's own `calibredb check_library` it
+does not vacuum the database. It runs once a day, and whenever you choose
+**Check now**. The page shows the latest report:
+
+- **Records with missing files.** Calibre lists the book, but its folder, a
+  format file or its cover is not on disk. Each row shows the book's saved
+  references (what removing it would strand) and any other copy the duplicate
+  check pairs it with.
+- **Folders with no record.** Book folders that no record points to, classed by
+  their files: *leftover* (every book file is the same as a file of a book in
+  the library, usually a folder Calibre left behind), *lost* (a book file that
+  matches nothing in the library: a book Calibre no longer lists), or *no book
+  files*. Each row says which book each file matches, and which record now has
+  the folder's id, if any.
+- **Covers not recorded.** A `cover.jpg` that Calibre says the book lacks.
+- **Calibre-Web links to books that are gone.** Shelf memberships, reading
+  status, bookmarks and the like for ids no record has. Calibre-Web stores only
+  the id, so a link to an id Calibre has since given to a newer book points at
+  the wrong book; the check can't see that case.
+- **Other items in the library folder**, and **backups**: corpus-mcp backups
+  still in the library folder from before they moved beside it, and the backup
+  folder's size.
+
+The page is read-only for now. Actions to fix what it finds (move a leftover
+folder aside, re-add a lost book through Upload, remove a broken record, record
+a cover) come with their own previews.
 
 ### Reviewing duplicates
 

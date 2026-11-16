@@ -41,7 +41,7 @@ if [ "$apply" -eq 0 ]; then
   exit 0
 fi
 
-backup="$library/metadata.db.before-import-$(date +%Y%m%d-%H%M%S)"
+backup="${CORPUS_BACKUP_DIR:-$library}/metadata.db.before-import-$(date +%Y%m%d-%H%M%S)"
 cp -p "$library/metadata.db" "$backup"
 echo "Backed up metadata.db to $backup"
 

@@ -15,6 +15,8 @@ import { DUPLICATES_HTML } from "./web/duplicates.js";
 import { listIntake, skipIntakeFiles, skipIntakeStaging, stageIntakeBatch, unskipIntakeFiles } from "./intake.js";
 import { MAX_UPLOAD_BYTES, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
 import { INTAKE_HTML } from "./web/intake.js";
+import { HEALTH_HTML } from "./web/health.js";
+import { healthView, latestHealthReport } from "./health.js";
 import { UPLOAD_HTML } from "./web/upload.js";
 import { metadataCitekeyPreview } from "./metadata-repair.js";
 import { adminMetrics } from "./admin.js";
@@ -360,6 +362,8 @@ export interface WebOptions {
   terminologyTimer?: boolean;
   /** false: no background rebuild of the public snapshot (tests build it themselves). */
   publishTimer?: boolean;
+  /** false: no daily library health check (tests run it through the job). */
+  healthTimer?: boolean;
 }
 
 interface Web { c: Corpus; config: Config; runner: JobRunner; options: WebOptions; about?: () => Promise<About> }
@@ -395,7 +399,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     if (req.method !== "GET" && c.writesPaused) throw new ToolError(c.writesPaused);
     const path = url.pathname;
     const pages: Record<string, string> = {
-      "/admin/upload": UPLOAD_HTML, "/admin/intake": INTAKE_HTML, "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
+      "/admin/upload": UPLOAD_HTML, "/admin/intake": INTAKE_HTML, "/admin/health": HEALTH_HTML, "/admin/duplicates": DUPLICATES_HTML, "/admin": DASHBOARD_HTML, "/admin/books": BOOKS_HTML, "/admin/categories": CATEGORIES_HTML, "/admin/citekeys": CITEKEYS_HTML,
       "/admin/proposals": PROPOSALS_HTML, "/admin/shelves": SHELVES_HTML, "/admin/jobs": JOBS_HTML, "/admin/changes": CHANGES_HTML,
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
@@ -478,6 +482,9 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
     }
     else if (req.method === "GET" && path === "/api/upload") {
       sendJson(res, 200, listStagedUploads(c, config));
+    }
+    else if (req.method === "GET" && path === "/api/health") {
+      sendJson(res, 200, healthView(c, config.shelvesLibrary));
     }
     else if (req.method === "GET" && path === "/api/intake") {
       const p = url.searchParams;
@@ -749,6 +756,23 @@ function serveFavicon(req: http.IncomingMessage, res: http.ServerResponse, url: 
   return true;
 }
 
+/**
+ * The daily library health check: hourly, starts the job when the last report is over a day old and no other
+ * job is running (a busy runner just means trying again next hour). The first look is ten minutes after start,
+ * so a deploy's own refresh goes first.
+ */
+function startHealthChecks(c: Corpus, runner: JobRunner): () => void {
+  const due = () => {
+    const last = latestHealthReport(c.data);
+    if (last && Date.now() - Date.parse(last.at) < 24 * 3600 * 1000) return;
+    try { runner.start("health", "apply", {}, "corpus-mcp"); } catch { /* another job is running */ }
+  };
+  const first = setTimeout(due, 10 * 60_000);
+  const timer = setInterval(due, 3600_000);
+  first.unref(); timer.unref();
+  return () => { clearTimeout(first); clearInterval(timer); };
+}
+
 /** Rebuilds the public snapshot now and then on a timer; an unchanged catalogue leaves the file alone. */
 function startPublishing(c: Corpus, config: Config): () => void {
   const p = config.public!;
@@ -797,6 +821,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     }),
   };
   if (zotero && options.zoteroTimer !== false) zotero.start();
+  const stopHealth = options.healthTimer !== false && !options.jobCommands ? startHealthChecks(corpus, web.runner) : () => {};
   if (corpus.terminology && options.terminologyTimer !== false) corpus.terminology.start();
   const publicOn = fullConfig.public && fullConfig.public.level !== "none";
   const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
@@ -889,6 +914,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   });
   httpServer.on("close", () => {
     stopPublishing();
+    stopHealth();
     zotero?.stop();
     corpus.terminology?.stop();
     publicServer?.close();

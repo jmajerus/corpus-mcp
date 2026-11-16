@@ -108,7 +108,8 @@ def main():
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError(f'Calibre runtime is unavailable: {binary}. No metadata was written.')
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
-    backup = library / f'metadata.db.before-metadata-{stamp}'
+    # corpus-source.sh sets CORPUS_BACKUP_DIR beside the library; run by hand, the library itself.
+    backup = pathlib.Path(os.environ.get('CORPUS_BACKUP_DIR') or library) / f'metadata.db.before-metadata-{stamp}'
     with sqlite3.connect(f'file:{library / "metadata.db"}?mode=ro', uri=True) as src, sqlite3.connect(backup) as dst:
         src.backup(dst)
     # A database alone cannot recover book files after Calibre has renamed their folders.

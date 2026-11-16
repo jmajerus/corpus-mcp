@@ -95,6 +95,7 @@ async function sourceSetup({ quiet = false } = {}) {
     CORPUS_PUBKEY: pubkey,
     CORPUS_SOURCE_SCRIPT: Buffer.from(readScript("corpus-source.sh")).toString("base64"),
     CORPUS_DUPLICATES_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-duplicates.py")).toString("base64"),
+    CORPUS_HEALTH_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-health.py")).toString("base64"),
     CORPUS_UPLOAD_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-upload.py")).toString("base64"),
     CORPUS_METADATA_RECOVER_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-metadata-recover.py")).toString("base64"),
     CORPUS_METADATA_SCRIPT: fs.readFileSync(path.join(root, "tools", "calibre-metadata.py")).toString("base64"),
@@ -134,12 +135,13 @@ async function sourceSetupUserKey({ quiet = false } = {}) {
     `printf %s ${shellQuote(encode("tools/calibre-tags.sh"))} | base64 -d > ~/.local/bin/calibre-tags.sh`,
     `printf %s ${shellQuote(encode("tools/calibre-convert.sh"))} | base64 -d > ~/.local/bin/calibre-convert.sh`,
     `printf %s ${shellQuote(encode("tools/calibre-duplicates.py"))} | base64 -d > ~/.local/bin/calibre-duplicates.py`,
+    `printf %s ${shellQuote(encode("tools/calibre-health.py"))} | base64 -d > ~/.local/bin/calibre-health.py`,
     `printf %s ${shellQuote(encode("tools/calibre-upload.py"))} | base64 -d > ~/.local/bin/calibre-upload.py`,
     `printf %s ${shellQuote(encode("tools/calibre-metadata-recover.py"))} | base64 -d > ~/.local/bin/calibre-metadata-recover.py`,
     `printf %s ${shellQuote(encode("tools/calibre-metadata.py"))} | base64 -d > ~/.local/bin/calibre-metadata.py`,
     // Not reachable through the forced command: the library owner runs it by hand for bulk imports.
     `printf %s ${shellQuote(encode("tools/calibre-import.sh"))} | base64 -d > ~/.local/bin/calibre-import.sh`,
-    "chmod 0755 ~/.local/bin/calibre-duplicates.py ~/.local/bin/calibre-upload.py ~/.local/bin/calibre-metadata-recover.py ~/.local/bin/calibre-metadata.py ~/.local/bin/corpus-source ~/.local/bin/calibre-tags.sh ~/.local/bin/calibre-convert.sh ~/.local/bin/calibre-import.sh",
+    "chmod 0755 ~/.local/bin/calibre-duplicates.py ~/.local/bin/calibre-health.py ~/.local/bin/calibre-upload.py ~/.local/bin/calibre-metadata-recover.py ~/.local/bin/calibre-metadata.py ~/.local/bin/corpus-source ~/.local/bin/calibre-tags.sh ~/.local/bin/calibre-convert.sh ~/.local/bin/calibre-import.sh",
     "install -d -m 0700 ~/.ssh",
     "touch ~/.ssh/authorized_keys && chmod 0600 ~/.ssh/authorized_keys",
     // Replace any earlier line for this key (it was forced to rrsync alone).

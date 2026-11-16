@@ -11,7 +11,11 @@
 #   - "convert-preview" / "convert-apply": calibre-convert.sh (/admin's convert job); the apply
 #     takes the previewed books as JSON on stdin
 # Metadata corrections use metadata-preview / metadata-apply with JSON on stdin.
-# The write scripts back up metadata.db before every apply. Installed by tools/deploy.mjs
+#   - "health": calibre-health.py, a read-only comparison of metadata.db, the folders on disk and
+#     Calibre-Web's links (/admin's Library health page)
+# The write scripts back up metadata.db before every apply, into CORPUS_BACKUP_DIR: a
+# .corpus-backups/<library> folder beside the library (not inside it, where Calibre's own checks
+# report each backup as an invalid book), pruned to the newest 20 or the last 30 days. Installed by tools/deploy.mjs
 # (--source-setup or --source-setup-user-key), which sets TOOLS_DIR.
 #
 # Where the library is comes from Calibre-Web's own settings in app.db, read on every call:
@@ -77,6 +81,46 @@ require_unsplit() {
   LIBRARY="$METADATA_DIR"
 }
 
+# Where the write scripts put their backups, beside the library (the folder holding metadata.db).
+# Only names it: the read-only health check reports on it without creating it.
+backup_path() {
+  BACKUP_DIR="$(dirname "$1")/.corpus-backups/$(basename "$1")"
+}
+
+# For a write command: the backup folder (CORPUS_BACKUP_DIR), created if need be. Falls back to the
+# library folder itself, as before, when the folder beside it can't be made.
+backup_dir() {
+  backup_path "$LIBRARY"
+  if ! mkdir -p "$BACKUP_DIR" 2>/dev/null || [ ! -w "$BACKUP_DIR" ]; then
+    echo "corpus-source: can't write $BACKUP_DIR; backing up into the library folder instead" >&2
+    BACKUP_DIR="$LIBRARY"
+  fi
+}
+
+# For a write command: export the backup folder, and on an apply prune it first. A backup is a
+# metadata.db.before-* file with its .files folder, if it has one, kept or removed together. Keeps the
+# newest 20 backups whatever their age, and any from the last 30 days. Never prunes the library folder.
+use_backups() {
+  backup_dir
+  CORPUS_BACKUP_DIR="$BACKUP_DIR"
+  export CORPUS_BACKUP_DIR
+  case "$SSH_ORIGINAL_COMMAND" in *-apply) ;; *) return 0 ;; esac
+  [ "$BACKUP_DIR" = "$LIBRARY" ] && return 0
+  python3 - "$BACKUP_DIR" <<'PRUNE' || echo "corpus-source: pruning old backups failed; continuing" >&2
+import pathlib, shutil, sys, time
+backups = {}
+for p in pathlib.Path(sys.argv[1]).glob("metadata.db.before-*"):
+    backups.setdefault(p.name.removesuffix(".files"), []).append(p)
+# A backup's age is its newest part's, so a pair is never split across the cut.
+newest = sorted(backups.values(), key=lambda parts: max(p.lstat().st_mtime for p in parts), reverse=True)
+cutoff = time.time() - 30 * 86400
+for parts in newest[20:]:
+    if max(p.lstat().st_mtime for p in parts) < cutoff:
+        for p in parts:
+            shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+PRUNE
+}
+
 case "$SSH_ORIGINAL_COMMAND" in
   library)
     calibre_web_library json
@@ -123,8 +167,15 @@ for shelf, book, order in db.execute('SELECT shelf, book_id, "order" FROM book_s
 json.dump({"exported_at": datetime.now(timezone.utc).isoformat(), "shelves": shelves}, sys.stdout)
 EOF
     ;;
+  health)
+    # Read-only, so a split library is fine: metadata.db from one folder, the book folders from the other.
+    resolve_library
+    backup_path "$METADATA_DIR"
+    exec python3 "$TOOLS_DIR/calibre-health.py" "$METADATA_DIR" --books "$BOOKS_DIR" --app-db "$APP_DB" --backups "$BACKUP_DIR"
+    ;;
   tags-preview|tags-apply)
     require_unsplit
+    use_backups
     TAG_PLAN="$(base64 -w0)"
     export TAG_PLAN
     if [ "$SSH_ORIGINAL_COMMAND" = tags-apply ]; then
@@ -134,6 +185,7 @@ EOF
     ;;
   duplicates-preview|duplicates-apply)
     require_unsplit
+    use_backups
     if [ "$SSH_ORIGINAL_COMMAND" = duplicates-apply ]; then
       exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-duplicates.py" -- "$LIBRARY" "$APP_DB" --apply
     fi
@@ -141,6 +193,7 @@ EOF
     ;;
   upload-preview|upload-apply)
     require_unsplit
+    use_backups
     if [ "$SSH_ORIGINAL_COMMAND" = upload-apply ]; then
       exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-upload.py" -- "$LIBRARY" --apply
     fi
@@ -148,25 +201,29 @@ EOF
     ;;
   metadata-preview)
     require_unsplit
+    use_backups
     exec python3 "$TOOLS_DIR/calibre-metadata.py" "$LIBRARY"
     ;;
   metadata-apply)
     require_unsplit
+    use_backups
     exec python3 "$TOOLS_DIR/calibre-metadata.py" --apply "$LIBRARY"
     ;;
   convert-preview)
     require_unsplit
+    use_backups
     exec bash "$TOOLS_DIR/calibre-convert.sh" "$LIBRARY"
     ;;
   convert-apply)
     require_unsplit
+    use_backups
     CONVERT_PLAN="$(base64 -w0)"
     [ -n "$CONVERT_PLAN" ] || { echo "corpus-source: convert-apply needs the previewed books on stdin" >&2; exit 1; }
     export CONVERT_PLAN
     exec bash "$TOOLS_DIR/calibre-convert.sh" --apply "$LIBRARY"
     ;;
   *)
-    echo "corpus-source: only 'library', 'calibre-library', 'catalogue', read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview, duplicates-apply, upload-preview and upload-apply" >&2
+    echo "corpus-source: only 'library', 'calibre-library', 'catalogue', read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview, duplicates-apply, upload-preview, upload-apply and health" >&2
     exit 1
     ;;
 esac
