@@ -15,6 +15,7 @@ import { usePdfWorkers } from "../src/pdf-runner.js";
 import { Vocabulary } from "../src/vocabulary.js";
 import {
   clearStagedUploads,
+  extractUploadMetadata,
   listStagedUploads,
   removeStagedUpload,
   batchLimitError,
@@ -663,4 +664,26 @@ it("renders the upload page script and keeps unmatched uploads ready immediately
   expect(staged.matches).toEqual([]);
   expect(staged.contents_pending).toEqual([]);
   expect(staged.draft.action).toBe("add_book");
+});
+
+it("reads no authors or year from a chapter when an EPUB has no front matter", () => {
+  const headings = ["General Chemistry", "Key Points", "Describing Atoms", "Electron Energy Levels", "Potential Energy", "Chemical Bonds", "Covalent Bonds", "Ionic Bonds"];
+  const filler = "Atoms bond to one another by sharing or transferring electrons between their outer shells. ".repeat(12);
+  const body = headings.map((h, i) => `<h2>${h}</h2><p>${filler}</p>${i === 2 ? "<p>The nuclear model was published in 1911 by Ernest Rutherford.</p><p>Robert Hooke</p>" : ""}`).join("");
+  const epub = makeEpub("Human Physiology", [{ title: "General Chemistry", paragraphs: [], body }]);
+  const meta = extractUploadMetadata(epub, "epub", "Human Physiology.epub", null);
+  expect(meta.title).toBe("Human Physiology");
+  expect(meta.authors).toEqual([]);
+  expect(meta.year).toBeNull();
+});
+
+it("still reads a short title page and copyright page from an EPUB without a creator", () => {
+  const epub = makeEpub("A Short Book", [
+    { title: "Title Page", paragraphs: [], body: "<h1>A Short Book</h1><p>Ada Lovelace</p>" },
+    { title: "Copyright", paragraphs: ["Copyright © 2019 by Ada Lovelace. All rights reserved."] },
+    { title: "One", paragraphs: ["Text of the first chapter."] },
+  ]);
+  const meta = extractUploadMetadata(epub, "epub", "A Short Book.epub", null);
+  expect(meta.authors).toEqual(["Ada Lovelace"]);
+  expect(meta.year).toBe(2019);
 });

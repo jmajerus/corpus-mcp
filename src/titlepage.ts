@@ -33,7 +33,7 @@ export interface TitlePageScan {
 }
 
 /** Bump when scanTitlePage changes, so the indexer recomputes stored candidates (no re-extraction). */
-export const TITLE_PAGE_SCAN_VERSION = 4;
+export const TITLE_PAGE_SCAN_VERSION = 5;
 
 export interface ScanPage { page_index: number; section_path: string | null; text: string }
 
@@ -42,6 +42,9 @@ const NOT_A_PERSON = /\b(?:publish\w*|press|publications?|books?|media|inc|llc|l
 
 /** Name particles written in lower case. */
 const PARTICLE = /^(?:de|da|di|del|della|der|den|van|von|la|le|du|dos|das|bin|ibn|al|el|y)$/;
+
+/** More names than this found only on lines of their own, and the page isn't a title page. */
+const MAX_LONE_NAMES = 6;
 
 const SUFFIX = /^(?:jr|sr|ii|iii|iv)\.?$/i;
 
@@ -223,6 +226,7 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
     titlePage = { ...titlePage, text: parts.join("\n\n") };
   }
   const order: string[] = [];
+  const lone: string[] = [];
   if (titlePage) {
     for (const line of titlePage.text.split("\n")) {
       const keys = [...found.keys()].filter((k) => squash(line).includes(k)).sort((a, b) => squash(line).indexOf(a) - squash(line).indexOf(b));
@@ -237,9 +241,14 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
         const before = found.size;
         const source = pages.find(p => p.page_index >= titlePage!.page_index && p.text.split("\n").includes(line)) ?? titlePage;
         add(line, "title_page", source, source.text.indexOf(line));
-        if (found.size > before) order.push([...found.keys()].at(-1)!);
+        if (found.size > before) { order.push([...found.keys()].at(-1)!); lone.push([...found.keys()].at(-1)!); }
       }
     }
+  }
+  // A title page prints a few names. A "title page" giving many names on lines of their own is really a
+  // chapter or a contents page, and its short lines are headings ("Key Points", "Covalent Bonds").
+  if (lone.length > MAX_LONE_NAMES) {
+    for (const k of lone) { found.delete(k); order.splice(order.indexOf(k), 1); }
   }
   const authors = [...order.map((k) => found.get(k)!), ...[...found.entries()].filter(([k]) => !order.includes(k)).map(([, v]) => v)];
   return { authors, title };

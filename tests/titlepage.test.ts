@@ -123,3 +123,10 @@ it("collects separate authors after a two-line initial title block", () => {
  ],"A Formal Title");
  expect(names(result)).toEqual(["Ada Lovelace","Grace Hopper"]);
 });
+
+it("takes no names from a 'title page' that is really a chapter of headings", () => {
+  const result = scanTitlePage([
+    page(0, "General Chemistry\nKey Points\nDescribing Atoms\nElectron Energy Levels\nPotential Energy\nChemical Bonds\nCovalent Bonds\nIonic Bonds\nFrederick Sanger"),
+  ], "Human Physiology");
+  expect(names(result)).toEqual([]);
+});

@@ -359,6 +359,9 @@ function recordIdentifier(identifiers: Record<string, string>, scheme: string, r
   }
 }
 
+/** The most text an EPUB spine file can hold and still be read as front or back matter, not a chapter. */
+const FRONT_MATTER_CHARS = 6000;
+
 export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filename: string, problem: string | null): ExtractedUploadMetadata {
   const fallback = fallbackFromFilename(filename, ext);
   const out: ExtractedUploadMetadata = {
@@ -426,12 +429,16 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
       const printed = findPrintedIsbns(pages, pages.length, 2);
       out.printed_isbns = printed.map(p => p.isbn13);
       if (!out.identifiers.isbn && printed.length) out.identifiers.isbn = printed[0].isbn13;
+      // A sampled spine item is a whole file, which in a book without front matter is a chapter: its
+      // headings aren't names on a title page, and its "published in 1911" is no publication year. Years
+      // and title-page names come only from files short enough to be front or back matter.
+      const matter = pages.filter(p => p.text.replace(/\s+/g, " ").trim().length <= FRONT_MATTER_CHARS);
       if (!out.year) {
-        const py = printedYear(findPrintedYears(pages, pages.length, 2));
+        const py = printedYear(findPrintedYears(matter, matter.length, 2));
         if (py) out.year = py.year;
       }
       if (!out.authors.length || mangledTitle(out.title)) {
-        const tp = scanTitlePage(pages, out.title);
+        const tp = scanTitlePage(matter, out.title);
         if (!out.authors.length && tp.authors.length) {
           out.authors = tp.authors.map(a => a.name);
           if (out.metadata_source === "filename") out.metadata_source = "titlepage";
