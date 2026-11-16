@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { strToU8, zipSync } from "fflate";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import { notYetLogged, openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
@@ -694,7 +694,7 @@ it("flags two staged files of the same book and refuses to add both as new books
   const first = stageUpload(c, config, "Mystic River.epub", epub);
   const second = stageUpload(c, config, "Mystic River (copy).epub", other);
   expect(second.staged_matches).toEqual([
-    { id: first.id, filename: "Mystic River.epub", format: "EPUB", evidence: ["Matching identifier", "Matching title and authors"], earlier: true },
+    { id: first.id, filename: "Mystic River.epub", format: "EPUB", target_formats: ["EPUB"], primary_format: "EPUB", evidence: ["Matching identifier", "Matching title and authors"], earlier: true },
   ]);
   expect(second.draft.action).toBe("skip");
   expect(second.allowed_actions).toContain("add_book");
@@ -712,4 +712,17 @@ it("flags two staged files of the same book and refuses to add both as new books
   const unrelated = stageUpload(c, config, "Mystic River Poems.epub", makeRichEpub({ title: "Mystic River", author: "Someone Else", year: "1990" }));
   expect(unrelated.staged_matches).toEqual([]);
   expect(unrelated.draft.action).toBe("add_book");
+});
+
+it("orders files staged in the same millisecond by when they were staged, not by their random ids", () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    const book = (text: string) => makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", isbn: "9780061238369", text });
+    const staged = ["one", "two", "three", "four", "five"].map((t) => stageUpload(c, config, `Mystic River ${t}.epub`, book(t)));
+    const listed = listStagedUploads(c, config).items;
+    expect(listed.map(i => i.id)).toEqual(staged.map(s => s.id));
+    expect(listed.map(i => i.draft.action)).toEqual(["add_book", "skip", "skip", "skip", "skip"]);
+  } finally {
+    vi.useRealTimers();
+  }
 });

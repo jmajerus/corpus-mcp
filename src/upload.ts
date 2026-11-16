@@ -110,6 +110,8 @@ export interface StagedUploadRecord {
   size: number;
   sha256: string;
   staged_at: string;
+  /** Staging order, one more than the highest staged so far: staged_at can tie within a millisecond. Absent on older records. */
+  seq?: number;
   staged_by: string | null;
   problem: string | null;
   extracted: ExtractedUploadMetadata;
@@ -581,7 +583,7 @@ function readStagedRecords(dir: string): StagedUploadRecord[] {
       fs.rmSync(path.join(dir, entry), { force: true });
     }
   }
-  return records.sort((a, b) => a.staged_at.localeCompare(b.staged_at) || a.id.localeCompare(b.id));
+  return records.sort((a, b) => a.staged_at.localeCompare(b.staged_at) || (a.seq ?? -1) - (b.seq ?? -1) || a.id.localeCompare(b.id));
 }
 
 function saveStagedRecord(dir: string, rec: StagedUploadRecord): void {
@@ -630,6 +632,7 @@ export function stageUpload(c: Corpus, config: Config, filename: string, data: B
     size: data.length,
     sha256,
     staged_at: existing?.staged_at ?? new Date().toISOString(),
+    seq: existing?.seq ?? Math.max(0, ...allStaged.map(r => r.seq ?? 0)) + 1,
     staged_by: actor ?? existing?.staged_by ?? null,
     problem: sniff.problem,
     extracted,
@@ -757,6 +760,9 @@ export interface StagedMatch {
   id: string;
   filename: string;
   format: string;
+  /** The formats the other file adds, and the readable one: whether one can become a new format of the other's book. */
+  target_formats: string[];
+  primary_format: "EPUB" | "PDF";
   evidence: string[];
   /** True when the other file was staged first, so it is the one to add as the new book. */
   earlier: boolean;
@@ -773,7 +779,10 @@ function stagedMatches(rec: StagedUploadRecord, staged: StagedUploadRecord[]): S
   staged.forEach((other, i) => {
     if (other.id === rec.id || other.sha256 === rec.sha256) return;
     const evidence = stagedEvidence(mine, matchKeys(other));
-    if (evidence.length) out.push({ id: other.id, filename: other.filename, format: other.format, evidence, earlier: at < 0 || i < at });
+    if (evidence.length) out.push({
+      id: other.id, filename: other.filename, format: other.format, target_formats: other.target_formats,
+      primary_format: other.primary_format, evidence, earlier: at < 0 || i < at,
+    });
   });
   return out;
 }

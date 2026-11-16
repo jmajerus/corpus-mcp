@@ -110,9 +110,19 @@ function stagedMatchNote(it) {
   if (!sm.length) return "";
   const list = sm.map((m) => esc(m.filename) + " (" + esc(m.evidence.join(", ")) + ")").join("; ");
   const earlier = sm.filter((m) => m.earlier);
-  const advice = earlier.length
-    ? "Add " + esc(earlier[0].filename) + " first. Once it's applied, this file is offered as a new format of it; if it's another edition, add it then as a separate book."
-    : "Add this one first. Once it's applied, the other file is offered as a new format of it.";
+  // A file becomes a new format of the other's book only when that book won't already have its format.
+  let advice;
+  if (earlier.length) {
+    const first = earlier[0];
+    advice = "Add " + esc(first.filename) + " first. " + (first.target_formats.includes(it.primary_format)
+      ? "That gives the book " + esc(it.primary_format) + " already, so skip this file, or add it then as a separate book if it's another edition."
+      : "Once it's applied, this file is offered as a new format of it; if it's another edition, add it then as a separate book.");
+  } else {
+    const later = sm.filter((m) => !it.target_formats.includes(m.primary_format));
+    advice = "Add this one first. " + (later.length
+      ? "Once it's applied, " + later.map((m) => esc(m.filename)).join(", ") + " is offered as a new format of it."
+      : "The other file has the same format, so skip it, or add it later as a separate book if it's another edition.");
+  }
   return '<p class="warning">Also staged, and looks like the same book: ' + list + ". " + advice + "</p>";
 }
 
