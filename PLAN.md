@@ -947,6 +947,15 @@ the job: Calibre's desktop app, Calibre-Web, Zotero, or corpus-mcp's admin. That
 stays the primary consideration. No surface is read-only, and none is silently
 overwritten.
 
+Sync is what keeps that principle workable as the suite grows. corpus-mcp already
+does things Calibre does not (refusing duplicates on upload, reviewed categories,
+metadata repair, citekeys), and each new capability is another place where a book's
+record is read or changed. Without sync, every richer interface adds drift, and the
+choice of where to edit starts to matter. With it, an edit made in the best place
+for the job reaches the others. Sync is therefore a committed part of this plan,
+deferred in order only: the identity work below is smaller and finishes the
+duplicate merges first.
+
 ### 1. Identity
 
 **Decided 2026-11-16: three levels, and no new id authority.**
@@ -1041,16 +1050,24 @@ its cached book record under the old UUID.
 2. Duplicate merges record an alias and re-anchor into the keeper, in place of the
    quote-mcp block.
 3. The books feed lists `former_uuids`; the reader asks quote-mcp for aliases too.
-4. Field-level sync state and the three-way refresh, with a conflict list in admin
-   (adopt and conflict only; no pushes yet).
-5. Pushes to Calibre from the record; intake and upload record-first.
-6. Optional: Zotero pushes, or a pending-for-Zotero worklist.
+
+Sync, deferred until 1 to 3 are done, then in this order so each stage is useful alone:
+
+4. Baselines. Every job that already pushes to Calibre (metadata, tags) records the
+   value it wrote as that field's last synced value. Cheap, and it starts the
+   history the later stages compare against.
+5. Drift report. Refresh compares Calibre and the Zotero mirror with the baselines
+   and lists what changed where. Read-only: nothing is adopted or pushed yet.
+6. Adopt and conflict. A one-sided edit is taken into the record; a two-sided one is
+   listed for a person.
+7. Pushes to Calibre from the record.
+8. Optional: Zotero pushes, or a pending-for-Zotero worklist.
 
 ### Open questions
 
 - Which fields corpus-mcp shares with each surface. Covers and series are Calibre's
   alone today; Calibre-Web shelves stay in Calibre-Web.
-- Whether corpus-mcp writes to Zotero (stage 6), or Zotero edits stay manual.
+- Whether corpus-mcp writes to Zotero (stage 8), or Zotero edits stay manual.
 - What a conflict looks like in the admin, and whether it blocks pushes for that
   field only (proposed) or the whole book.
 
