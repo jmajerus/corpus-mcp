@@ -201,7 +201,7 @@ export function listProposals(c: Corpus, args: ListProposalsArgs = {}) {
  * When the keeper has a proposal too, a rejected one gives way to the other, and two live ones are combined:
  * both approved stay approved with both sets of tags; otherwise the combined proposal goes back for review.
  */
-export function moveTagProposal(data: Corpus["data"], fromUuid: string, to: { uuid: string; book_id: string; title: string }, actor?: string | null): "moved" | "combined" | "dropped" | null {
+export function moveTagProposal(data: Corpus["data"], fromUuid: string, to: { uuid: string; book_id: string; title: string }, actor?: string | null, jobId?: number): "moved" | "combined" | "dropped" | null {
   const get = data.prepare<[string], ProposalRow>("SELECT * FROM tag_proposals WHERE calibre_uuid = ?");
   const from = get.get(fromUuid);
   if (!from || fromUuid === to.uuid) return null;
@@ -232,7 +232,7 @@ export function moveTagProposal(data: Corpus["data"], fromUuid: string, to: { uu
     data.prepare("DELETE FROM tag_proposals WHERE calibre_uuid = ?").run(fromUuid);
     outcome = "combined";
   })();
-  recordChanges(data, [{ kind: "proposal_moved", source: "admin-job", book_id: to.book_id, calibre_uuid: to.uuid, title: to.title,
+  recordChanges(data, [{ kind: "proposal_moved", source: "admin-job", job_id: jobId ?? null, book_id: to.book_id, calibre_uuid: to.uuid, title: to.title,
     detail: `${outcome!} from ${from.book_id}`, actor: actor ?? null }]);
   return outcome!;
 }

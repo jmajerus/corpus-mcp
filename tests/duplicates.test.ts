@@ -386,7 +386,7 @@ it("lets a record with only a tag proposal be trashed and moves the proposal to 
  const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
  expect((await wait(r,r.start("duplicates","apply",{previewOf:preview.id}))).status).toBe("succeeded");
  expect(c.data.prepare("SELECT calibre_uuid,book_id,status FROM tag_proposals").all()).toEqual([{calibre_uuid:"uuid-1",book_id:"main:1",status:"pending"}]);
- expect(c.data.prepare("SELECT detail FROM changes WHERE kind='proposal_moved'").pluck().get()).toBe("moved from main:2");
+ expect(c.data.prepare("SELECT detail, job_id FROM changes WHERE kind='proposal_moved'").get()).toEqual({detail:"moved from main:2",job_id:expect.any(Number)});
 });
 it("combines a moved tag proposal with the keeper's own",async()=>{
  const {moveTagProposal}=await import("../src/tagging.js");
@@ -402,4 +402,15 @@ it("combines a moved tag proposal with the keeper's own",async()=>{
  propose("uuid-2","main:2","rejected",["Art"]);
  expect(moveTagProposal(c.data,"uuid-2",to)).toBe("dropped");
  expect(row()).toHaveLength(1);
+});
+it("leaves a tag proposal in place when the source reports a duplicate it did not trash",async()=>{
+ c.data.prepare("INSERT INTO tag_proposals(calibre_uuid,book_id,title,tags,rationale,status,proposed_at) VALUES('uuid-2','main:2','Book','[\"History\"]','why','pending','now')").run();
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  const p=JSON.parse(stdin!);
+  if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
+  else log('@@change '+JSON.stringify({calibre_id:1,uuid:"uuid-1",title:"Book",duplicate_resolved:{removed_id:2,removed_uuid:"uuid-2",trash:false,backup:"b"}})+'\n');
+ }});
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
+ await wait(r,r.start("duplicates","apply",{previewOf:preview.id}));
+ expect(c.data.prepare("SELECT calibre_uuid FROM tag_proposals").pluck().all()).toEqual(["uuid-2"]);
 });

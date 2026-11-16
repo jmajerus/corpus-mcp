@@ -293,8 +293,8 @@ export class JobRunner {
         if (kind === "duplicates") {
           const actor = this.c.data.prepare("SELECT requested_by FROM jobs WHERE id = ?").pluck().get(id) as string | null;
           for (const it of items) {
-            if (it.duplicate_resolved && it.uuid) moveTagProposal(this.c.data, it.duplicate_resolved.removed_uuid,
-              { uuid: it.uuid, book_id: `${this.config.shelvesLibrary}:${it.calibre_id}`, title: it.title }, actor);
+            if (it.duplicate_resolved?.trash && it.uuid) moveTagProposal(this.c.data, it.duplicate_resolved.removed_uuid,
+              { uuid: it.uuid, book_id: `${this.config.shelvesLibrary}:${it.calibre_id}`, title: it.title }, actor, id);
           }
         }
       }
