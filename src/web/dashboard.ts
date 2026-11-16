@@ -50,7 +50,10 @@ function calibreLibraryRows(sync) {
 
 const probePill = (n) => '<span class="pill ' + (n.up ? "up" : "") + '" title="' + esc(n.url + (n.setting ? " (" + n.setting + ")" : "") + (n.error ? " — " + n.error : "")) + '"><span class="dot"></span>' + esc(n.name) + (n.up ? " · " + n.ms + " ms" : " · down") + "</span>";
 
-/** A terminology subscriber: green when it reported progress recently, amber when it's quiet or has a blocking change. */
+/**
+ * A terminology subscriber: green when it reported progress recently, amber when it's quiet or has a blocking
+ * change. Its lag shows only when it has changes left to apply; an up-to-date one stays short, like the other lights.
+ */
 function subscriberPill(s) {
   const behind = s.pending ? " · " + s.pending + " behind" + (s.pending_breaking ? " (" + s.pending_breaking + " breaking)" : "") : "";
   const state = !s.fresh ? "stale" : s.blocked ? "stale" : "up";

@@ -49,7 +49,8 @@ other services. They refresh every 30 seconds.
 - **Subscribers:** the other services subscribed to the terminology log (Concept
   Clusters, quote-mcp, iasp-mcp…), as terminology-mcp lists them. Green means
   it reported progress in the last 15 minutes. Amber means it's been quiet longer,
-  or a change is blocking it. It also shows how many changes it's behind. A new
+  or a change is blocking it. A subscriber with changes left to apply shows how
+  many ("· 3 behind"); one that's up to date shows nothing extra. A new
   subscriber appears here on its own.
 - **Also:** anything else named in `CORPUS_NEIGHBORS` (`name=url;name=url`),
   probed like the services in the first row. It's empty by default, and the row
