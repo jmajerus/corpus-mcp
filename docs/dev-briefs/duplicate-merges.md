@@ -62,7 +62,10 @@ split the quote from its anchor. It needs, in order:
    endpoint; replace `assertNoBookQuotes` with a check that every quote has a planned
    anchor.
 
-Agree the endpoint with the quote-mcp project first.
+Agree the endpoint with the quote-mcp project first; the proposal is
+[duplicate-quote-rebind.md](duplicate-quote-rebind.md). It is on hold: under PLAN.md's
+"Calibre downstream", quote-mcp records a corpus-owned id, merges re-point an origin,
+and only the anchor move (step 2) remains.
 
 ### 2. Quotes in quote-mcp without anchors
 

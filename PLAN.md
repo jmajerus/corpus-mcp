@@ -925,6 +925,105 @@ and the two link to each other by a convention, not shared code.
     file that loads a local D1 (`npm run worker:load`, then `worker:dev`);
     `--status` shows the queue.
 
+## Calibre downstream (proposed 2026-11-16)
+
+**Goal.** Keep Calibre, Calibre-Web, the desktop app and the converters, but stop
+treating Calibre as the upstream source of truth. corpus-mcp owns each book's
+identity and its record. Calibre becomes one place where the record is shown and
+edited, and corpus-mcp keeps it up to date. This supersedes the *Book source* and
+*Writes* rows in Decisions once built.
+
+**Why now.** The Calibre UUID is the join key across corpus-mcp (anchors, pinned
+citekeys, Zotero links, tag proposals) and quote-mcp (a work's `calibre` origin,
+and the book on every checked quote). A duplicate merge or a re-import has to
+rewrite all of it (see [duplicate merges](docs/dev-briefs/duplicate-merges.md)).
+Quotes are collected continually, so each new quote checked against a UUID adds to
+what has to move later.
+
+**Principle: edit anywhere.** Metadata is edited wherever the interface is best for
+the job: Calibre's desktop app, Calibre-Web, Zotero, or corpus-mcp's admin. That
+stays the primary consideration. No surface is read-only, and none is silently
+overwritten.
+
+### 1. Identity
+
+- `books` gets a corpus-owned id (stable, opaque, e.g. a ULID), separate from the
+  `main:42` display id.
+- `book_origins (kind, ref, book)`: `calibre` → Calibre UUID, `zotero` → item,
+  `sha256` → each file's hash. A Calibre record that appears with a known file hash
+  (a re-import, a restored record) attaches to the existing book and does not start
+  a new identity.
+- Data tables (`anchors`, `citekeys`, `zotero_links`, `tag_proposals`) key on the
+  corpus id. Every API that takes a UUID, citekey or `main:42` keeps taking it,
+  resolved through origins.
+- A duplicate merge becomes: re-point the trashed record's origins to the keeper.
+  Most of `moveTagProposal` and `moveDuplicateFiling` reduces to that.
+
+### 2. Sync: three-way per field
+
+Each field the corpus record shares with a surface (Calibre: title, authors, date,
+publisher, identifiers, tags, series, comments; Zotero, for filed works: title,
+creators, date, publisher, ISBN) keeps the last value synced with that surface.
+On each refresh or mirror sync, with *surface* the value there now, *synced* the last
+synced value and *corpus* the record's:
+
+| Surface vs synced | Corpus vs synced | Result |
+|---|---|---|
+| same | same | nothing |
+| same | changed | push corpus to the surface |
+| changed | same | adopt: corpus takes the surface's edit (logged with its source), then pushes it to the other surfaces |
+| changed | changed, equal | record as synced |
+| changed | changed, different | conflict: keep corpus, list both values for a person to choose |
+
+An edit in any one place therefore spreads to the others without review. Only
+genuinely concurrent, different edits ask a question. Calibre edits arrive after the
+next mirror pull and refresh (about 10 minutes); Zotero edits after the next mirror
+sync.
+
+### 3. Pushes
+
+- To Calibre: the existing metadata and tag jobs, run from the corpus record (the
+  tag jobs already work this way).
+- To Zotero: corpus-mcp does not write to Zotero today. Until it does, a corpus or
+  Calibre edit to a filed work's Zotero fields is listed as pending for Zotero (made
+  through the Zotero tools), not pushed. Whether corpus-mcp should write to Zotero is
+  an open question.
+
+### 4. Files
+
+Files stay in Calibre's folders. corpus-mcp knows each by its hash (`sha256` origin),
+so a format added, replaced or converted in Calibre is recognised. Intake and upload
+create the corpus record first, then add the book to Calibre as a downstream step.
+
+### 5. quote-mcp
+
+Ask quote-mcp to record the corpus id on new checked quotes (a `corpus` work origin,
+and `$.book.corpus_id` in the quote's origin), alongside the UUID while both exist.
+This is the most time-sensitive step, because quotes keep coming. With it, the
+duplicate-merge rebind ([proposal](docs/dev-briefs/duplicate-quote-rebind.md), on
+hold) is no longer needed: a merge re-points an origin here, and quote-mcp's link
+holds.
+
+### Stages
+
+1. Corpus ids and `book_origins`; backfill from Calibre UUIDs and file hashes; APIs
+   resolve through origins. No behaviour change.
+2. quote-mcp records the corpus id on new quotes; backfill existing quotes from
+   their UUIDs.
+3. Data tables move to corpus ids; duplicate merges re-point origins.
+4. Field-level sync state and the three-way refresh, with a conflict list in admin
+   (adopt and conflict only; no pushes yet).
+5. Pushes to Calibre from the record; intake and upload record-first.
+6. Optional: Zotero pushes, or a pending-for-Zotero worklist.
+
+### Open questions
+
+- Which fields corpus-mcp shares with each surface. Covers and series are Calibre's
+  alone today; Calibre-Web shelves stay in Calibre-Web.
+- Whether corpus-mcp writes to Zotero (stage 6), or Zotero edits stay manual.
+- What a conflict looks like in the admin, and whether it blocks pushes for that
+  field only (proposed) or the whole book.
+
 ## Known issues
 
 - **CT 115 ownership.** CT 115 runs as a privileged container, but its root
