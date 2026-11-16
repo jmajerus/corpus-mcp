@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, type SyncBaseline, backupDataStore, pinnedByUuid, recordAlias, recordBaselines, recordChanges } from "./data.js";
 import { moveAnchors } from "./anchors.js";
+import { healthSummary, parseHealthOutput, saveHealthReport } from "./health.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicateBatchPlan, duplicateContents, assertDuplicateMovable, moveDuplicateFiling, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
 import { markIntakeApplied, scanIntake } from "./intake.js";
@@ -18,7 +19,7 @@ import { type BookRow, type Corpus, getBook, ToolError, tagCleanupPlan } from ".
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates" | "upload" | "intake";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates" | "upload" | "intake" | "health";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
@@ -26,6 +27,8 @@ interface JobSpec { title: string; calibre: boolean; previewable: boolean }
 export const JOB_KINDS: Record<JobKind, JobSpec> = {
   upload: { title: "Upload books to Calibre", calibre: true, previewable: true },
   intake: { title: "Scan the master ebook directory", calibre: false, previewable: false },
+  // Reads the Calibre library on its host; changes nothing, so it needs no preview.
+  health: { title: "Check the Calibre library's files", calibre: false, previewable: false },
   duplicates: { title: "Resolve reviewed duplicate groups", calibre: true, previewable: true },
   metadata: { title: "Correct title, authors, and year in Calibre", calibre: true, previewable: false },
   refresh: { title: "Refresh now (pull from Calibre-Web, then index)", calibre: false, previewable: false },
@@ -387,6 +390,26 @@ export class JobRunner {
       case "intake":
         await scanIntake(this.c, this.config, log);
         return;
+      case "health": {
+        // The report is one long JSON line: kept out of the job's log, which gets the summary instead.
+        let output = "", pending = "";
+        await this.commands.calibre("health", undefined, (text) => {
+          pending += text;
+          const lines = pending.split("\n");
+          pending = lines.pop()!;
+          for (const line of lines) {
+            if (line.startsWith("@@health ")) output += line + "\n";
+            else log(line + "\n");
+          }
+        });
+        if (pending.startsWith("@@health ")) output += pending;
+        else if (pending) log(pending);
+        const report = parseHealthOutput(output);
+        if (!report) throw new Error("The Calibre-Web host sent no health report.");
+        saveHealthReport(this.c.data, this.running, report);
+        log(healthSummary(report) + "\n");
+        return;
+      }
       case "duplicates": {
         const batch = params.plan as DuplicateBatchPlan, removes = batch.groups.flatMap(g => g.remove);
         for (const g of batch.groups) assertDuplicateMovable(this.c, batch.library, g);

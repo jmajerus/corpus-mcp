@@ -17,6 +17,7 @@ import contextlib
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import sqlite3
@@ -401,7 +402,8 @@ def main():
                 event(keep, f'Calibre book {keep["id"]}', duplicate_skipped={'message': message})
             if reviews:
                 stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
-                backup = args.library / ('metadata.db.before-duplicates-' + stamp)
+                # corpus-source.sh sets CORPUS_BACKUP_DIR beside the library; run by hand, the library itself.
+                backup = pathlib.Path(os.environ.get('CORPUS_BACKUP_DIR') or args.library) / ('metadata.db.before-duplicates-' + stamp)
                 with sqlite3.connect(f'file:{args.library}/metadata.db?mode=ro', uri=True) as src, sqlite3.connect(backup) as dst:
                     src.backup(dst)
                 saved = backup.with_name(backup.name + '.files')

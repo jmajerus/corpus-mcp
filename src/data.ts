@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 14;
+export const DATA_SCHEMA_VERSION = 15;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -218,6 +218,13 @@ CREATE TABLE IF NOT EXISTS sync_baselines (
   job_id INTEGER,
   at TEXT NOT NULL,
   PRIMARY KEY (calibre_uuid, surface, field)
+);
+-- What tools/calibre-health.py found in the Calibre library (src/health.ts), newest last; the last 30 are kept.
+CREATE TABLE IF NOT EXISTS health_reports (
+  id INTEGER PRIMARY KEY,
+  job_id INTEGER,
+  at TEXT NOT NULL,
+  report TEXT NOT NULL               -- JSON, as the script printed it
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(
   text, note, labels, content='quotes', content_rowid='id', tokenize='unicode61 remove_diacritics 2'

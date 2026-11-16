@@ -138,7 +138,8 @@ if [ "$apply" -eq 0 ]; then
   exit 0
 fi
 
-backup="$library/metadata.db.before-epub-$(date +%Y%m%d-%H%M%S)"
+# corpus-source.sh sets CORPUS_BACKUP_DIR beside the library; run by hand, the library itself.
+backup="${CORPUS_BACKUP_DIR:-$library}/metadata.db.before-epub-$(date +%Y%m%d-%H%M%S)"
 cp -p "$library/metadata.db" "$backup"
 echo "Backed up metadata.db to $backup"
 

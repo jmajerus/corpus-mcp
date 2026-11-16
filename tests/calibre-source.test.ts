@@ -136,6 +136,49 @@ describe("corpus-source (forced command)", () => {
     }
   });
 
+  it("runs the read-only health check on Calibre-Web's library, with app.db and the backup folder", () => {
+    fs.copyFileSync(new URL("../tools/calibre-health.py", import.meta.url), path.join(tools, "calibre-health.py"));
+    const out = source("health");
+    expect(out.status, out.stderr).toBe(0);
+    const report = JSON.parse(out.stdout.split("\n").find((l) => l.startsWith("@@health "))!.slice(9));
+    expect(report).toMatchObject({ library: fs.realpathSync(path.join(host, "main")), records: 1, counts: { records_missing: 0, orphans: 0 },
+      // app.db links to Calibre ids 53, 7 and 99, and the library has only book 1.
+      app_db: { checked: true, missing_links: [{ table: "book_shelf_link", book_id: 7, count: 1 }, { table: "book_shelf_link", book_id: 53, count: 1 }, { table: "book_shelf_link", book_id: 99, count: 1 }] },
+      backups: { dir: path.join(host, ".corpus-backups", "main"), exists: true, count: 0 } });
+  });
+
+  it("gives write commands a backup folder beside the library, and prunes it on an apply", () => {
+    fs.writeFileSync(path.join(tools, "calibre-tags.sh"), 'echo "backups=$CORPUS_BACKUP_DIR"\n');
+    const backups = path.join(host, ".corpus-backups", "main");
+    expect(source("tags-preview", "{}").stdout.trim()).toBe(`backups=${backups}`);
+    // 25 backups: the 20 newest stay; of the 5 older ones, only those over 30 days old go, .files folders too.
+    const day = 86400;
+    const now = Date.now() / 1000;
+    for (let i = 0; i < 25; i++) {
+      const name = path.join(backups, `metadata.db.before-tags-${String(i).padStart(2, "0")}`);
+      fs.writeFileSync(name, "x");
+      const age = i < 20 ? i : i === 20 ? 10 : 40 + i;
+      fs.utimesSync(name, now - age * day, now - age * day);
+      if (i === 24) {
+        fs.mkdirSync(`${name}.files`);
+        fs.utimesSync(`${name}.files`, now - 90 * day, now - 90 * day);
+      }
+    }
+    // A preview never prunes.
+    source("tags-preview", "{}");
+    expect(fs.readdirSync(backups)).toHaveLength(26);
+    expect(source("tags-apply", "{}").status).toBe(0);
+    const left = fs.readdirSync(backups).sort();
+    expect(left).toHaveLength(21);
+    expect(left).toContain("metadata.db.before-tags-20");
+    expect(left).not.toContain("metadata.db.before-tags-24.files");
+    // Nothing in the library folder itself is ever pruned.
+    fs.writeFileSync(path.join(host, "main", "metadata.db.before-tags-old"), "x");
+    fs.utimesSync(path.join(host, "main", "metadata.db.before-tags-old"), now - 400 * day, now - 400 * day);
+    source("tags-apply", "{}");
+    expect(fs.existsSync(path.join(host, "main", "metadata.db.before-tags-old"))).toBe(true);
+  });
+
   it("lets the hand-run scripts default to Calibre-Web's library", () => {
     const script = path.join(tools, "calibre-convert.sh");
     fs.copyFileSync(new URL("../tools/calibre-convert.sh", import.meta.url), script);

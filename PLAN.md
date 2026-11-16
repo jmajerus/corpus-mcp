@@ -1074,6 +1074,52 @@ Sync, in this order so each stage is useful alone:
 - What a conflict looks like in the admin, and whether it blocks pushes for that
   field only (proposed) or the whole book.
 
+## Library health (proposed and stage 1 built 2026-11-16)
+
+**Why.** On 2026-11-15 Calibre's `metadata.db` and its folder tree were restored from
+a backup after an outage. A duplicate merge then failed on a record whose folder was
+not on disk (main:884, apparently from an interrupted rename before the backup), and
+`calibredb check_library` found about 43 book folders that no record points to, four
+covers Calibre did not record, and corpus-mcp's own `metadata.db.before-*` backups
+listed as invalid books. Nothing was watching for any of it.
+
+**What.** A **Library health** page (`/admin/health`), separate from Duplicates: these
+are not duplicate records, and the two flows should not share buttons or wording.
+
+- **The check** (`tools/calibre-health.py`, the forced command's `health`): read-only on
+  the Calibre-Web host, against the real library, not corpus-mcp's mirror (which copies
+  only some formats, so it would misreport records whose files are other formats). It
+  lists records whose folder, formats or cover are missing; folders that no record
+  points to, classed as leftover, lost or empty by matching their files against every
+  record's files (by size, then SHA-256); covers not recorded; stray items; Calibre-Web
+  links to ids no record has; and the backups.
+- **The report** is kept in `health_reports` (the last 30). The page adds corpus-mcp's
+  view: book ids, a broken record's saved references, and the other copies the
+  duplicate check pairs it with (884 with 890).
+- **When.** Once a day, from a timer in the server, and on demand.
+- **Backups** move out of the library to `.corpus-backups/<library>` beside it, pruned
+  to the newest 20 plus the last 30 days.
+
+**Stages.**
+
+1. The read-only check and page, and the backup move. Built (PR #46).
+2. Actions, each with a preview and apply, a backup, a recheck just before acting, and a
+   line on the Changes page; nothing deleted outright:
+   - a leftover folder is moved aside to a holding folder beside the library;
+   - a lost book is staged on the Upload page, which checks for duplicates, and added
+     the usual way;
+   - a broken record goes to Calibre's trash, after its saved references are moved to
+     its other copy (as a duplicate merge would) or confirmed as none;
+   - a cover not recorded is recorded;
+   - old backups in the library folder are moved to the backup folder.
+3. Cross-service checks in holdings-mcp: quote-mcp quotes and corpus-mcp anchors whose
+   Calibre UUID no longer resolves (its `docs/cross-service-checks.md` lists these as
+   not built).
+
+**Not detectable here.** A Calibre-Web link to an id Calibre has since given to a
+different book: `app.db` stores only the id. A restore that rolls ids back makes this
+possible; the page says so.
+
 ## Known issues
 
 - **CT 115 ownership.** CT 115 runs as a privileged container, but its root
