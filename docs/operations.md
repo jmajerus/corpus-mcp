@@ -155,7 +155,7 @@ Backups go to `.corpus-backups/<library>` beside the library (for example
 `/mnt/Calibre/.corpus-backups/main`), which the forced command creates. Inside the
 library, Calibre's own `check_library` lists each as an invalid book, and a restore
 of the library carries them along. Each apply prunes the folder to the newest 20
-backups plus any from the last 30 days. If the folder can't be created (the login
+backups plus any from the last 30 days, a backup and its `.files` folder together. If the folder can't be created (the login
 can't write beside the library), the forced command says so and backs up into the
 library as before. Older backups already in the library are left where they are;
 the Library health page counts them. `calibre-import.sh`, run by hand, backs up into
@@ -163,7 +163,8 @@ the library unless `CORPUS_BACKUP_DIR` is set.
 
 The `health` command runs `calibre-health.py`, a read-only comparison of
 `metadata.db`, the library's folders and Calibre-Web's `app.db`, for the Library
-health page. The server starts it once a day (when the last report is over a day
+health page. Being read-only, it also checks a library Calibre-Web keeps split, and it
+only names the backup folder, without creating it. The server starts it once a day (when the last report is over a day
 old and no other job is running), and the page's **Check now** starts it at once.
 
 Applying an approved category set adds and removes vocabulary tags to match,

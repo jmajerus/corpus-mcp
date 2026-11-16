@@ -66,7 +66,7 @@ function render(data) {
     + (b ? '<p>Backup folder: <span class="path">' + esc(b.dir) + '</span>: ' + (b.exists ? plural(b.count, 'backup') + ', ' + esc(bytes(b.bytes)) + '. Each write job prunes it to the newest 20, plus any from the last 30 days.' : 'not created yet; the next write job creates it.') + '</p>' : '')
     + '</section>';
   const body = missing + orphans + covers + appdb + strays + backups;
-  document.getElementById('sections').innerHTML = (c.records_missing || c.orphans || c.cover_unflagged || c.app_db_missing_links || c.strays ? '' : '<p>No problems found.</p>') + body;
+  document.getElementById('sections').innerHTML = (c.records_missing || c.orphans || c.cover_unflagged || c.app_db_missing_links || c.strays || c.corpus_backups ? '' : '<p>No problems found.</p>') + body;
 }
 async function load() {
   try { render(await api('/api/health')); } catch (e) { document.getElementById('sections').textContent = e.message; }

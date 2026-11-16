@@ -144,7 +144,19 @@ describe("corpus-source (forced command)", () => {
     expect(report).toMatchObject({ library: fs.realpathSync(path.join(host, "main")), records: 1, counts: { records_missing: 0, orphans: 0 },
       // app.db links to Calibre ids 53, 7 and 99, and the library has only book 1.
       app_db: { checked: true, missing_links: [{ table: "book_shelf_link", book_id: 7, count: 1 }, { table: "book_shelf_link", book_id: 53, count: 1 }, { table: "book_shelf_link", book_id: 99, count: 1 }] },
-      backups: { dir: path.join(host, ".corpus-backups", "main"), exists: true, count: 0 } });
+      backups: { dir: path.join(host, ".corpus-backups", "main"), exists: false, count: 0 } });
+    // Read-only: it names the backup folder without creating it.
+    expect(fs.existsSync(path.join(host, ".corpus-backups"))).toBe(false);
+  });
+
+  it("checks a split library too: metadata.db from Calibre-Web's data folder, book folders from the other", () => {
+    fs.copyFileSync(new URL("../tools/calibre-health.py", import.meta.url), path.join(tools, "calibre-health.py"));
+    splitLibrary();
+    const out = source("health");
+    expect(out.status, out.stderr).toBe(0);
+    const report = JSON.parse(out.stdout.split("\n").find((l) => l.startsWith("@@health "))!.slice(9));
+    expect(report).toMatchObject({ library: fs.realpathSync(path.join(host, "main")), catalogue: fs.realpathSync(path.join(host, "cw-data")), records: 1,
+      counts: { records_missing: 0, orphans: 0 }, backups: { dir: path.join(host, ".corpus-backups", "cw-data"), exists: false } });
   });
 
   it("gives write commands a backup folder beside the library, and prunes it on an apply", () => {
@@ -159,19 +171,22 @@ describe("corpus-source (forced command)", () => {
       fs.writeFileSync(name, "x");
       const age = i < 20 ? i : i === 20 ? 10 : 40 + i;
       fs.utimesSync(name, now - age * day, now - age * day);
-      if (i === 24) {
+      // Two backups with their .files folders: 24's goes with it; 5's stays with it, though older than 30 days.
+      if (i === 24 || i === 5) {
         fs.mkdirSync(`${name}.files`);
         fs.utimesSync(`${name}.files`, now - 90 * day, now - 90 * day);
       }
     }
     // A preview never prunes.
     source("tags-preview", "{}");
-    expect(fs.readdirSync(backups)).toHaveLength(26);
+    expect(fs.readdirSync(backups)).toHaveLength(27);
     expect(source("tags-apply", "{}").status).toBe(0);
     const left = fs.readdirSync(backups).sort();
-    expect(left).toHaveLength(21);
+    // 21 backups: the newest 20, and 19 (under 30 days). 21 to 24 went, each with its .files folder.
+    expect(left).toHaveLength(22);
     expect(left).toContain("metadata.db.before-tags-20");
-    expect(left).not.toContain("metadata.db.before-tags-24.files");
+    expect(left).toContain("metadata.db.before-tags-05.files");
+    expect(left.filter((n) => n.startsWith("metadata.db.before-tags-2") && n > "metadata.db.before-tags-20")).toEqual([]);
     // Nothing in the library folder itself is ever pruned.
     fs.writeFileSync(path.join(host, "main", "metadata.db.before-tags-old"), "x");
     fs.utimesSync(path.join(host, "main", "metadata.db.before-tags-old"), now - 400 * day, now - 400 * day);

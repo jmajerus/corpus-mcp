@@ -12,6 +12,8 @@ import type { Corpus } from "./tools.js";
 export interface HealthFile { file: string; bytes: number; matches: { id: number; format: string }[] }
 export interface HealthReport {
   version: number; checked_at: string; library: string; records: number;
+  /** Where metadata.db is, when Calibre-Web keeps the library split; `library` is then the book folders. */
+  catalogue?: string;
   counts: Record<string, number>;
   records_missing: { id: number; uuid: string; title: string; path: string; folder_missing: boolean; formats_missing: string[]; cover_missing: boolean }[];
   orphans: { path: string; id: number; kind: "leftover" | "lost" | "empty"; files: HealthFile[]; bytes: number; cover: boolean;

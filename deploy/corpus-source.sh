@@ -81,18 +81,25 @@ require_unsplit() {
   LIBRARY="$METADATA_DIR"
 }
 
-# Where the write scripts put their backups (CORPUS_BACKUP_DIR), beside the library. Falls back to
-# the library folder itself, as before, when the folder beside it can't be made.
+# Where the write scripts put their backups, beside the library (the folder holding metadata.db).
+# Only names it: the read-only health check reports on it without creating it.
+backup_path() {
+  BACKUP_DIR="$(dirname "$1")/.corpus-backups/$(basename "$1")"
+}
+
+# For a write command: the backup folder (CORPUS_BACKUP_DIR), created if need be. Falls back to the
+# library folder itself, as before, when the folder beside it can't be made.
 backup_dir() {
-  BACKUP_DIR="$(dirname "$LIBRARY")/.corpus-backups/$(basename "$LIBRARY")"
+  backup_path "$LIBRARY"
   if ! mkdir -p "$BACKUP_DIR" 2>/dev/null || [ ! -w "$BACKUP_DIR" ]; then
     echo "corpus-source: can't write $BACKUP_DIR; backing up into the library folder instead" >&2
     BACKUP_DIR="$LIBRARY"
   fi
 }
 
-# For a write command: export the backup folder, and on an apply prune it first. Keeps the newest 20
-# backups whatever their age, and any from the last 30 days. Never prunes the library folder itself.
+# For a write command: export the backup folder, and on an apply prune it first. A backup is a
+# metadata.db.before-* file with its .files folder, if it has one, kept or removed together. Keeps the
+# newest 20 backups whatever their age, and any from the last 30 days. Never prunes the library folder.
 use_backups() {
   backup_dir
   CORPUS_BACKUP_DIR="$BACKUP_DIR"
@@ -101,11 +108,16 @@ use_backups() {
   [ "$BACKUP_DIR" = "$LIBRARY" ] && return 0
   python3 - "$BACKUP_DIR" <<'PRUNE' || echo "corpus-source: pruning old backups failed; continuing" >&2
 import pathlib, shutil, sys, time
-entries = sorted(pathlib.Path(sys.argv[1]).glob("metadata.db.before-*"), key=lambda p: p.lstat().st_mtime, reverse=True)
+backups = {}
+for p in pathlib.Path(sys.argv[1]).glob("metadata.db.before-*"):
+    backups.setdefault(p.name.removesuffix(".files"), []).append(p)
+# A backup's age is its newest part's, so a pair is never split across the cut.
+newest = sorted(backups.values(), key=lambda parts: max(p.lstat().st_mtime for p in parts), reverse=True)
 cutoff = time.time() - 30 * 86400
-for p in entries[20:]:
-    if p.lstat().st_mtime < cutoff:
-        shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+for parts in newest[20:]:
+    if max(p.lstat().st_mtime for p in parts) < cutoff:
+        for p in parts:
+            shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
 PRUNE
 }
 
@@ -156,9 +168,10 @@ json.dump({"exported_at": datetime.now(timezone.utc).isoformat(), "shelves": she
 EOF
     ;;
   health)
-    require_unsplit
-    backup_dir
-    exec python3 "$TOOLS_DIR/calibre-health.py" "$LIBRARY" --app-db "$APP_DB" --backups "$BACKUP_DIR"
+    # Read-only, so a split library is fine: metadata.db from one folder, the book folders from the other.
+    resolve_library
+    backup_path "$METADATA_DIR"
+    exec python3 "$TOOLS_DIR/calibre-health.py" "$METADATA_DIR" --books "$BOOKS_DIR" --app-db "$APP_DB" --backups "$BACKUP_DIR"
     ;;
   tags-preview|tags-apply)
     require_unsplit

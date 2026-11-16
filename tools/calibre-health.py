@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Read-only health check of a Calibre library: does metadata.db agree with the folders on disk?
 
-    python3 calibre-health.py <library> [--app-db app.db] [--backups <dir>]
+    python3 calibre-health.py <library> [--books <dir>] [--app-db app.db] [--backups <dir>]
+
+<library> holds metadata.db; --books is where the book folders are, when Calibre-Web keeps the library
+split (the library itself by default).
 
 Runs on the Calibre-Web host through corpus-source.sh's "health" command (corpus-mcp's Library
 health page). It never writes: metadata.db and app.db are opened read-only, and the library is only
@@ -68,12 +71,15 @@ def capped(items):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('library', type=pathlib.Path)
+    parser.add_argument('--books', type=pathlib.Path)
     parser.add_argument('--app-db', type=pathlib.Path)
     parser.add_argument('--backups', type=pathlib.Path)
     args = parser.parse_args()
-    library = args.library.resolve()
+    catalogue = args.library.resolve()
+    # Where the book folders are: beside metadata.db, or Calibre-Web's split book files folder.
+    library = (args.books or args.library).resolve()
 
-    db = sqlite3.connect(f'file:{library / "metadata.db"}?mode=ro', uri=True)
+    db = sqlite3.connect(f'file:{catalogue / "metadata.db"}?mode=ro', uri=True)
     columns = {r[1] for r in db.execute('PRAGMA table_info(books)')}
     has_cover = 'has_cover' in columns
     records = {}
@@ -164,6 +170,7 @@ def main():
 
     report = {
         'version': 1, 'checked_at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'library': str(library),
+        **({'catalogue': str(catalogue)} if catalogue != library else {}),
         'records': len(records),
         'counts': {'records_missing': len(records_missing), 'orphans': len(orphans),
                    'orphans_leftover': sum(o['kind'] == 'leftover' for o in orphans), 'orphans_lost': sum(o['kind'] == 'lost' for o in orphans),
