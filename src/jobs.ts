@@ -3,7 +3,7 @@ import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
-import { duplicateBatchPlan, duplicateContents, assertDuplicateUnreferenced, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
+import { duplicateBatchPlan, duplicateContents, assertDuplicateMovable, moveDuplicateFiling, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
 import { markIntakeApplied, scanIntake } from "./intake.js";
 import { attachUploadPayloads, removeAppliedUploads, uploadBatchPlan, type UploadBatchPlan, type UploadItemPlan, type UploadSelection } from "./upload.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
@@ -206,8 +206,9 @@ export class JobRunner {
         if (preview.items.some(it => it.duplicate_review && !Array.isArray(it.duplicate_review.plan.remove))) throw new ToolError("That preview predates batch resolution. Preview again.");
         const groups = preview.items.flatMap(it => it.duplicate_review && !it.duplicate_review.blockers.length && it.duplicate_review.plan.reviewed ? [it.duplicate_review.plan] : []);
         if (!groups.length) throw new ToolError("Every group in that preview has blockers. Resolve them and preview again.");
-        for (const g of groups) for (const r of g.remove) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);
-        params = { plan: { library: (preview.params.plan as DuplicateBatchPlan).library, groups } };
+        const library = (preview.params.plan as DuplicateBatchPlan).library;
+        for (const g of groups) assertDuplicateMovable(this.c, library, g);
+        params = { plan: { library, groups } };
       }
       if (kind === "upload") {
         const items = preview.items.flatMap(it => it.upload_review && !it.upload_review.blockers.length && it.upload_review.plan.reviewed ? [it.upload_review.plan] : []);
@@ -293,8 +294,10 @@ export class JobRunner {
         if (kind === "duplicates") {
           const actor = this.c.data.prepare("SELECT requested_by FROM jobs WHERE id = ?").pluck().get(id) as string | null;
           for (const it of items) {
-            if (it.duplicate_resolved?.trash && it.uuid) moveTagProposal(this.c.data, it.duplicate_resolved.removed_uuid,
-              { uuid: it.uuid, book_id: `${this.config.shelvesLibrary}:${it.calibre_id}`, title: it.title }, actor, id);
+            if (!it.duplicate_resolved?.trash || !it.uuid) continue;
+            const keeper = { uuid: it.uuid, book_id: `${this.config.shelvesLibrary}:${it.calibre_id}`, title: it.title };
+            moveTagProposal(this.c.data, it.duplicate_resolved.removed_uuid, keeper, actor, id);
+            moveDuplicateFiling(this.c, it.duplicate_resolved.removed_uuid, `${this.config.shelvesLibrary}:${it.duplicate_resolved.removed_id}`, keeper, actor, id);
           }
         }
       }
@@ -350,8 +353,8 @@ export class JobRunner {
         await scanIntake(this.c, this.config, log);
         return;
       case "duplicates": {
-        const removes = (params.plan as DuplicateBatchPlan).groups.flatMap(g => g.remove);
-        for (const r of removes) assertDuplicateUnreferenced(this.c, r.uuid, `Duplicate ${r.id}`);
+        const batch = params.plan as DuplicateBatchPlan, removes = batch.groups.flatMap(g => g.remove);
+        for (const g of batch.groups) assertDuplicateMovable(this.c, batch.library, g);
         if (this.config.admin?.quoteMcpUrl) for (const r of removes) await assertNoBookQuotes(this.config.admin.quoteMcpUrl, r.uuid);
         try { await this.commands.calibre(mode === "apply" ? "duplicates-apply" : "duplicates-preview", JSON.stringify(params.plan), log); }
         catch (error) {

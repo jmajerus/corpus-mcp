@@ -63,7 +63,7 @@ const KINDS = {
   tag_added: ["Tag added", "+", "good"], tag_removed: ["Tag removed", "−", "bad"], format_added: ["EPUB added", "+", "good"],
   book_added: ["New book", "+", "good"], book_reextracted: ["Re-indexed", "↻", ""], book_removed: ["Book removed", "−", "bad"],
   extraction_failed: ["Extraction failed", "!", "bad"], tag_proposed: ["Tag proposed", "?", ""], proposal_approved: ["Proposal approved", "✓", "good"],
-  proposal_rejected: ["Proposal rejected", "×", "bad"], proposal_reopened: ["Proposal reopened", "↺", ""], proposal_moved: ["Proposal moved from a duplicate", "→", ""], citekey_pinned: ["Citekey pinned", "#", ""],
+  proposal_rejected: ["Proposal rejected", "×", "bad"], proposal_reopened: ["Proposal reopened", "↺", ""], proposal_moved: ["Proposal moved from a duplicate", "→", ""], filing_moved: ["Citekey or Zotero link moved from a duplicate", "→", ""], citekey_pinned: ["Citekey pinned", "#", ""],
   categories_edited: ["Categories set", "✎", ""], citekey_unpinned: ["Citekey unpinned", "−", "bad"],
 };
 const SOURCES = { "admin-job": "Admin job", admin: "Admin page", cli: "Command line", calibre: "Seen in Calibre", review: "Review", agent: "Agent" };
