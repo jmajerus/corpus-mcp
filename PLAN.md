@@ -947,8 +947,31 @@ overwritten.
 
 ### 1. Identity
 
-- `books` gets a corpus-owned id (stable, opaque, e.g. a ULID), separate from the
-  `main:42` display id.
+**Decided 2026-11-16: three levels, and no new id authority.**
+
+| Level | Durable identifier | Owner |
+|---|---|---|
+| Edition (what is cited: pages, ISBN, citekey) | The Zotero item | Zotero |
+| Copy (a file corpus-mcp indexes) | A corpus-owned copy id | corpus-mcp |
+| Work (editions of one book, print and ebook) | None; a computed grouping, if wanted | holdings-mcp, derived |
+
+Zotero stays the durable edition identifier. It already holds the bibliographic
+record, the Better BibTeX citekeys, and the per-manuscript collections exported as
+BibTeX, none of which should be rebuilt elsewhere. Works not yet filed keep their
+interim keys (`calibre:<uuid>`, `quote:<id>`), which holdings-mcp's `former_keys`
+already carries over on filing; anything quoted has to be filed before it can be
+cited, so it ends with a Zotero item.
+
+holdings-mcp does not mint ids. It stays read-only and rebuildable from the other
+servers. A registry there would put it in every save path (quote-mcp's add_quote,
+corpus-mcp's intake), need backups and merge tooling, and give three stores a
+second id to keep in step, which is the Calibre UUID problem again.
+
+So the id below is a **copy** id: it names a file record in corpus-mcp, not the
+edition.
+
+- `books` gets a corpus-owned copy id (stable, opaque, e.g. a ULID), separate from
+  the `main:42` display id.
 - `book_origins (kind, ref, book)`: `calibre` → Calibre UUID, `zotero` → item,
   `sha256` → each file's hash. A Calibre record that appears with a known file hash
   (a re-import, a restored record) attaches to the existing book and does not start
@@ -997,20 +1020,24 @@ create the corpus record first, then add the book to Calibre as a downstream ste
 
 ### 5. quote-mcp
 
-Ask quote-mcp to record the corpus id on new checked quotes (a `corpus` work origin,
-and `$.book.corpus_id` in the quote's origin), alongside the UUID while both exist.
+A quote already belongs to a work, and a work to its Zotero item once filed: that
+is its edition, and nothing here changes it. What a checked quote also records is
+the copy it was checked against, today by Calibre UUID. Ask quote-mcp to record the
+corpus copy id there instead (`$.book.copy_id` in the quote's origin, and a `corpus`
+work origin for a work not yet filed), alongside the UUID while both exist.
 This is the most time-sensitive step, because quotes keep coming. With it, the
 duplicate-merge rebind ([proposal](docs/dev-briefs/duplicate-quote-rebind.md), on
-hold) is no longer needed: a merge re-points an origin here, and quote-mcp's link
-holds.
+hold) is no longer needed: a merge re-points an origin here, the quote's work and
+edition are untouched, and only its anchor moves to the keeper's file.
 
 ### Stages
 
 1. Corpus ids and `book_origins`; backfill from Calibre UUIDs and file hashes; APIs
    resolve through origins. No behaviour change.
-2. quote-mcp records the corpus id on new quotes; backfill existing quotes from
-   their UUIDs.
-3. Data tables move to corpus ids; duplicate merges re-point origins.
+2. quote-mcp records the corpus copy id on new checked quotes; backfill existing
+   quotes from their UUIDs.
+3. Data tables move to copy ids; duplicate merges re-point origins. Citekeys and
+   Zotero links describe the edition, so they follow the Zotero item, not a copy.
 4. Field-level sync state and the three-way refresh, with a conflict list in admin
    (adopt and conflict only; no pushes yet).
 5. Pushes to Calibre from the record; intake and upload record-first.
