@@ -1,10 +1,9 @@
 # Proposal to quote-mcp: move quotes when corpus-mcp merges duplicate books
 
-Status: proposed by corpus-mcp, 2026-11-16, and on hold the same day; not sent to
-quote-mcp and not built on either side. The plan to make Calibre downstream (PLAN.md,
-"Calibre downstream") gives books a corpus-owned id. Once quote-mcp records that id,
-a merge re-points an origin in corpus-mcp and this rebind is no longer needed. Kept
-for the record, and as a fallback if that plan stalls.
+Status: withdrawn 2026-11-16, the day it was drafted; never sent to quote-mcp and not
+built. corpus-mcp keeps an alias from a trashed record's UUID to its keeper (PLAN.md,
+"Calibre downstream", Identity), so quote-mcp's references keep resolving and no rebind
+is needed. Kept for its account of where quote-mcp ties a quote to a Calibre book.
 
 ## Why
 
