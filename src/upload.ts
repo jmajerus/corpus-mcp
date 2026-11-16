@@ -641,7 +641,7 @@ export function stageUpload(c: Corpus, config: Config, filename: string, data: B
     },
   };
   saveStagedRecord(dir, record);
-  return evaluateStagedUpload(c, config, record, candidateBooks(c));
+  return evaluateStagedUpload(c, config, record, candidateBooks(c), readStagedRecords(dir));
 }
 
 export function updateStagedUpload(c: Corpus, config: Config, id: string, patch: {
@@ -697,7 +697,7 @@ export function updateStagedUpload(c: Corpus, config: Config, id: string, patch:
     rec.draft.target_book_id = patch.target_book_id;
   }
   saveStagedRecord(dir, rec);
-  return evaluateStagedUpload(c, config, rec, candidateBooks(c));
+  return evaluateStagedUpload(c, config, rec, candidateBooks(c), readStagedRecords(dir));
 }
 
 export function removeStagedUpload(config: Config, id: string): { removed: boolean } {
@@ -725,7 +725,60 @@ function stripSketch(contents: BookContents): BookContents {
   );
 }
 
-export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploadRecord, books: DuplicateBook[]) {
+/** What a staged file is matched by: its identifiers (and printed ISBNs), titles, and author lists, from the file and the draft. */
+function matchKeys(rec: StagedUploadRecord): { ids: Set<string>; titles: Set<string>; authors: Set<string> } {
+  const ids = new Set<string>();
+  for (const [type, val] of Object.entries(rec.extracted.identifiers)) {
+    const k = identifierKey(type, val);
+    if (k) ids.add(JSON.stringify(k));
+  }
+  for (const isbn of rec.extracted.printed_isbns) {
+    const k = identifierKey("isbn", isbn);
+    if (k) ids.add(JSON.stringify(k));
+  }
+  const titles = new Set([normal(rec.extracted.title), normal(rec.draft.title)].filter(Boolean));
+  const authors = new Set([rec.extracted.authors, rec.draft.authors].map(normalAuthorsKey).filter(Boolean));
+  return { ids, titles, authors };
+}
+
+/** Why two staged files look like the same book, by the same evidence a library match uses; empty when they don't. */
+function stagedEvidence(a: ReturnType<typeof matchKeys>, b: ReturnType<typeof matchKeys>): string[] {
+  const evidence: string[] = [];
+  if ([...a.ids].some(k => b.ids.has(k))) evidence.push("Matching identifier");
+  const title = [...a.titles].find(t => b.titles.has(t));
+  if (title) {
+    if ([...a.authors].some(x => b.authors.has(x))) evidence.push("Matching title and authors");
+    else if ((!a.authors.size || !b.authors.size) && title.length >= 8 && title.includes(" ")) evidence.push("Matching title");
+  }
+  return evidence;
+}
+
+export interface StagedMatch {
+  id: string;
+  filename: string;
+  format: string;
+  evidence: string[];
+  /** True when the other file was staged first, so it is the one to add as the new book. */
+  earlier: boolean;
+}
+
+/**
+ * The other staged files that look like the same book as this one (an EPUB and a PDF of one title, or two
+ * copies with different bytes). `staged` is every staged record, in staging order.
+ */
+function stagedMatches(rec: StagedUploadRecord, staged: StagedUploadRecord[]): StagedMatch[] {
+  const mine = matchKeys(rec);
+  const at = staged.findIndex(r => r.id === rec.id);
+  const out: StagedMatch[] = [];
+  staged.forEach((other, i) => {
+    if (other.id === rec.id || other.sha256 === rec.sha256) return;
+    const evidence = stagedEvidence(mine, matchKeys(other));
+    if (evidence.length) out.push({ id: other.id, filename: other.filename, format: other.format, evidence, earlier: at < 0 || i < at });
+  });
+  return out;
+}
+
+export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploadRecord, books: DuplicateBook[], staged: StagedUploadRecord[] = []) {
   const dir = uploadDir(config);
   const binPath = path.join(dir, `${rec.id}.${rec.ext}`);
 
@@ -738,21 +791,7 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   }
 
   // Keys for identifier and title/author matching (from both extracted and draft metadata).
-  const uploadIdKeys = new Set<string>();
-  for (const [type, val] of Object.entries(rec.extracted.identifiers)) {
-    const k = identifierKey(type, val);
-    if (k) uploadIdKeys.add(JSON.stringify(k));
-  }
-  for (const isbn of rec.extracted.printed_isbns) {
-    const k = identifierKey("isbn", isbn);
-    if (k) uploadIdKeys.add(JSON.stringify(k));
-  }
-  const titleSet = new Set([normal(rec.extracted.title), normal(rec.draft.title)].filter(Boolean));
-  const authorSignatures = new Set(
-    [rec.extracted.authors, rec.draft.authors]
-      .map(normalAuthorsKey)
-      .filter(Boolean),
-  );
+  const { ids: uploadIdKeys, titles: titleSet, authors: authorSignatures } = matchKeys(rec);
 
   const exactMatches: { id: string; title: string; authors: string[]; year: number | null; formats: string[]; library: string; calibre_id: number; matched_format: string }[] = [];
   const candidateMap = new Map<string, { book: DuplicateBook; evidence: Set<string> }>();
@@ -886,11 +925,15 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   }
 
   const addFormatMatch = matches.find(m => m.can_add_format);
+  // A file whose book is staged earlier waits: once that one is added, this one is matched to it and
+  // offered as a new format (or, if it's another edition, it can be added on its own in a later preview).
+  const staged_matches = stagedMatches(rec, staged);
+  const waitsFor = staged_matches.find(m => m.earlier);
   const suggested_action: UploadAction = blockers.length
     ? "skip"
     : addFormatMatch
     ? "add_format"
-    : matches.length
+    : matches.length || waitsFor
     ? "skip"
     : "add_book";
   const suggested_target = addFormatMatch?.book.id ?? null;
@@ -941,6 +984,7 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     ...findings,
     exact_matches: exactMatches,
     matches,
+    staged_matches,
     blockers,
     suggested_action,
     suggested_target,
@@ -962,7 +1006,7 @@ export function stagedUploadState(config: Config): { files: number; bytes: numbe
 export function listStagedUploads(c: Corpus, config: Config) {
   const records = readStagedRecords(uploadDir(config));
   const books = records.length ? candidateBooks(c) : [];
-  const items = records.map(r => evaluateStagedUpload(c, config, r, books));
+  const items = records.map(r => evaluateStagedUpload(c, config, r, books, records));
   return {
     items,
     last_scan: c.db.prepare("SELECT value FROM meta WHERE key='last_scan'").pluck().get() ?? null,
@@ -1013,7 +1057,9 @@ export interface UploadBatchPlan {
 export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSelection[]): UploadBatchPlan {
   if (!selections.length) throw new ToolError("Select at least one staged file to upload.");
   const dir = uploadDir(config);
-  const staged = new Map(readStagedRecords(dir).map(r => [r.id, r]));
+  const stagedList = readStagedRecords(dir);
+  const staged = new Map(stagedList.map(r => [r.id, r]));
+  const newBooks: { id: string; filename: string }[] = [];
   const books = candidateBooks(c);
   const seenIds = new Set<string>();
   const seenHashes = new Set<string>();
@@ -1047,7 +1093,7 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
     if (sel.target_book_id !== undefined) rec.draft.target_book_id = sel.target_book_id;
     saveStagedRecord(dir, rec);
 
-    const evaluated = evaluateStagedUpload(c, config, rec, books);
+    const evaluated = evaluateStagedUpload(c, config, rec, books, stagedList);
     if (evaluated.contents_pending.length) {
       throw new ToolError(`The ${evaluated.contents_pending.join(" and ")} contents of ${rec.filename} are still being checked. Wait until the upload page shows them, then preview again.`);
     }
@@ -1114,6 +1160,13 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
       throw new ToolError(`${rec.filename}: enter a publication year from 1001 to 9999, or leave it blank.`);
     }
     const tags = rec.draft.tags.filter(Boolean);
+    // Two files of one book would become two Calibre records. Add one now; the next preview offers the
+    // other as a format of it, or as another edition.
+    const twin = newBooks.find(b => evaluated.staged_matches.some(m => m.id === b.id));
+    if (twin) {
+      throw new ToolError(`${twin.filename} and ${rec.filename} look like the same book, and both would be added as new books. Add one now; after it's applied, the other is offered as a format of it (or add it then as another edition).`);
+    }
+    newBooks.push({ id: rec.id, filename: rec.filename });
     return {
       id: rec.id,
       filename: rec.filename,

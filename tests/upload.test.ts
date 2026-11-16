@@ -687,3 +687,29 @@ it("still reads a short title page and copyright page from an EPUB without a cre
   expect(meta.authors).toEqual(["Ada Lovelace"]);
   expect(meta.year).toBe(2019);
 });
+
+it("flags two staged files of the same book and refuses to add both as new books", () => {
+  const epub = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2009", isbn: "9780061238369", text: "The EPUB edition." });
+  const other = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2006", isbn: "9780061238369", text: "A different copy." });
+  const first = stageUpload(c, config, "Mystic River.epub", epub);
+  const second = stageUpload(c, config, "Mystic River (copy).epub", other);
+  expect(second.staged_matches).toEqual([
+    { id: first.id, filename: "Mystic River.epub", format: "EPUB", evidence: ["Matching identifier", "Matching title and authors"], earlier: true },
+  ]);
+  expect(second.draft.action).toBe("skip");
+  expect(second.allowed_actions).toContain("add_book");
+
+  const listed = listStagedUploads(c, config).items;
+  expect(listed.find(i => i.id === first.id)!.draft.action).toBe("add_book");
+  expect(listed.find(i => i.id === first.id)!.staged_matches.map(m => m.earlier)).toEqual([false]);
+
+  // Choosing both as new books in one preview is refused; one at a time is allowed.
+  const both = [first, second].map(s => ({ id: s.id, sha256: s.sha256, action: "add_book" as const }));
+  expect(() => uploadBatchPlan(c, config, both)).toThrow(/look like the same book/);
+  expect(uploadBatchPlan(c, config, [both[0]]).items).toHaveLength(1);
+
+  // A different book with the same title alone is not a match.
+  const unrelated = stageUpload(c, config, "Mystic River Poems.epub", makeRichEpub({ title: "Mystic River", author: "Someone Else", year: "1990" }));
+  expect(unrelated.staged_matches).toEqual([]);
+  expect(unrelated.draft.action).toBe("add_book");
+});

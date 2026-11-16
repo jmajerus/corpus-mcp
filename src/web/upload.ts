@@ -98,7 +98,22 @@ function statusBadge(it) {
       ? '<span class="badge warn"><span class="sign" aria-hidden="true">+</span>Matches existing book · new format (' + esc(it.primary_format) + ")</span>"
       : '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Matches existing book · ' + esc(it.primary_format) + " already in library</span>";
   }
+  if (it.staged_matches && it.staged_matches.length) {
+    return '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Same book as another staged file</span>';
+  }
   return '<span class="badge good"><span class="sign" aria-hidden="true">✓</span>New book</span>';
+}
+
+/** Which other staged files look like the same book, and what to do about it. */
+function stagedMatchNote(it) {
+  const sm = it.staged_matches || [];
+  if (!sm.length) return "";
+  const list = sm.map((m) => esc(m.filename) + " (" + esc(m.evidence.join(", ")) + ")").join("; ");
+  const earlier = sm.filter((m) => m.earlier);
+  const advice = earlier.length
+    ? "Add " + esc(earlier[0].filename) + " first. Once it's applied, this file is offered as a new format of it; if it's another edition, add it then as a separate book."
+    : "Add this one first. Once it's applied, the other file is offered as a new format of it.";
+  return '<p class="warning">Also staged, and looks like the same book: ' + list + ". " + advice + "</p>";
 }
 
 function contentsTable(it) {
@@ -153,7 +168,7 @@ function updateBatch() {
   const chosen = readyItems.filter((it) => picked[it.id]);
   const addBooks = chosen.filter((it) => it.draft.action === "add_book").length;
   const addFormats = chosen.filter((it) => it.draft.action === "add_format").length;
-  const blocked = items.filter((it) => it.blockers.length || (it.matches.length && it.draft.action === "skip")).length;
+  const blocked = items.filter((it) => it.blockers.length || ((it.matches.length || (it.staged_matches || []).some((m) => m.earlier)) && it.draft.action === "skip")).length;
   const selectedBytes = chosen.reduce((sum, it) => sum + it.size, 0);
   const over = selectedBytes - batchLimit;
   const btn = document.getElementById("preview-batch");
@@ -223,7 +238,7 @@ function render() {
       choices.push('<label class="note" title="The matched record already has this format"><input type="radio" disabled> Add format to existing book (already has ' + esc(it.primary_format) + ")</label>");
     }
     if (it.allowed_actions.includes("add_book")) {
-      choices.push('<label><input type="radio" name="act-' + idx + '" data-action="' + idx + '" value="add_book"' + (act === "add_book" ? " checked" : "") + (canWrite ? "" : " disabled") + "> " + (it.matches.length ? "Add as separate book (another edition)" : "Add as new book") + "</label>");
+      choices.push('<label><input type="radio" name="act-' + idx + '" data-action="' + idx + '" value="add_book"' + (act === "add_book" ? " checked" : "") + (canWrite ? "" : " disabled") + "> " + (it.matches.length || (it.staged_matches || []).some((m) => m.earlier) ? "Add as separate book (another edition)" : "Add as new book") + "</label>");
     }
     choices.push('<label><input type="radio" name="act-' + idx + '" data-action="' + idx + '" value="skip"' + (act === "skip" ? " checked" : "") + (canWrite ? "" : " disabled") + "> Skip</label>");
 
@@ -251,6 +266,7 @@ function render() {
       it.blockers.map((b) => '<p class="bad"><strong>' + esc(b) + "</strong></p>").join("") +
       uniqueWarnings.map((w) => '<p class="warning">' + esc(w) + "</p>").join("") +
       (it.content_notes || []).map((w) => '<p class="note">' + esc(w) + "</p>").join("") +
+      stagedMatchNote(it) +
       matchedHtml +
       '<div class="choice">' + choices.join("") + "</div>" +
       targetPicker +
@@ -385,6 +401,8 @@ async function saveDraft(it, explicitAction = false) {
       if (picked[updated.id] === undefined) picked[updated.id] = true;
     }
     if (!actionable(updated)) picked[updated.id] = false;
+    // An edited title or author can make or break a match with another staged file, whose card changes too.
+    if ((it.staged_matches || []).length || (updated.staged_matches || []).length) { await load(); return; }
     render();
   } catch (e) {
     toast(e.message);
