@@ -10,8 +10,11 @@ overlapping evidence is combined into one result per pair. Large actual duplicat
 groups still produce one result per matching pair. Unchanged mirrored catalogue
 metadata is cached by file identity/size/nanosecond modification and change times,
 including the WAL signature. Indexed records, decisions and grouped reference
-counts are read fresh on every request. Filed Zotero UUIDs are blockers even
-without an explicit link, including old items with active merged survivors.
+counts are read fresh on every request. Quotes and anchors pin a record as the
+keeper. A tag proposal, a pinned citekey and Zotero filing (a confirmed link, or an
+item whose Extra names the record's UUID, including old items with active merged
+survivors) move to the keeper after the trash instead; see
+[duplicate-merges.md](duplicate-merges.md) for the rules and the merges still planned.
 
 A change invalidates that decision; cross-library pairs are reviewable but cannot be
 merged or trashed by this workflow.

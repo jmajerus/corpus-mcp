@@ -435,9 +435,17 @@ formats, or reference counts) makes the pair appear again automatically.
 To resolve a group, choose its **Keep** record; every record that matches the keeper
 directly is marked **Trash**. Untick any you want to leave alone. A record that only
 matches another duplicate (A–B–C, where C does not match A) cannot merge into that
-keeper, a record with saved references (quotes, anchors, a citekey, Zotero links) can
-only be the keeper, and a record in another library than the keeper cannot be trashed
-into it.
+keeper, a record with quotes or anchors can only be the keeper, and a record in
+another library than the keeper cannot be trashed into it.
+
+A trashed record's pinned citekey and Zotero filing move to the keeper when the copies
+are one edition: they share a selected file or an identifier (ISBN, ASIN and the like),
+or you tick **These records are the keeper's edition** on the card. A Zotero item filed
+with the trashed record's UUID becomes the keeper's confirmed link; rejected Zotero
+candidates carry over. A record still blocks when it and the keeper are cited by
+different citekeys or match different Zotero items, since they may be different
+editions. The Changes page logs each move as "Citekey or Zotero link moved from a
+duplicate".
 
 A tag proposal does not hold a record: it is about the work, not one copy's file. When
 a record is trashed, its proposal moves to the keeper. If the keeper has one too, a
@@ -459,8 +467,8 @@ same way. Only if they share at least 90% of their text and their counts match d
 the card explain the gap (images, fonts or markup) in a note instead of warning. The count above the groups says how
 many groups have a warning, and the preview repeats them.
 
-The suggested keeper is a record with saved references (not counting a tag proposal), then the copy that falls
-short least, then one with a colour cover rather than a black-and-white or missing
+The suggested keeper is a record with quotes or anchors, then the copy that falls
+short least, then one with a citekey or Zotero link, then one with a colour cover rather than a black-and-white or missing
 one, then one on a public Calibre-Web shelf, then an indexed one, then the one with
 the most formats, then the one added to Calibre first. The keeper's own files and
 cover are what survive, and older MOBI-era records often carry greyscale covers;

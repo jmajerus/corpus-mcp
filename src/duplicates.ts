@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import * as mupdf from "mupdf";
-import { type BookRow, type Corpus, ToolError } from "./tools.js";
-import { recordChanges } from "./data.js";
+import { type BookRow, type Corpus, ToolError, effectiveCitekey } from "./tools.js";
+import { pinnedByUuid, recordChanges } from "./data.js";
+import { filedZoteroKey, zoteroMatch } from "./zotero.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 
@@ -16,9 +17,34 @@ export const normalAuthorsKey = (authors: string[]) =>
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
-/** References tied to one record's file or Zotero item. A tag proposal is about the work, so it moves to the keeper instead. */
-const PINNED_TABLES = REFERENCE_TABLES.filter(t => t !== "tag_proposals");
+/** References to positions in one record's file (quote-mcp's anchors, corpus-mcp's old quotes): the record must be the keeper. */
+const PINNED_TABLES = ["quotes", "anchors"] as const;
+/** How the work is filed (a pinned citekey, a Zotero link): these move to the keeper when the copies are the same edition. */
+const FILING_TABLES = ["citekeys", "zotero_links", "zotero_items"] as const;
 export const pinnedReferences = (refs: Record<string, number>) => PINNED_TABLES.some(t => (refs[t] ?? 0) > 0);
+export const filingReferences = (refs: Record<string, number>) => FILING_TABLES.some(t => (refs[t] ?? 0) > 0);
+/** Shared files or identifiers show two records are one edition; a title and authors alone do not. */
+export const sameEditionEvidence = (evidence: readonly string[]) => evidence.includes("Identical selected file") || evidence.includes("Matching identifier");
+
+/** A record's citekey (Calibre's, else pinned) and the Zotero item it matches, to see whether its filing can move. */
+export interface Filing { citekey: string | null; zotero: string | null }
+export function bookFiling(c: Corpus, book: BookRow): Filing {
+  return { citekey: effectiveCitekey(book, pinnedByUuid(c.data, book.uuid)).citekey, zotero: zoteroMatch(c, book).match?.key ?? null };
+}
+
+/**
+ * Why a record's citekey or Zotero link cannot move to the keeper, or null when it can (or it has none).
+ * The same rule runs on the review page (web/duplicates.ts).
+ */
+export function filingBlocker(drop: { id: string; references: Record<string, number>; filing: Filing }, keep: { id: string; filing: Filing }, sameEdition: boolean): string | null {
+  if (!filingReferences(drop.references)) return null;
+  const a = drop.filing, b = keep.filing;
+  if (a.citekey && b.citekey && a.citekey.toLowerCase() !== b.citekey.toLowerCase()) return `${drop.id} is cited as ${a.citekey} and ${keep.id} as ${b.citekey}; they may be different editions.`;
+  if (a.zotero && b.zotero && a.zotero !== b.zotero) return `${drop.id} and ${keep.id} match different Zotero items; they may be different editions.`;
+  if (!sameEdition) return `${drop.id} has a citekey or Zotero link, and nothing shows it is the same edition as ${keep.id} (no shared file or identifier). Confirm the same edition to move it.`;
+  return null;
+}
+
 const emptyReferences = () => Object.fromEntries(REFERENCE_TABLES.map(table => [table, 0]));
 
 export function duplicateReferences(c: Corpus, uuid: string) {
@@ -191,11 +217,11 @@ export function candidateBooks(c: Corpus) {
     };
     // `added`, shelves, the cover and the contents only rank the suggested keeper; they stay out of
     // the fingerprints, so keep-both decisions hold. Covers and contents are read only for candidates (see below).
-    return { ...book, printed_isbns: printedIsbns, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, folder: b.folder,
+    return { ...book, printed_isbns: printedIsbns, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, filing: null as Filing | null, folder: b.folder,
       sizes: metadata.get(b.id)?.sizes ?? {}, files: metadata.get(b.id)?.files ?? {}, contents: {} as BookContents, content_flags: 0, fingerprint: hash(book) };
   });
 }
-const hashed = ({ printed_isbns: _printedIsbns, added: _added, shelves: _shelves, cover_colour: _cover, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const hashed = ({ printed_isbns: _printedIsbns, added: _added, shelves: _shelves, cover_colour: _cover, filing: _filing, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 
 /** Copies whose EPUB or PDF sizes differ by this fraction or more are flagged (as in tools/calibre-duplicates.py). */
 export const SIZE_DIFFERENCE = 0.1;
@@ -225,7 +251,7 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
     const key = JSON.stringify([a.id, b.id]), fingerprint = hash([hashed(a), hashed(b)]);
     const dismissed = decisions.get(key) === fingerprint;
     if (dismissed && !includeDismissed) continue;
-    pairs.push({ key, fingerprint, books: [a,b], evidence, dismissed,
+    pairs.push({ key, fingerprint, books: [a,b], evidence, dismissed, same_edition: sameEditionEvidence(evidence),
       edition_warning: a.year !== b.year ? "Publication years differ; these may be different editions." : null,
       writable: a.library === writableLibrary && b.library === writableLibrary && a.uuid !== null && b.uuid !== null && a.uuid !== b.uuid });
   }
@@ -234,7 +260,7 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
 
 /** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
  * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
- * C merge into A. The suggested keeper is a record with saved references (a tag proposal moves instead), then the one whose EPUB or PDF falls
+ * C merge into A. The suggested keeper is a record with saved quotes or anchors (a tag proposal, citekey or Zotero link moves instead), then the one whose EPUB or PDF falls
  * short least against its duplicates, then one with a colour cover, then
  * one on a Calibre-Web shelf, then an indexed one, then the one with the most formats, then the one
  * added to Calibre first (by its added date, then its id). */
@@ -257,6 +283,7 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
         if (b.files[fmt]) b.contents[fmt] = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt, c.data);
       }
     }
+    for (const b of g.books.values()) b.filing = bookFiling(c, c.db.prepare("SELECT * FROM books WHERE id = ?").get(b.id) as BookRow);
     const books = [...g.books.values()];
     for (const w of contentFindings(books, []).content_warnings) for (const id of w.against) g.books.get(id)!.content_flags++;
   }
@@ -267,8 +294,10 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
   // one (older MOBI-era records often carry greyscale covers). Shelf links move to the keeper either
   // way, so a shelf only breaks ties.
   const criteria: [string, (b: DuplicateBook) => number][] = [
-    ["has saved references", b => referenced(b) ? 0 : 1],
+    ["has saved quotes or anchors", b => referenced(b) ? 0 : 1],
     ["has the most complete contents", b => b.content_flags],
+    // A citekey or Zotero link moves to the keeper when the copies are one edition, so it only breaks ties.
+    ["is filed with a citekey or in Zotero", b => b.filing?.citekey || b.filing?.zotero ? 0 : 1],
     ["has a colour cover", b => colour(b) ? 0 : 1],
     ["is on a Calibre-Web shelf", b => b.shelves.length ? 0 : 1],
     ["is indexed", b => b.status === "indexed" ? 0 : 1],
@@ -315,8 +344,10 @@ export function duplicateContents(c: Corpus, writableLibrary: string, keepers: s
   return out;
 }
 
-export interface DuplicateGroupSelection { keep: string; remove: string[]; fingerprints: Record<string, string>; discard_conflicts?: boolean }
-export interface DuplicateBatchPlan { library: string; groups: { keep: { id: number; uuid: string }; remove: { id: number; uuid: string }[]; discard_conflicts: boolean }[] }
+/** `same_edition`: the reviewer confirmed that the trashed records are the keeper's edition, so their citekeys and Zotero links may move without a shared file or identifier. */
+export interface DuplicateGroupSelection { keep: string; remove: string[]; fingerprints: Record<string, string>; discard_conflicts?: boolean; same_edition?: boolean }
+export interface DuplicatePlanGroup { keep: { id: number; uuid: string }; remove: { id: number; uuid: string }[]; discard_conflicts: boolean; same_edition?: boolean }
+export interface DuplicateBatchPlan { library: string; groups: DuplicatePlanGroup[] }
 
 /** Checks a batch of reviewed groups against the current index: each book unchanged since the
  * page showed it, in one group only, writable, and each trashed record unreferenced and paired
@@ -342,15 +373,66 @@ export function duplicateBatchPlan(c: Corpus, library: string, selections: Dupli
       if (!pair) throw new ToolError(`${id} is not a duplicate candidate of keeper ${s.keep}. Choose a keeper it matches directly.`);
       if (!pair.writable) throw new ToolError("Resolve duplicates within the writable Calibre library only.");
       const book = books.get(id)!;
-      assertDuplicateUnreferenced(c, book.uuid!, id);
       return { id: book.calibre_id, uuid: book.uuid! };
     });
-    return { keep: { id: keep.calibre_id, uuid: keep.uuid! }, remove, discard_conflicts: s.discard_conflicts === true };
+    const group: DuplicatePlanGroup = { keep: { id: keep.calibre_id, uuid: keep.uuid! }, remove, discard_conflicts: s.discard_conflicts === true, ...(s.same_edition ? { same_edition: true } : {}) };
+    assertDuplicateMovable(c, library, group, pairs);
+    return group;
   });
   return { library, groups };
 }
-export function assertDuplicateUnreferenced(c: Corpus, uuid: string, label = "The record to trash") {
-  if (pinnedReferences(duplicateReferences(c, uuid))) throw new ToolError(`${label} has saved references. Resolve those links before trashing it.`);
+
+/**
+ * Checked when planning and again just before Calibre trashes anything: no trashed record has quotes or
+ * anchors, and each one's citekey or Zotero link can move to the keeper (see filingBlocker).
+ */
+export function assertDuplicateMovable(c: Corpus, library: string, group: DuplicatePlanGroup, pairs = duplicatePairs(c, library).pairs) {
+  const byUuid = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE uuid = ?");
+  const keepRow = byUuid.get(group.keep.uuid);
+  for (const r of group.remove) {
+    const id = `${library}:${r.id}`, refs = duplicateReferences(c, r.uuid);
+    if (pinnedReferences(refs)) throw new ToolError(`${id} has saved quotes or anchors, so it can only be the keeper. Resolve those links before trashing it.`);
+    if (!filingReferences(refs)) continue;
+    const dropRow = byUuid.get(r.uuid);
+    if (!keepRow || !dropRow) throw new ToolError(`${id} or its keeper is no longer in the index. Refresh and review again.`);
+    const pair = pairs.find(p => p.books.some(b => b.uuid === r.uuid) && p.books.some(b => b.uuid === group.keep.uuid));
+    const blocker = filingBlocker({ id, references: refs, filing: bookFiling(c, dropRow) }, { id: keepRow.id, filing: bookFiling(c, keepRow) },
+      group.same_edition === true || (pair ? pair.same_edition : false));
+    if (blocker) throw new ToolError(blocker);
+  }
+}
+
+/**
+ * After Calibre trashed a duplicate: its pinned citekey and Zotero links move to the keeper. A confirmed link
+ * (or an item filed with the duplicate's UUID in Extra, which Zotero owns and the next sync rewrites) becomes
+ * the keeper's confirmed link; rejections carry over. Anything the keeper already has stays as it is.
+ */
+export function moveDuplicateFiling(c: Corpus, removedUuid: string, removedId: string, keeper: { uuid: string; book_id: string; title: string }, actor?: string | null, jobId?: number): string[] {
+  const moved: string[] = [];
+  const zoteroKey = filedZoteroKey(c, removedUuid);
+  c.data.transaction(() => {
+    const pin = pinnedByUuid(c.data, removedUuid);
+    if (pin) {
+      if (!pinnedByUuid(c.data, keeper.uuid)) {
+        c.data.prepare("UPDATE citekeys SET calibre_uuid = ?, book_id = ?, title = ? WHERE calibre_uuid = ?").run(keeper.uuid, keeper.book_id, keeper.title, removedUuid);
+        moved.push(`citekey ${pin.citekey}`);
+      } else c.data.prepare("DELETE FROM citekeys WHERE calibre_uuid = ?").run(removedUuid);
+    }
+    const keeperConfirmed = c.data.prepare("SELECT 1 FROM zotero_links WHERE calibre_uuid = ? AND status = 'confirmed'").pluck().get(keeper.uuid);
+    if (zoteroKey && !keeperConfirmed) {
+      c.data.prepare("DELETE FROM zotero_links WHERE calibre_uuid = ? AND zotero_key = ?").run(keeper.uuid, zoteroKey);
+      c.data.prepare("INSERT INTO zotero_links (calibre_uuid, zotero_key, status, linked_by, linked_at) VALUES (?, ?, 'confirmed', ?, ?)")
+        .run(keeper.uuid, zoteroKey, actor ?? null, new Date().toISOString());
+      moved.push(`Zotero item ${zoteroKey}`);
+    }
+    c.data.prepare(`INSERT OR IGNORE INTO zotero_links (calibre_uuid, zotero_key, status, linked_by, linked_at)
+      SELECT ?, zotero_key, 'rejected', linked_by, linked_at FROM zotero_links WHERE calibre_uuid = ? AND status = 'rejected' AND zotero_key IS NOT ?`)
+      .run(keeper.uuid, removedUuid, zoteroKey);
+    c.data.prepare("DELETE FROM zotero_links WHERE calibre_uuid = ?").run(removedUuid);
+  })();
+  if (moved.length) recordChanges(c.data, moved.map(detail => ({ kind: "filing_moved" as const, source: "admin-job" as const, job_id: jobId ?? null,
+    book_id: keeper.book_id, calibre_uuid: keeper.uuid, title: keeper.title, detail: `${detail} from ${removedId}`, actor: actor ?? null })));
+  return moved;
 }
 export function dismissDuplicate(c: Corpus, library: string, ids: string[], fingerprint: string, reopen: boolean, actor?: string) {
   const pair = duplicatePairs(c, library, true).pairs.find(p => p.books.map(b => b.id).every(id => ids.includes(id)) && ids.length === 2);

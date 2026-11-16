@@ -3,7 +3,7 @@ export const DUPLICATES_HTML = page({
   title: "Duplicates", nav: "duplicates",
   css: `.pair{margin:16px 0}.compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.cover{float:right;width:70px;max-height:110px;object-fit:contain}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.warning{color:var(--warn)}.member{border-left:3px solid transparent;padding-left:10px}.member.keep{border-left-color:var(--ok)}.member.trash{border-left-color:var(--danger);opacity:.85}.choice{display:flex;gap:16px;flex-wrap:wrap}.matches li{margin:4px 0}.contents td,.contents th{text-align:right}.contents th:first-child{text-align:left}.contents td.short{color:var(--warn);font-weight:600}.batch{position:sticky;top:0;z-index:2;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:12px 0}`,
   body: `<h1>Review duplicate books</h1>
-<p class="sub">Each group links records that match by file, identifier, or title and authors. Choose the keeper; the records marked Trash are merged into it (unique formats, tags, missing metadata and cover), their Calibre-Web shelf memberships move to it, and they go to Calibre’s trash, after a backup. The suggested keeper is a record with saved references (quotes, anchors, citekeys, Zotero links), then the one whose EPUB or PDF is most complete (figures, table of contents, print page numbers, text), then one with a colour cover, then one on a shelf. A trashed record’s tag proposal moves to the keeper. Select several groups to preview and apply them as one batch; groups with blockers are skipped.</p>
+<p class="sub">Each group links records that match by file, identifier, or title and authors. Choose the keeper; the records marked Trash are merged into it (unique formats, tags, missing metadata and cover), their Calibre-Web shelf memberships move to it, and they go to Calibre’s trash, after a backup. The suggested keeper is a record with saved quotes or anchors, then the one whose EPUB or PDF is most complete (figures, table of contents, print page numbers, text), then one with a citekey or Zotero link, then one with a colour cover, then one on a shelf. A trashed record’s tag proposal moves to the keeper, and so do its citekey and Zotero link when the copies are the same edition (a shared file or identifier, or your confirmation). Select several groups to preview and apply them as one batch; groups with blockers are skipped.</p>
 <div class="actions"><button id="refresh-source" disabled>Refresh from Calibre</button><span id="freshness" class="note"></span></div>
 <p id="refresh-status" role="status" aria-live="polite"></p>
 <div class="filters"><input type="search" id="search" placeholder="Search title, author, or book ID" aria-label="Search duplicate groups"><label><input type="checkbox" id="dismissed"> Include reviewed keep-both pairs</label></div>
@@ -13,17 +13,30 @@ export const DUPLICATES_HTML = page({
 let groups = [], state = {}, canWrite = false, calibreWebUrl = null, writableLibrary = null, refreshRunning = false;
 const pairKey = (a,b) => [a,b].sort().join('|');
 function direct(g){const m=new Map();for(const p of g.pairs)if(!p.dismissed)m.set(pairKey(p.books[0].id,p.books[1].id),p);return m;}
-/** Saved references tie a record to its own file or Zotero item; a tag proposal moves to the keeper instead. */
-const referenced = b => Object.entries(b.references||{}).some(([k,v])=>k!=='tag_proposals'&&v>0);
-/** The records that may be trashed into keeper: paired with it directly, unreferenced, and that pair writable. */
-function trashable(g,keep,b){const p=direct(g).get(pairKey(keep,b.id));return b.id!==keep&&!!p&&p.writable&&!referenced(b);}
+/** Quotes and anchors point into a record's own file, so it can only be the keeper. A tag proposal, citekey or Zotero link moves to the keeper instead. */
+const referenced = b => ['quotes','anchors'].some(k=>(b.references||{})[k]>0);
+const filed = b => ['citekeys','zotero_links','zotero_items'].some(k=>(b.references||{})[k]>0);
+/** As filingBlocker in duplicates.ts: why b's citekey or Zotero link cannot move to keep. kind 'edition' is settled by confirming the same edition. */
+function filingBlock(g,keep,b){
+ if(!filed(b))return null;
+ const k=g.books.find(x=>x.id===keep),a=b.filing||{},f=(k&&k.filing)||{};
+ if(a.citekey&&f.citekey&&a.citekey.toLowerCase()!==f.citekey.toLowerCase())return {kind:'conflict',text:'Cited as '+a.citekey+', the keeper as '+f.citekey+'; they may be different editions.'};
+ if(a.zotero&&f.zotero&&a.zotero!==f.zotero)return {kind:'conflict',text:'Matches a different Zotero item from the keeper; they may be different editions.'};
+ const p=direct(g).get(pairKey(keep,b.id));
+ if(!(p&&p.same_edition)&&!state[g.key]?.edition)return {kind:'edition',text:'Has a citekey or Zotero link, and no shared file or identifier shows it is the keeper’s edition. Confirm the same edition below to move it.'};
+ return null;
+}
+/** The records that may be trashed into keeper: paired with it directly, no quotes or anchors, filing that can move, and that pair writable. */
+function trashable(g,keep,b){const p=direct(g).get(pairKey(keep,b.id));return b.id!==keep&&!!p&&p.writable&&!referenced(b)&&!filingBlock(g,keep,b);}
+/** Whether the group needs the same-edition confirmation for some record to move its filing. */
+function needsEdition(g,keep){return g.books.some(b=>{if(b.id===keep||referenced(b))return false;const x=filingBlock(g,keep,b);return x?x.kind==='edition':(!!state[g.key]?.edition&&filed(b)&&!direct(g).get(pairKey(keep,b.id))?.same_edition);});}
 function init(g){
- const old=state[g.key];
+ const old=state[g.key];if(old===undefined)state[g.key]={edition:false};
  const keep=old&&g.books.some(b=>b.id===old.keep)?old.keep:g.suggested_keep;
  const trash=old?old.trash.filter(id=>trashable(g,keep,g.books.find(b=>b.id===id))):g.books.filter(b=>trashable(g,keep,b)).map(b=>b.id);
- state[g.key]={keep,trash,picked:old?.picked??false,conflicts:old?.conflicts??false};
+ state[g.key]={keep,trash,picked:old?.picked??false,conflicts:old?.conflicts??false,edition:old?.edition??false};
 }
-function selection(g){const s=state[g.key];const ids=[s.keep,...s.trash];return {keep:s.keep,remove:s.trash,discard_conflicts:s.conflicts,fingerprints:Object.fromEntries(g.books.filter(b=>ids.includes(b.id)).map(b=>[b.id,b.fingerprint]))};}
+function selection(g){const s=state[g.key];const ids=[s.keep,...s.trash];return {keep:s.keep,remove:s.trash,discard_conflicts:s.conflicts,...(s.edition?{same_edition:true}:{}),fingerprints:Object.fromEntries(g.books.filter(b=>ids.includes(b.id)).map(b=>[b.id,b.fingerprint]))};}
 function pending(g){return (g.contents_pending||[]).length>0;}
 function ready(g){return canWrite&&state[g.key].trash.length>0&&!pending(g);}
 function shown(){const q=document.getElementById('search').value.toLowerCase();return groups.filter(g=>g.books.some(b=>(b.id+' '+b.title+' '+b.authors.join(' ')).toLowerCase().includes(q)));}
@@ -56,11 +69,13 @@ function render() {
    const calibreLink=calibreWebUrl && b.library===writableLibrary ? '<p><a href="'+esc((calibreWebUrl.endsWith('/') ? calibreWebUrl.slice(0,-1) : calibreWebUrl)+'/book/'+b.calibre_id)+'" target="_blank" rel="noopener">Open this record in Calibre-Web</a></p>' : '';
    const refs=Object.entries(b.references).filter(([k,v])=>v).map(([k,v])=>k+': '+v).join(', ');
    const p=direct(g).get(pairKey(s.keep,b.id));
-   const why=keep?'':!canTrash?(referenced(b)?'Has saved references; it can only be the keeper.':!p?'Does not match the keeper directly; choose another keeper or resolve it separately.':'Not in the writable library with the keeper.'):'';
+   const block=keep?null:filingBlock(g,s.keep,b);
+   const why=keep?'':!canTrash?(referenced(b)?'Has saved quotes or anchors; it can only be the keeper.':!p?'Does not match the keeper directly; choose another keeper or resolve it separately.':!p.writable?'Not in the writable library with the keeper.':block?block.text:''):'';
+   const moves=trash?[b.references.tag_proposals?'tag proposal'+(g.books.find(k=>k.id===s.keep)?.references.tag_proposals?' (combined with the keeper’s)':''):null,filed(b)?'citekey and Zotero link':null].filter(Boolean):[];
    return '<div class="member'+(keep?' keep':trash?' trash':'')+'"><img class="cover" src="/api/books/'+encodeURIComponent(b.id)+'/cover" alt="" loading="lazy" onerror="this.remove()"><h3>'+bookLink(b.id,b.title)+'</h3><p>'+esc(b.id)+' · '+esc(b.authors.join('; '))+' · '+esc(b.year??'Year unknown')+'</p><p>Formats: '+esc(b.formats.join(', ')||'none')+' · '+esc(b.status)+(b.file_size?' · '+esc((b.file_size/1048576).toFixed(1))+' MiB':'')+'</p>'+(b.error?'<p class="warning">'+esc(b.error)+'</p>':'')+'<p>'+Object.entries(b.identifiers).map(([k,v])=>esc(k+': '+v)).join(' · ')+'</p><p>Saved references: '+esc(refs||'none')+'</p><p'+(b.cover_colour!==null&&b.cover_colour<5?' class="warning"':'')+'>'+esc(looks.join(' · '))+'</p>'+(b.id===g.suggested_keep?'<p class="note">Suggested keeper: it '+esc(g.suggested_because)+'.</p>':'')+calibreLink
-    +'<p class="choice"><label><input type="radio" name="keep-'+n+'" data-keep="'+n+'" value="'+esc(b.id)+'" '+(keep?'checked':'')+'> Keep</label><label><input type="checkbox" data-trash="'+n+'" value="'+esc(b.id)+'" '+(trash?'checked ':'')+(canTrash?'':'disabled')+'> Trash</label></p>'+(why?'<p class="note">'+esc(why)+'</p>':'')+(trash&&b.references.tag_proposals?'<p class="note">Its tag proposal moves to the keeper'+(g.books.find(k=>k.id===s.keep)?.references.tag_proposals?' and is combined with the keeper’s':'')+'.</p>':'')+'</div>';
+    +'<p class="choice"><label><input type="radio" name="keep-'+n+'" data-keep="'+n+'" value="'+esc(b.id)+'" '+(keep?'checked':'')+'> Keep</label><label><input type="checkbox" data-trash="'+n+'" value="'+esc(b.id)+'" '+(trash?'checked ':'')+(canTrash?'':'disabled')+'> Trash</label></p>'+(why?'<p class="note">'+esc(why)+'</p>':'')+(moves.length?'<p class="note">Its '+esc(moves.join(' and '))+' move to the keeper.</p>':'')+'</div>';
   }).join('')+'</div>'+contentsTable(g)+'<details><summary>'+g.pairs.length+' match'+(g.pairs.length===1?'':'es')+'</summary><ul class="matches">'+g.pairs.map((p,i)=>'<li>'+esc(p.books[0].id)+' ↔ '+esc(p.books[1].id)+': '+p.evidence.map(esc).join(', ')+(p.dismissed?' · <em>reviewed: keep both</em>':'')+' <button data-dismiss="'+n+':'+i+'" '+(!canWrite?'disabled':'')+'>'+(p.dismissed?'Reopen':'Keep both')+'</button></li>').join('')+'</ul></details>'
-   +'<p><label><input type="checkbox" data-conflicts="'+n+'" '+(s.conflicts?'checked':'')+'> Retain the keeper’s versions when records have different files in the same format</label></p><div class="actions"><button data-preview="'+n+'" '+(ready(g)?'':'disabled')+'>Preview this group</button>'+(!g.writable?'<span class="note">Only records in the writable library can be resolved.</span>':'')+'</div></section>';
+   +(needsEdition(g,s.keep)?'<p><label><input type="checkbox" data-edition="'+n+'" '+(s.edition?'checked':'')+'> These records are the keeper’s edition: move their citekeys and Zotero links to it</label></p>':'')+'<p><label><input type="checkbox" data-conflicts="'+n+'" '+(s.conflicts?'checked':'')+'> Retain the keeper’s versions when records have different files in the same format</label></p><div class="actions"><button data-preview="'+n+'" '+(ready(g)?'':'disabled')+'>Preview this group</button>'+(!g.writable?'<span class="note">Only records in the writable library can be resolved.</span>':'')+'</div></section>';
  }).join('') || '<p>No duplicate candidates match. Previously reviewed pairs reappear if their metadata, file hash, or references change.</p>';
  updateBatch();
 }
@@ -104,6 +119,7 @@ document.getElementById('groups').addEventListener('change',e=>{
  else if(d.trash!==undefined){const s=state[groups[Number(d.trash)].key];s.trash=t.checked?[...s.trash,t.value]:s.trash.filter(id=>id!==t.value);}
  else if(d.pick!==undefined)state[groups[Number(d.pick)].key].picked=t.checked;
  else if(d.conflicts!==undefined)state[groups[Number(d.conflicts)].key].conflicts=t.checked;
+ else if(d.edition!==undefined){const g=groups[Number(d.edition)],st=state[g.key];st.edition=t.checked;st.trash=t.checked?[...new Set([...st.trash,...g.books.filter(b=>trashable(g,st.keep,b)).map(b=>b.id)])]:st.trash.filter(id=>trashable(g,st.keep,g.books.find(b=>b.id===id)));}
  else return;
  render();
 });

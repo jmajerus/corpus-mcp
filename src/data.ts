@@ -289,7 +289,7 @@ export async function backupDataStore(data: DataStore, dir: string, keep = 14): 
 
 export const CHANGE_KINDS = [
   "tag_added", "tag_removed", "format_added", "book_added", "book_reextracted", "book_removed", "extraction_failed",
-  "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "proposal_moved", "citekey_pinned",
+  "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "proposal_moved", "filing_moved", "citekey_pinned",
   "duplicate_resolution_failed", "duplicate_reviewed", "duplicate_resolved", "metadata_corrected", "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
   "zotero_linked",

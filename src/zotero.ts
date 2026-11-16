@@ -257,6 +257,24 @@ export interface ZoteroMatch {
   duplicates: { key: string; citekey: string | null; title: string | null; year: number | null }[];
 }
 
+/**
+ * The live Zotero item a record is tied to by something stored here: a confirmed link, else an item whose
+ * Extra names its Calibre UUID. An ISBN match is not stored, so it is not counted. Works for a record already
+ * trashed in Calibre, which zoteroMatch needs a book row for.
+ */
+export function filedZoteroKey(c: Corpus, uuid: string): string | null {
+  const confirmed = c.data.prepare("SELECT zotero_key FROM zotero_links WHERE calibre_uuid = ? AND status = 'confirmed'").pluck().get(uuid) as string | undefined;
+  if (confirmed) {
+    const i = survivor(c, confirmed);
+    if (i) return i.key;
+  }
+  for (const key of c.data.prepare("SELECT key FROM zotero_items WHERE calibre_uuid = ? ORDER BY trashed, key").pluck().all(uuid) as string[]) {
+    const i = survivor(c, key);
+    if (i) return i.key;
+  }
+  return null;
+}
+
 /** Where a Calibre book is in the Zotero mirror: by the Calibre UUID filing wrote to Extra, its ISBN, or a confirmed link. */
 export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
   const live = "trashed = 0";

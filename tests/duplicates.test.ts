@@ -35,6 +35,10 @@ afterEach(()=>{vi.restoreAllMocks();c.db.close();c.data.close();fs.rmSync(root,{
 function pair(){return duplicatePairs(c,"main").pairs.find(p=>p.books[0].id==="main:1"&&p.books[1].id==="main:2")!;}
 function select(keep="main:1",remove=["main:2"]){const books=duplicatePairs(c,"main").pairs.flatMap(p=>p.books);return {keep,remove,fingerprints:Object.fromEntries(books.map(b=>[b.id,b.fingerprint]))};}
 const plan=(s=select())=>duplicateBatchPlan(c,"main",[s]);
+/** An anchor for a quote-mcp quote on this record: it ties the record to its own file. */
+const anchor=(uuid:string,id:string)=>c.data.prepare("INSERT INTO anchors(quote_id,calibre_uuid,book_id,start_page,start_offset,end_page,end_offset,prefix,suffix,text,status,created_at,updated_at) VALUES((SELECT COALESCE(MAX(quote_id),0)+1 FROM anchors),?,?,0,0,0,5,'','','A syn','verified','now','now')").run(uuid,id);
+/** Makes the copies match by title and authors only, so nothing shows they are one edition. */
+const differentFiles=()=>c.db.prepare("UPDATE books SET sha256='another-file' WHERE id='main:2'").run();
 it("reports exact selected files, metadata evidence, edition warnings and all available formats",()=>{
  const p=pair();expect(p.evidence).toEqual(["Identical selected file","Matching title and authors"]);
  expect(p.edition_warning).toContain("years differ");expect(p.books[0].formats).toEqual(["PDF"]);expect(p.writable).toBe(true);
@@ -54,11 +58,11 @@ it("persists keep-both decisions, supports reopening, and invalidates them when 
  c.db.prepare("UPDATE books SET year=2022 WHERE id='main:2'").run();expect(duplicatePairs(c,"main").total).toBe(1);
  expect(()=>duplicateBatchPlan(c,"main",[before])).toThrow(/changed/);
 });
-it("blocks referenced records and cross-library resolution without moving any links",()=>{
- const p=pair();c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','saved2021book','main:2','The Same Book','now')").run();
- expect(()=>plan()).toThrow(/saved references/);
+it("blocks records with anchors and cross-library resolution without moving any links",()=>{
+ const p=pair();anchor('uuid-2','main:2');
+ expect(()=>plan()).toThrow(/quotes or anchors/);
  expect(()=>duplicateBatchPlan(c,"other",[select()])).toThrow(/writable/);
- expect(c.data.prepare("SELECT count(*) FROM citekeys").pluck().get()).toBe(1);
+ expect(c.data.prepare("SELECT count(*) FROM anchors WHERE calibre_uuid='uuid-2'").pluck().get()).toBe(1);
  expect(()=>dismissDuplicate(c,"main",["main:1","main:3"],p.fingerprint,false)).toThrow(/changed/);
 });
 async function wait(r:JobRunner,id:number){for(let i=0;i<100;i++){if(r.get(id).status!=="running"){await new Promise(done=>setTimeout(done,0));return r.get(id);}await new Promise(done=>setTimeout(done,5));}throw new Error("Job did not finish");}
@@ -79,8 +83,8 @@ it("applies the source-reviewed plan, audits resolution, refreshes and releases 
 it("refuses newly referenced duplicates after preview and previews with source blockers",async()=>{
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:"source"},blockers:[]}})+'\n');}});
  const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
- c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','newkey','main:2','Book','now')").run();
- expect(()=>r.start("duplicates","apply",{previewOf:preview.id})).toThrow(/saved references/);
+ anchor('uuid-2','main:2');
+ expect(()=>r.start("duplicates","apply",{previewOf:preview.id})).toThrow(/quotes or anchors/);
 });
 it("refreshes after a failed source write and keeps the job failed",async()=>{
  let refreshed=0;
@@ -111,24 +115,29 @@ it("holds resolution when quote-mcp reports an unanchored quote or cannot verify
 });
 
 
-it.each([false,true])("blocks a Zotero UUID without an explicit link, including a merged survivor (%s)",merged=>{
+it.each([false,true])("moves a Zotero UUID filing only for the same edition, including a merged survivor (%s)",merged=>{
  c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,calibre_uuid,trashed,replaces,synced_at) VALUES('FILED',1,'book','Filed duplicate','uuid-2',?,'[]','now')").run(merged?1:0);
  if(merged)c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,trashed,replaces,synced_at) VALUES('SURVIVOR',2,'book','Merged book',0,'[\"FILED\"]','now')").run();
  expect(c.data.prepare("SELECT count(*) FROM zotero_links").pluck().get()).toBe(0);
  expect(zoteroMatch(c,getBook(c,'main:2')).match).toMatchObject({key:merged?'SURVIVOR':'FILED',matched_by:'calibre_uuid'});
  expect(duplicateReferences(c,'uuid-2').zotero_items).toBe(1);
  expect(pair().books[1].references.zotero_items).toBe(1);
- expect(()=>plan()).toThrow(/saved references/);
+ // An identical file shows one edition.
+ expect(plan().groups[0].remove).toEqual([{id:2,uuid:"uuid-2"}]);
+ differentFiles();
+ expect(()=>plan()).toThrow(/same edition/);
+ expect(plan({...select(),same_edition:true}).groups[0]).toMatchObject({same_edition:true,remove:[{id:2}]});
 });
 
-it("rechecks Zotero UUID references added after a successful source preview",async()=>{
+it("rechecks Zotero filing added after a successful source preview",async()=>{
  const calls:string[]=[];
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
   calls.push(command);log('@@change '+JSON.stringify({calibre_id:1,title:'Book',duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:'source'},blockers:[]}})+'\n');
  }});
  const preview=await wait(r,r.start('duplicates','preview',{duplicates:[select()]}));
  c.data.prepare("INSERT INTO zotero_items(key,version,item_type,calibre_uuid,synced_at) VALUES('NEW',1,'book','uuid-2','now')").run();
- expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/saved references/);
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,calibre_uuid,synced_at) VALUES('OTHER',1,'book','uuid-1','now')").run();
+ expect(()=>r.start('duplicates','apply',{previewOf:preview.id})).toThrow(/different Zotero items/);
  expect(calls).toEqual(['duplicates-preview']);
 });
 
@@ -242,10 +251,10 @@ it("groups linked records, suggests a keeper, and plans a batch of disjoint grou
  expect(()=>plan(select("main:2",[]))).toThrow(/at least one record/);
  expect(()=>duplicateBatchPlan(c,"main",[])).toThrow(/at least one duplicate group/);
 });
-it("prefers a referenced keeper and refuses to trash it",()=>{
- c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','saved2021book','main:2','The Same Book','now')").run();
+it("prefers a keeper with anchors and refuses to trash it",()=>{
+ anchor('uuid-2','main:2');
  expect(duplicateGroups(c,"main").groups[0].suggested_keep).toBe("main:2");
- expect(()=>plan()).toThrow(/main:2 has saved references/);
+ expect(()=>plan()).toThrow(/main:2 has saved quotes or anchors/);
  expect(plan(select("main:2",["main:1"])).groups[0].remove).toEqual([{id:1,uuid:"uuid-1"}]);
 });
 it("applies only the groups the source reviewed without blockers",async()=>{
@@ -321,7 +330,9 @@ it("prefers a colour cover, then a shelved record, and says why, without changin
  expect(g).toMatchObject({suggested_keep:"main:1",suggested_because:"is on a Calibre-Web shelf"});
  expect(pair().fingerprint).toBe(before);expect(pair().books[1].fingerprint).toBe(bookPrint);
  c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','k','main:2','T','now')").run();
- expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"has saved references"});
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"is filed with a citekey or in Zotero"});
+ anchor('uuid-1','main:1');
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:1",suggested_because:"has saved quotes or anchors"});
 });
 it("flags groups whose EPUB or PDF sizes differ by 10% or more",()=>{
  expect(sizeWarnings([{id:"main:100",sizes:{EPUB:357*1024}},{id:"main:783",sizes:{EPUB:6617*1024}}])[0]).toMatch(/^EPUB sizes differ 18\.5×: main:100 357 KB, main:783 6\.5 MB\./);
@@ -413,4 +424,30 @@ it("leaves a tag proposal in place when the source reports a duplicate it did no
  const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
  await wait(r,r.start("duplicates","apply",{previewOf:preview.id}));
  expect(c.data.prepare("SELECT calibre_uuid FROM tag_proposals").pluck().all()).toEqual(["uuid-2"]);
+});
+it("moves a trashed duplicate's citekey and Zotero links to the keeper after Calibre trashes it",async()=>{
+ c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','same2021book','main:2','The Same Book','now')").run();
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,calibre_uuid,trashed,replaces,synced_at) VALUES('FILED',1,'book','The Same Book','uuid-2',0,'[]','now')").run();
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,trashed,replaces,synced_at) VALUES('WRONG',1,'book','Another',0,'[]','now')").run();
+ c.data.prepare("INSERT INTO zotero_links(calibre_uuid,zotero_key,status,linked_at) VALUES('uuid-2','WRONG','rejected','now')").run();
+ const g=duplicateGroups(c,"main").groups[0];
+ expect(g.books.find(b=>b.id==="main:2")!.filing).toEqual({citekey:"same2021book",zotero:"FILED"});
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  const p=JSON.parse(stdin!);
+  if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
+  else log('@@change '+JSON.stringify({calibre_id:1,uuid:"uuid-1",title:"The Same Book",duplicate_resolved:{removed_id:2,removed_uuid:"uuid-2",trash:true,backup:"b"}})+'\n');
+ }});
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
+ expect((await wait(r,r.start("duplicates","apply",{previewOf:preview.id}))).status).toBe("succeeded");
+ expect(c.data.prepare("SELECT calibre_uuid,citekey,book_id FROM citekeys").all()).toEqual([{calibre_uuid:"uuid-1",citekey:"same2021book",book_id:"main:1"}]);
+ expect(c.data.prepare("SELECT calibre_uuid,zotero_key,status FROM zotero_links ORDER BY zotero_key").all()).toEqual([
+  {calibre_uuid:"uuid-1",zotero_key:"FILED",status:"confirmed"},{calibre_uuid:"uuid-1",zotero_key:"WRONG",status:"rejected"}]);
+ expect(zoteroMatch(c,getBook(c,"main:1")).match).toMatchObject({key:"FILED",matched_by:"confirmed"});
+ expect(c.data.prepare("SELECT detail FROM changes WHERE kind='filing_moved' ORDER BY id").pluck().all()).toEqual(["citekey same2021book from main:2","Zotero item FILED from main:2"]);
+});
+it("blocks moving filing onto a keeper cited differently",()=>{
+ c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','first2020book','main:2','B','now')").run();
+ c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-1','second2021book','main:1','B','now')").run();
+ expect(()=>plan()).toThrow(/cited as first2020book and main:1 as second2021book/);
+ expect(()=>plan({...select(),same_edition:true})).toThrow(/different editions/);
 });
