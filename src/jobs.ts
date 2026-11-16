@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
-import { type Change, backupDataStore, pinnedByUuid, recordChanges } from "./data.js";
+import { type Change, type SyncBaseline, backupDataStore, pinnedByUuid, recordAlias, recordBaselines, recordChanges } from "./data.js";
+import { moveAnchors } from "./anchors.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicateBatchPlan, duplicateContents, assertDuplicateMovable, moveDuplicateFiling, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
 import { markIntakeApplied, scanIntake } from "./intake.js";
 import { attachUploadPayloads, removeAppliedUploads, uploadBatchPlan, type UploadBatchPlan, type UploadItemPlan, type UploadSelection } from "./upload.js";
-import { assertNoBookQuotes } from "./quoteMcp.js";
+import { assertBookQuotesMovable } from "./quoteMcp.js";
 import { moveTagProposal, tagPlan } from "./tagging.js";
-import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
+import { type BookRow, type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
 
 /**
  * Admin jobs launched from /admin: one at a time, logged to data.db, and for anything that changes
@@ -297,7 +298,18 @@ export class JobRunner {
             if (!it.duplicate_resolved?.trash || !it.uuid) continue;
             const keeper = { uuid: it.uuid, book_id: `${this.config.shelvesLibrary}:${it.calibre_id}`, title: it.title };
             moveTagProposal(this.c.data, it.duplicate_resolved.removed_uuid, keeper, actor, id);
-            moveDuplicateFiling(this.c, it.duplicate_resolved.removed_uuid, `${this.config.shelvesLibrary}:${it.duplicate_resolved.removed_id}`, keeper, actor, id);
+            const removedId = `${this.config.shelvesLibrary}:${it.duplicate_resolved.removed_id}`;
+            moveDuplicateFiling(this.c, it.duplicate_resolved.removed_uuid, removedId, keeper, actor, id);
+            // Before the refresh drops the trashed record's pages: its quotes are re-anchored from them.
+            const keeperRow = this.c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE uuid = ?").get(it.uuid);
+            if (keeperRow) {
+              const quotes = moveAnchors(this.c, it.duplicate_resolved.removed_uuid, keeperRow);
+              if (quotes.moved || quotes.orphaned) recordChanges(this.c.data, [{ kind: "quotes_moved", source: "admin-job", job_id: id, book_id: keeper.book_id,
+                calibre_uuid: keeper.uuid, title: keeper.title, actor,
+                detail: `${quotes.moved} re-anchored${quotes.orphaned ? `, ${quotes.orphaned} to find again` : ""} from ${removedId}` }]);
+            }
+            // quote-mcp and anything else that kept the trashed UUID now reaches the keeper.
+            recordAlias(this.c.data, { old_uuid: it.duplicate_resolved.removed_uuid, uuid: it.uuid, old_book_id: removedId, reason: "duplicate_merged", job_id: id });
           }
         }
       }
@@ -335,6 +347,31 @@ export class JobRunner {
       if (item.added_format) changes.push({ ...base, kind: "format_added", detail: `${item.source_format} → ${item.added_format}` });
     }
     recordChanges(this.c.data, changes);
+    recordBaselines(this.c.data, this.baselines(jobId, items));
+  }
+
+  /**
+   * What an apply just wrote to Calibre, per field, as the values a later sync compares against (PLAN.md,
+   * Calibre downstream). Tags: the book's tags as indexed before this job, with the job's changes applied.
+   */
+  private baselines(jobId: number, items: JobItem[]): SyncBaseline[] {
+    const out: SyncBaseline[] = [];
+    const tagsOf = this.c.db.prepare<[string], string>("SELECT tags FROM books WHERE uuid = ?").pluck();
+    for (const item of items) {
+      if (!item.uuid) continue;
+      const base = { calibre_uuid: item.uuid, surface: "calibre" as const, job_id: jobId };
+      if (item.metadata && !item.metadata.partial) {
+        for (const field of ["title", "authors", "year"] as const) out.push({ ...base, field, value: item.metadata.after[field] });
+      }
+      if (item.added?.length || item.removed?.length) {
+        const before = tagsOf.get(item.uuid);
+        if (before === undefined) continue;
+        const removed = new Set(item.removed ?? []);
+        const tags = [...new Set([...(JSON.parse(before) as string[]), ...(item.added ?? [])])].filter((t) => !removed.has(t)).sort((a, b) => a.localeCompare(b));
+        out.push({ ...base, field: "tags", value: tags });
+      }
+    }
+    return out;
   }
 
   private async perform(kind: JobKind, mode: JobMode, params: Record<string, unknown>, log: (text: string) => void,
@@ -355,7 +392,7 @@ export class JobRunner {
       case "duplicates": {
         const batch = params.plan as DuplicateBatchPlan, removes = batch.groups.flatMap(g => g.remove);
         for (const g of batch.groups) assertDuplicateMovable(this.c, batch.library, g);
-        if (this.config.admin?.quoteMcpUrl) for (const r of removes) await assertNoBookQuotes(this.config.admin.quoteMcpUrl, r.uuid);
+        if (this.config.admin?.quoteMcpUrl) for (const r of removes) await assertBookQuotesMovable(this.config.admin.quoteMcpUrl, r.uuid, this.c.data);
         try { await this.commands.calibre(mode === "apply" ? "duplicates-apply" : "duplicates-preview", JSON.stringify(params.plan), log); }
         catch (error) {
           if (mode === "apply") {

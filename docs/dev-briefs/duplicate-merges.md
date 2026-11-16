@@ -14,10 +14,33 @@ done and plans the rest.
 | Tag proposal | `tag_proposals` | Moved to the keeper after the trash, or combined with the keeper's (`moveTagProposal`) | PR #43 |
 | Pinned citekey | `citekeys` | Moved to the keeper when it has none (`moveDuplicateFiling`) | PR #44 |
 | Zotero filing | `zotero_links`, `zotero_items` | The filed item becomes the keeper's confirmed link; rejections carry over | PR #44 |
+| Anchors of quote-mcp's quotes | `anchors` | Re-anchored in the keeper's text when the wording occurs exactly once there; otherwise the merge is blocked (`planAnchorMoves`, `moveAnchors`) | PR #45 |
+| The trashed UUID itself | `book_aliases` | Recorded as an alias of the keeper, so quote-mcp's references keep resolving | PR #45 |
 
 Moves happen in the apply job's record step, only for records Calibre reports as
 trashed (`duplicate_resolved.trash`), and each is logged with the job's id
-(`proposal_moved`, `filing_moved`).
+(`proposal_moved`, `filing_moved`, `quotes_moved`).
+
+### Quotes (anchors and the alias)
+
+Built in PR #45, with no change to quote-mcp:
+
+- **Preview.** For each record to be trashed, each verified anchor is planned against
+  the keeper's text with `relocatedAnchorPlanner`: its wording must be intact in the
+  duplicate and occur exactly once in the keeper. Any other result blocks the group
+  and names the quotes; the review card shows the same from `anchor_moves`. Anchors
+  already orphaned do not block.
+- **quote-mcp check.** `assertBookQuotesMovable` replaces the blanket refusal: a
+  quote with no anchor passes (the alias carries it); one quote-mcp has an anchor for
+  must have its anchor here. It still fails closed when quote-mcp cannot be asked.
+- **Apply, after the trash and before the refresh** (the trashed record's pages are
+  still indexed): planned anchors are written verified against the keeper with a
+  `reanchored` change, which quote-mcp follows as usual. Orphaned ones, and any that
+  can no longer be placed, go to the keeper orphaned with no file hash, so the next
+  scan searches the keeper for them. Then the alias is recorded.
+- **Afterwards.** quote-mcp still lists these quotes under the trashed UUID, so the
+  reader asks it for the keeper's UUID and each alias, and the books feed gives each
+  book's `former_uuids`.
 
 ### Same-edition rule (citekeys and Zotero)
 
@@ -40,7 +63,9 @@ a confirmed link instead, which `zoteroMatch` checks first.
 
 ## Planned
 
-### 1. Anchors: re-anchor in the keeper's text (needs quote-mcp)
+### 1. Anchors: re-anchor in the keeper's text (built, PR #45; see above)
+
+The original plan, kept for the record:
 
 Anchors (`anchors`) are positions of quote-mcp's quotes in one record's file.
 `relocatedAnchorPlanner` in `src/anchor-migration.ts` already moves an anchor into new

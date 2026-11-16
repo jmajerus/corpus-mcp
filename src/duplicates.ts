@@ -6,6 +6,7 @@ import * as mupdf from "mupdf";
 import { type BookRow, type Corpus, ToolError, effectiveCitekey } from "./tools.js";
 import { pinnedByUuid, recordChanges } from "./data.js";
 import { filedZotero, zoteroMatch } from "./zotero.js";
+import { planAnchorMoves } from "./anchors.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 
@@ -17,11 +18,13 @@ export const normalAuthorsKey = (authors: string[]) =>
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
-/** References to positions in one record's file (quote-mcp's anchors, corpus-mcp's old quotes): the record must be the keeper. */
-const PINNED_TABLES = ["quotes", "anchors"] as const;
+/** corpus-mcp's own old quotes (before quote-mcp) cannot move: a record that has any must be the keeper. */
+const PINNED_TABLES = ["quotes"] as const;
 /** How the work is filed (a pinned citekey, a Zotero link): these move to the keeper when the copies are the same edition. */
 const FILING_TABLES = ["citekeys", "zotero_links", "zotero_items"] as const;
 export const pinnedReferences = (refs: Record<string, number>) => PINNED_TABLES.some(t => (refs[t] ?? 0) > 0);
+/** Anchors of quote-mcp's quotes: they move to the keeper when each one's wording occurs exactly once in its text. */
+export const anchored = (refs: Record<string, number>) => (refs.anchors ?? 0) > 0;
 export const filingReferences = (refs: Record<string, number>) => FILING_TABLES.some(t => (refs[t] ?? 0) > 0);
 /** Shared files or identifiers show two records are one edition; a title and authors alone do not. */
 export const sameEditionEvidence = (evidence: readonly string[]) => evidence.includes("Identical selected file") || evidence.includes("Matching identifier");
@@ -205,6 +208,18 @@ export function coverColour(file: string): number | null {
 /** Below this a cover reads as black and white. */
 export const GREYSCALE_COVER = 5;
 
+/** For one possible keeper: how many of a record's quotes would move there, and the ones that need a person. */
+export interface AnchorMoveSummary { moves: number; orphaned: number; review: { quote_id: number; reason: string }[] }
+const ANCHOR_REASONS: Record<string, string> = {
+  "wording-not-found": "its wording is not in the keeper's text", "ambiguous-wording": "its wording occurs more than once in the keeper's text",
+  "keeper-not-indexed": "the keeper has no indexed text", "duplicate-not-indexed": "this record has no indexed text to check it against",
+};
+export const anchorReason = (reason: string) => ANCHOR_REASONS[reason] ?? "it no longer matches this record's own text";
+function anchorSummary(c: Corpus, fromUuid: string, keeper: BookRow): AnchorMoveSummary {
+  const plan = planAnchorMoves(c, fromUuid, keeper);
+  return { moves: plan.moves.length, orphaned: plan.orphaned.length, review: plan.review.map(r => ({ quote_id: r.quote_id, reason: r.reason })) };
+}
+
 export type DuplicateBook = ReturnType<typeof candidateBooks>[number];
 export function candidateBooks(c: Corpus) {
   const metadata = catalogue(c), references = allReferences(c), shelves = new Map<string, string[]>();
@@ -222,11 +237,11 @@ export function candidateBooks(c: Corpus) {
     };
     // `added`, shelves, the cover and the contents only rank the suggested keeper; they stay out of
     // the fingerprints, so keep-both decisions hold. Covers and contents are read only for candidates (see below).
-    return { ...book, printed_isbns: printedIsbns, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, filing: null as Filing | null, folder: b.folder,
+    return { ...book, printed_isbns: printedIsbns, added: b.added ?? null, shelves: shelves.get(b.id) ?? [], cover_colour: null as number | null, filing: null as Filing | null, anchor_moves: null as Record<string, AnchorMoveSummary> | null, folder: b.folder,
       sizes: metadata.get(b.id)?.sizes ?? {}, files: metadata.get(b.id)?.files ?? {}, contents: {} as BookContents, content_flags: 0, fingerprint: hash(book) };
   });
 }
-const hashed = ({ printed_isbns: _printedIsbns, added: _added, shelves: _shelves, cover_colour: _cover, filing: _filing, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
+const hashed = ({ printed_isbns: _printedIsbns, added: _added, shelves: _shelves, cover_colour: _cover, filing: _filing, anchor_moves: _anchorMoves, folder: _folder, sizes: _sizes, files: _files, contents: _contents, content_flags: _flags, fingerprint: _fingerprint, ...book }: DuplicateBook) => book;
 
 /** Copies whose EPUB or PDF sizes differ by this fraction or more are flagged (as in tools/calibre-duplicates.py). */
 export const SIZE_DIFFERENCE = 0.1;
@@ -265,7 +280,7 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
 
 /** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
  * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
- * C merge into A. The suggested keeper is a record with saved quotes or anchors (a tag proposal, citekey or Zotero link moves instead), then the one whose EPUB or PDF falls
+ * C merge into A. The suggested keeper is a record with old corpus-mcp quotes (anchors, a tag proposal, citekey or Zotero link move instead), then the one whose EPUB or PDF falls
  * short least against its duplicates, then one with a colour cover, then
  * one on a Calibre-Web shelf, then an indexed one, then the one with the most formats, then the one
  * added to Calibre first (by its added date, then its id). */
@@ -288,7 +303,18 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
         if (b.files[fmt]) b.contents[fmt] = contentProfile(path.join(c.booksRoot, b.folder, b.files[fmt]), fmt, c.data);
       }
     }
-    for (const b of g.books.values()) b.filing = bookFiling(c, c.db.prepare("SELECT * FROM books WHERE id = ?").get(b.id) as BookRow);
+    const row = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE id = ?");
+    for (const b of g.books.values()) {
+      b.filing = bookFiling(c, row.get(b.id)!);
+      // Where its quotes would land in each record it pairs with directly (the only keepers it can have).
+      if (anchored(b.references) && b.uuid) {
+        b.anchor_moves = {};
+        for (const p of g.pairs) {
+          const other = p.books.find(x => x.id !== b.id);
+          if (other && p.books.some(x => x.id === b.id)) b.anchor_moves[other.id] = anchorSummary(c, b.uuid, row.get(other.id)!);
+        }
+      }
+    }
     const books = [...g.books.values()];
     for (const w of contentFindings(books, []).content_warnings) for (const id of w.against) g.books.get(id)!.content_flags++;
   }
@@ -299,8 +325,10 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
   // one (older MOBI-era records often carry greyscale covers). Shelf links move to the keeper either
   // way, so a shelf only breaks ties.
   const criteria: [string, (b: DuplicateBook) => number][] = [
-    ["has saved quotes or anchors", b => referenced(b) ? 0 : 1],
+    ["has quotes that cannot move", b => referenced(b) ? 0 : 1],
     ["has the most complete contents", b => b.content_flags],
+    // Its quotes move when their wording is found once in the keeper, so they only break ties.
+    ["has quotes anchored in its text", b => anchored(b.references) ? 0 : 1],
     // A citekey or Zotero link moves to the keeper when the copies are one edition, so it only breaks ties.
     ["is filed with a citekey or in Zotero", b => filingReferences(b.references) ? 0 : 1],
     ["has a colour cover", b => colour(b) ? 0 : 1],
@@ -397,7 +425,12 @@ export function assertDuplicateMovable(c: Corpus, library: string, group: Duplic
   const keepRow = byUuid.get(group.keep.uuid);
   for (const r of group.remove) {
     const id = `${library}:${r.id}`, refs = duplicateReferences(c, r.uuid);
-    if (pinnedReferences(refs)) throw new ToolError(`${id} has saved quotes or anchors, so it can only be the keeper. Resolve those links before trashing it.`);
+    if (pinnedReferences(refs)) throw new ToolError(`${id} has quotes in corpus-mcp's old quote store, so it can only be the keeper. Resolve those before trashing it.`);
+    if (anchored(refs)) {
+      if (!keepRow) throw new ToolError(`${id}'s keeper is no longer in the index. Refresh and review again.`);
+      const { review } = planAnchorMoves(c, r.uuid, keepRow);
+      if (review.length) throw new ToolError(`${id} has ${review.length} quote${review.length === 1 ? "" : "s"} that cannot be placed in ${keepRow.id}: ${review.slice(0, 5).map(x => `quote ${x.quote_id} (${anchorReason(x.reason)})`).join("; ")}${review.length > 5 ? "; …" : ""}. Make ${id} the keeper, or fix those quotes in quote-mcp first.`);
+    }
     if (!filingReferences(refs)) continue;
     const dropRow = byUuid.get(r.uuid);
     if (!keepRow || !dropRow) throw new ToolError(`${id} or its keeper is no longer in the index. Refresh and review again.`);

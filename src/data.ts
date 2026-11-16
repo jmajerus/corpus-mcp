@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 13;
+export const DATA_SCHEMA_VERSION = 14;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -194,6 +194,31 @@ CREATE TABLE IF NOT EXISTS zotero_links (
   linked_at TEXT NOT NULL,
   PRIMARY KEY (calibre_uuid, zotero_key)
 );
+-- A Calibre UUID that no longer names a live record, and the record that stands for it now: a duplicate
+-- trashed into its keeper, or a record replaced by a re-import. Lookups by UUID resolve through this, so
+-- references kept elsewhere (quote-mcp's checked quotes) keep working. Never chained: uuid is always live
+-- as far as this table knows (recordAlias re-points older aliases).
+CREATE TABLE IF NOT EXISTS book_aliases (
+  old_uuid TEXT PRIMARY KEY COLLATE NOCASE,
+  uuid TEXT NOT NULL COLLATE NOCASE,
+  old_book_id TEXT,
+  reason TEXT NOT NULL,              -- duplicate_merged
+  job_id INTEGER,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS book_aliases_uuid ON book_aliases(uuid);
+-- The value corpus-mcp last wrote to, or agreed with, a place a book's record is edited (surface: calibre),
+-- one row per field. A later refresh that finds another value there knows it was edited in that place
+-- (PLAN.md, Calibre downstream: sync). value is JSON.
+CREATE TABLE IF NOT EXISTS sync_baselines (
+  calibre_uuid TEXT NOT NULL COLLATE NOCASE,
+  surface TEXT NOT NULL,
+  field TEXT NOT NULL,
+  value TEXT NOT NULL,
+  job_id INTEGER,
+  at TEXT NOT NULL,
+  PRIMARY KEY (calibre_uuid, surface, field)
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(
   text, note, labels, content='quotes', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
 );
@@ -272,6 +297,43 @@ export function pinnedByKey(data: DataStore, citekey: string): PinnedCitekey | u
   return data.prepare<[string], PinnedCitekey>("SELECT * FROM citekeys WHERE citekey = ? COLLATE NOCASE").get(citekey.toLowerCase());
 }
 
+/** The live UUID an old one stands for; the UUID itself when it has no alias. */
+export function resolveUuid(data: DataStore, uuid: string): string {
+  return (data.prepare("SELECT uuid FROM book_aliases WHERE old_uuid = ?").pluck().get(uuid) as string | undefined) ?? uuid;
+}
+
+/** The old UUIDs that now mean this record, oldest first. */
+export function aliasesOf(data: DataStore, uuid: string): string[] {
+  return data.prepare("SELECT old_uuid FROM book_aliases WHERE uuid = ? ORDER BY at, old_uuid").pluck().all(uuid) as string[];
+}
+
+/** `oldUuid` now means `uuid`. Aliases that pointed at oldUuid follow it, so a lookup is one step. */
+export function recordAlias(data: DataStore, alias: { old_uuid: string; uuid: string; old_book_id?: string | null; reason: string; job_id?: number | null }): void {
+  if (alias.old_uuid.toLowerCase() === alias.uuid.toLowerCase()) return;
+  const at = new Date().toISOString();
+  data.transaction(() => {
+    data.prepare("UPDATE book_aliases SET uuid = ? WHERE uuid = ?").run(alias.uuid, alias.old_uuid);
+    // The keeper is live: an alias left from an earlier life of that UUID would send lookups away from it.
+    data.prepare("DELETE FROM book_aliases WHERE old_uuid = ?").run(alias.uuid);
+    data.prepare(`INSERT INTO book_aliases (old_uuid, uuid, old_book_id, reason, job_id, at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (old_uuid) DO UPDATE SET uuid = excluded.uuid, old_book_id = excluded.old_book_id, reason = excluded.reason, job_id = excluded.job_id, at = excluded.at`)
+      .run(alias.old_uuid, alias.uuid, alias.old_book_id ?? null, alias.reason, alias.job_id ?? null, at);
+  })();
+}
+
+export interface SyncBaseline { calibre_uuid: string; surface: "calibre"; field: string; value: unknown; job_id?: number | null }
+
+/** What was just written to a surface, as the value a later comparison starts from. */
+export function recordBaselines(data: DataStore, baselines: SyncBaseline[]): void {
+  if (!baselines.length) return;
+  const at = new Date().toISOString();
+  const put = data.prepare(`INSERT INTO sync_baselines (calibre_uuid, surface, field, value, job_id, at) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (calibre_uuid, surface, field) DO UPDATE SET value = excluded.value, job_id = excluded.job_id, at = excluded.at`);
+  data.transaction(() => {
+    for (const b of baselines) put.run(b.calibre_uuid, b.surface, b.field, JSON.stringify(b.value), b.job_id ?? null, at);
+  })();
+}
+
 export function allPinned(data: DataStore): Map<string, PinnedCitekey> {
   const rows = data.prepare("SELECT * FROM citekeys").all() as PinnedCitekey[];
   return new Map(rows.map((r) => [r.calibre_uuid, r]));
@@ -289,7 +351,7 @@ export async function backupDataStore(data: DataStore, dir: string, keep = 14): 
 
 export const CHANGE_KINDS = [
   "tag_added", "tag_removed", "format_added", "book_added", "book_reextracted", "book_removed", "extraction_failed",
-  "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "proposal_moved", "filing_moved", "citekey_pinned",
+  "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "proposal_moved", "filing_moved", "quotes_moved", "citekey_pinned",
   "duplicate_resolution_failed", "duplicate_reviewed", "duplicate_resolved", "metadata_corrected", "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
   "zotero_linked",

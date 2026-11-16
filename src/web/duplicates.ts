@@ -3,7 +3,7 @@ export const DUPLICATES_HTML = page({
   title: "Duplicates", nav: "duplicates",
   css: `.pair{margin:16px 0}.compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.cover{float:right;width:70px;max-height:110px;object-fit:contain}.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.warning{color:var(--warn)}.member{border-left:3px solid transparent;padding-left:10px}.member.keep{border-left-color:var(--ok)}.member.trash{border-left-color:var(--danger);opacity:.85}.choice{display:flex;gap:16px;flex-wrap:wrap}.matches li{margin:4px 0}.contents td,.contents th{text-align:right}.contents th:first-child{text-align:left}.contents td.short{color:var(--warn);font-weight:600}.batch{position:sticky;top:0;z-index:2;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:12px 0}`,
   body: `<h1>Review duplicate books</h1>
-<p class="sub">Each group links records that match by file, identifier, or title and authors. Choose the keeper; the records marked Trash are merged into it (unique formats, tags, missing metadata and cover), their Calibre-Web shelf memberships move to it, and they go to Calibre’s trash, after a backup. The suggested keeper is a record with saved quotes or anchors, then the one whose EPUB or PDF is most complete (figures, table of contents, print page numbers, text), then one with a citekey or Zotero link, then one with a colour cover, then one on a shelf. A trashed record’s tag proposal moves to the keeper, and so do its citekey and Zotero link when the copies are the same edition (a shared file or identifier, or your confirmation). Select several groups to preview and apply them as one batch; groups with blockers are skipped.</p>
+<p class="sub">Each group links records that match by file, identifier, or title and authors. Choose the keeper; the records marked Trash are merged into it (unique formats, tags, missing metadata and cover), their Calibre-Web shelf memberships move to it, and they go to Calibre’s trash, after a backup. The suggested keeper is the one whose EPUB or PDF is most complete (figures, table of contents, print page numbers, text), then one with quotes anchored in its text, then one with a citekey or Zotero link, then one with a colour cover, then one on a shelf. What a trashed record carries moves to the keeper: its tag proposal; its quotes, re-anchored in the keeper’s text when each one’s wording is found exactly once there; and its citekey and Zotero link when the copies are the same edition (a shared file or identifier, or your confirmation). Select several groups to preview and apply them as one batch; groups with blockers are skipped.</p>
 <div class="actions"><button id="refresh-source" disabled>Refresh from Calibre</button><span id="freshness" class="note"></span></div>
 <p id="refresh-status" role="status" aria-live="polite"></p>
 <div class="filters"><input type="search" id="search" placeholder="Search title, author, or book ID" aria-label="Search duplicate groups"><label><input type="checkbox" id="dismissed"> Include reviewed keep-both pairs</label></div>
@@ -13,8 +13,14 @@ export const DUPLICATES_HTML = page({
 let groups = [], state = {}, canWrite = false, calibreWebUrl = null, writableLibrary = null, refreshRunning = false;
 const pairKey = (a,b) => [a,b].sort().join('|');
 function direct(g){const m=new Map();for(const p of g.pairs)if(!p.dismissed)m.set(pairKey(p.books[0].id,p.books[1].id),p);return m;}
-/** Quotes and anchors point into a record's own file, so it can only be the keeper. A tag proposal, citekey or Zotero link moves to the keeper instead. */
-const referenced = b => ['quotes','anchors'].some(k=>(b.references||{})[k]>0);
+/** corpus-mcp's own old quotes cannot move, so that record can only be the keeper. Quotes anchored from quote-mcp, a tag proposal, citekey or Zotero link move to the keeper instead. */
+const referenced = b => (b.references||{}).quotes>0;
+/** As assertDuplicateMovable: b's quotes that cannot be placed in keep's text (each needs its wording found exactly once there). */
+function anchorBlock(keep,b){
+ const m=b.anchor_moves&&b.anchor_moves[keep];
+ if(!m||!m.review.length)return null;
+ return m.review.length+' quote'+(m.review.length===1?'':'s')+' cannot be placed in the keeper’s text (quote '+m.review.slice(0,5).map(r=>r.quote_id).join(', ')+(m.review.length>5?', …':'')+'): the wording is missing there or occurs more than once. Keep this record, or fix those quotes in quote-mcp first.';
+}
 const filed = b => ['citekeys','zotero_links','zotero_items'].some(k=>(b.references||{})[k]>0);
 /** As filingBlocker in duplicates.ts: why b's citekey or Zotero link cannot move to keep. kind 'edition' is settled by confirming the same edition. */
 function filingBlock(g,keep,b){
@@ -27,8 +33,8 @@ function filingBlock(g,keep,b){
  if(!(p&&p.same_edition)&&!state[g.key]?.edition)return {kind:'edition',text:'Has a citekey or Zotero link, and no shared file or identifier shows it is the keeper’s edition. Confirm the same edition below to move it.'};
  return null;
 }
-/** The records that may be trashed into keeper: paired with it directly, no quotes or anchors, filing that can move, and that pair writable. */
-function trashable(g,keep,b){const p=direct(g).get(pairKey(keep,b.id));return b.id!==keep&&!!p&&p.writable&&!referenced(b)&&!filingBlock(g,keep,b);}
+/** The records that may be trashed into keeper: paired with it directly, no old quotes, quotes and filing that can move, and that pair writable. */
+function trashable(g,keep,b){const p=direct(g).get(pairKey(keep,b.id));return b.id!==keep&&!!p&&p.writable&&!referenced(b)&&!anchorBlock(keep,b)&&!filingBlock(g,keep,b);}
 /** Whether the group needs the same-edition confirmation for some record to move its filing. */
 function needsEdition(g,keep){return g.books.some(b=>{if(b.id===keep||referenced(b))return false;const x=filingBlock(g,keep,b);return x?x.kind==='edition':(!!state[g.key]?.edition&&filed(b)&&!direct(g).get(pairKey(keep,b.id))?.same_edition);});}
 function init(g){
@@ -71,8 +77,9 @@ function render() {
    const refs=Object.entries(b.references).filter(([k,v])=>v).map(([k,v])=>k+': '+v).join(', ');
    const p=direct(g).get(pairKey(s.keep,b.id));
    const block=keep?null:filingBlock(g,s.keep,b);
-   const why=keep?'':!canTrash?(referenced(b)?'Has saved quotes or anchors; it can only be the keeper.':!p?'Does not match the keeper directly; choose another keeper or resolve it separately.':!p.writable?'Not in the writable library with the keeper.':block?block.text:''):'';
-   const moves=trash?[b.references.tag_proposals?'tag proposal'+(g.books.find(k=>k.id===s.keep)?.references.tag_proposals?' (combined with the keeper’s)':''):null,filed(b)?'citekey and Zotero link':null].filter(Boolean):[];
+   const why=keep?'':!canTrash?(referenced(b)?'Has quotes in corpus-mcp’s old quote store; it can only be the keeper.':!p?'Does not match the keeper directly; choose another keeper or resolve it separately.':!p.writable?'Not in the writable library with the keeper.':anchorBlock(s.keep,b)||(block?block.text:'')):'';
+   const am=trash&&b.anchor_moves?b.anchor_moves[s.keep]:null;
+   const moves=trash?[b.references.tag_proposals?'tag proposal'+(g.books.find(k=>k.id===s.keep)?.references.tag_proposals?' (combined with the keeper’s)':''):null,filed(b)?'citekey and Zotero link':null,am&&(am.moves||am.orphaned)?(am.moves+am.orphaned)+' quote'+(am.moves+am.orphaned===1?'':'s')+(am.orphaned?' ('+am.orphaned+' already lost, to find again)':''):null].filter(Boolean):[];
    return '<div class="member'+(keep?' keep':trash?' trash':'')+'"><img class="cover" src="/api/books/'+encodeURIComponent(b.id)+'/cover" alt="" loading="lazy" onerror="this.remove()"><h3>'+bookLink(b.id,b.title)+'</h3><p>'+esc(b.id)+' · '+esc(b.authors.join('; '))+' · '+esc(b.year??'Year unknown')+'</p><p>Formats: '+esc(b.formats.join(', ')||'none')+' · '+esc(b.status)+(b.file_size?' · '+esc((b.file_size/1048576).toFixed(1))+' MiB':'')+'</p>'+(b.error?'<p class="warning">'+esc(b.error)+'</p>':'')+'<p>'+Object.entries(b.identifiers).map(([k,v])=>esc(k+': '+v)).join(' · ')+'</p><p>Saved references: '+esc(refs||'none')+'</p><p'+(b.cover_colour!==null&&b.cover_colour<5?' class="warning"':'')+'>'+esc(looks.join(' · '))+'</p>'+(b.id===g.suggested_keep?'<p class="note">Suggested keeper: it '+esc(g.suggested_because)+'.</p>':'')+calibreLink
     +'<p class="choice"><label><input type="radio" name="keep-'+n+'" data-keep="'+n+'" value="'+esc(b.id)+'" '+(keep?'checked':'')+'> Keep</label><label><input type="checkbox" data-trash="'+n+'" value="'+esc(b.id)+'" '+(trash?'checked ':'')+(canTrash?'':'disabled')+'> Trash</label></p>'+(why?'<p class="note">'+esc(why)+'</p>':'')+(moves.length?'<p class="note">Its '+esc(moves.join(' and '))+' move to the keeper.</p>':'')+'</div>';
   }).join('')+'</div>'+contentsTable(g)+'<details><summary>'+g.pairs.length+' match'+(g.pairs.length===1?'':'es')+'</summary><ul class="matches">'+g.pairs.map((p,i)=>'<li>'+esc(p.books[0].id)+' ↔ '+esc(p.books[1].id)+': '+p.evidence.map(esc).join(', ')+(p.dismissed?' · <em>reviewed: keep both</em>':'')+' <button data-dismiss="'+n+':'+i+'" '+(!canWrite?'disabled':'')+'>'+(p.dismissed?'Reopen':'Keep both')+'</button></li>').join('')+'</ul></details>'

@@ -1046,16 +1046,19 @@ its cached book record under the old UUID.
 
 ### Stages
 
-1. `book_aliases`, and UUID lookups that resolve through it. No behaviour change.
-2. Duplicate merges record an alias and re-anchor into the keeper, in place of the
-   quote-mcp block.
+Stages 1 to 4 are built (PR #45, data schema 14).
+
+1. `book_aliases`, and UUID lookups that resolve through it (`resolveUuid`,
+   `aliasesOf` in `src/data.ts`; verify and anchors in `src/anchors.ts`).
+2. Duplicate merges record an alias and re-anchor into the keeper
+   (`planAnchorMoves`, `moveAnchors`), in place of the quote-mcp block.
 3. The books feed lists `former_uuids`; the reader asks quote-mcp for aliases too.
 
-Sync, deferred until 1 to 3 are done, then in this order so each stage is useful alone:
+Sync, in this order so each stage is useful alone:
 
 4. Baselines. Every job that already pushes to Calibre (metadata, tags) records the
-   value it wrote as that field's last synced value. Cheap, and it starts the
-   history the later stages compare against.
+   value it wrote as that field's last synced value (`sync_baselines`). Cheap, and
+   it starts the history the later stages compare against. Nothing reads them yet.
 5. Drift report. Refresh compares Calibre and the Zotero mirror with the baselines
    and lists what changed where. Read-only: nothing is adopted or pushed yet.
 6. Adopt and conflict. A one-sided edit is taken into the record; a two-sided one is

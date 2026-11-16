@@ -37,6 +37,8 @@ function select(keep="main:1",remove=["main:2"]){const books=duplicatePairs(c,"m
 const plan=(s=select())=>duplicateBatchPlan(c,"main",[s]);
 /** An anchor for a quote-mcp quote on this record: it ties the record to its own file. */
 const anchor=(uuid:string,id:string)=>c.data.prepare("INSERT INTO anchors(quote_id,calibre_uuid,book_id,start_page,start_offset,end_page,end_offset,prefix,suffix,text,status,created_at,updated_at) VALUES((SELECT COALESCE(MAX(quote_id),0)+1 FROM anchors),?,?,0,0,0,5,'','','A syn','verified','now','now')").run(uuid,id);
+/** A quote in corpus-mcp's own old quote store: it cannot move, so its record can only be the keeper. */
+const oldQuote=(uuid:string,id:string)=>c.data.prepare("INSERT INTO quotes(calibre_uuid,book_id,title,text,start_page,start_offset,end_page,end_offset,prefix,suffix,status,source,created_at) VALUES(?,?,'B','A syn',0,0,0,5,'','','verified','agent','now')").run(uuid,id);
 /** Makes the copies match by title and authors only, so nothing shows they are one edition. */
 const differentFiles=()=>c.db.prepare("UPDATE books SET sha256='another-file' WHERE id='main:2'").run();
 it("reports exact selected files, metadata evidence, edition warnings and all available formats",()=>{
@@ -58,9 +60,9 @@ it("persists keep-both decisions, supports reopening, and invalidates them when 
  c.db.prepare("UPDATE books SET year=2022 WHERE id='main:2'").run();expect(duplicatePairs(c,"main").total).toBe(1);
  expect(()=>duplicateBatchPlan(c,"main",[before])).toThrow(/changed/);
 });
-it("blocks records with anchors and cross-library resolution without moving any links",()=>{
- const p=pair();anchor('uuid-2','main:2');
- expect(()=>plan()).toThrow(/quotes or anchors/);
+it("blocks records with old corpus quotes and cross-library resolution without moving any links",()=>{
+ const p=pair();anchor('uuid-2','main:2');oldQuote('uuid-2','main:2');
+ expect(()=>plan()).toThrow(/old quote store/);
  expect(()=>duplicateBatchPlan(c,"other",[select()])).toThrow(/writable/);
  expect(c.data.prepare("SELECT count(*) FROM anchors WHERE calibre_uuid='uuid-2'").pluck().get()).toBe(1);
  expect(()=>dismissDuplicate(c,"main",["main:1","main:3"],p.fingerprint,false)).toThrow(/changed/);
@@ -83,8 +85,8 @@ it("applies the source-reviewed plan, audits resolution, refreshes and releases 
 it("refuses newly referenced duplicates after preview and previews with source blockers",async()=>{
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...JSON.parse(stdin!).groups[0],reviewed:"source"},blockers:[]}})+'\n');}});
  const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
- anchor('uuid-2','main:2');
- expect(()=>r.start("duplicates","apply",{previewOf:preview.id})).toThrow(/quotes or anchors/);
+ oldQuote('uuid-2','main:2');
+ expect(()=>r.start("duplicates","apply",{previewOf:preview.id})).toThrow(/old quote store/);
 });
 it("refreshes after a failed source write and keeps the job failed",async()=>{
  let refreshed=0;
@@ -100,17 +102,20 @@ it("renders syntactically valid review and job scripts",()=>{
  for(const html of [DUPLICATES_HTML,JOB_HTML])for(const match of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g))expect(()=>new Function(match[1])).not.toThrow();
 });
 
-it("holds resolution when quote-mcp reports an unanchored quote or cannot verify references",async()=>{
- const {assertNoBookQuotes}=await import('../src/quoteMcp.js');
+it("holds resolution when quote-mcp has an anchor that is not kept here, or cannot be asked",async()=>{
+ const {assertBookQuotesMovable}=await import('../src/quoteMcp.js');
  const http=await import('node:http');
  let status=200,body:any={quotes:[{id:90,anchor:null}]};
  const server=http.createServer((req,res)=>res.writeHead(status,{'content-type':'application/json'}).end(JSON.stringify(body)));
  await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));
  const base='http://127.0.0.1:'+(server.address() as any).port;
  try{
-  await expect(assertNoBookQuotes(base,'uuid-2')).rejects.toThrow(/quotes in quote-mcp/);
-  status=503;await expect(assertNoBookQuotes(base,'uuid-2')).rejects.toThrow(/Could not verify/);
-  status=200;body={quotes:[]};await expect(assertNoBookQuotes(base,'uuid-2')).resolves.toBeUndefined();
+  // An unanchored quote needs nothing here: its book resolves to the keeper through the alias.
+  await expect(assertBookQuotesMovable(base,'uuid-2',c.data)).resolves.toBeUndefined();
+  body={quotes:[{id:1,anchor:{start_page:0}}]};
+  await expect(assertBookQuotesMovable(base,'uuid-2',c.data)).rejects.toThrow(/anchors are not kept here \(quote 1\)/);
+  anchor('uuid-2','main:2');await expect(assertBookQuotesMovable(base,'uuid-2',c.data)).resolves.toBeUndefined();
+  status=503;await expect(assertBookQuotesMovable(base,'uuid-2',c.data)).rejects.toThrow(/Could not verify/);
  }finally{await new Promise<void>(done=>server.close(()=>done()));}
 });
 
@@ -251,10 +256,10 @@ it("groups linked records, suggests a keeper, and plans a batch of disjoint grou
  expect(()=>plan(select("main:2",[]))).toThrow(/at least one record/);
  expect(()=>duplicateBatchPlan(c,"main",[])).toThrow(/at least one duplicate group/);
 });
-it("prefers a keeper with anchors and refuses to trash it",()=>{
- anchor('uuid-2','main:2');
+it("prefers a keeper with old corpus quotes and refuses to trash it",()=>{
+ oldQuote('uuid-2','main:2');
  expect(duplicateGroups(c,"main").groups[0].suggested_keep).toBe("main:2");
- expect(()=>plan()).toThrow(/main:2 has saved quotes or anchors/);
+ expect(()=>plan()).toThrow(/main:2 has quotes in corpus-mcp's old quote store/);
  expect(plan(select("main:2",["main:1"])).groups[0].remove).toEqual([{id:1,uuid:"uuid-1"}]);
 });
 it("applies only the groups the source reviewed without blockers",async()=>{
@@ -332,7 +337,9 @@ it("prefers a colour cover, then a shelved record, and says why, without changin
  c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','k','main:2','T','now')").run();
  expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"is filed with a citekey or in Zotero"});
  anchor('uuid-1','main:1');
- expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:1",suggested_because:"has saved quotes or anchors"});
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:1",suggested_because:"has quotes anchored in its text"});
+ oldQuote('uuid-2','main:2');
+ expect(duplicateGroups(c,"main").groups[0]).toMatchObject({suggested_keep:"main:2",suggested_because:"has quotes that cannot move"});
 });
 it("flags groups whose EPUB or PDF sizes differ by 10% or more",()=>{
  expect(sizeWarnings([{id:"main:100",sizes:{EPUB:357*1024}},{id:"main:783",sizes:{EPUB:6617*1024}}])[0]).toMatch(/^EPUB sizes differ 18\.5×: main:100 357 KB, main:783 6\.5 MB\./);
@@ -476,4 +483,74 @@ it("ranks only stored filing, not an ISBN match, as filed",()=>{
  c.db.prepare("UPDATE books SET isbn='9780306406157' WHERE id='main:2'").run();
  expect(zoteroMatch(c,getBook(c,"main:2")).match).toMatchObject({matched_by:"isbn"});
  expect(duplicateGroups(c,"main").groups[0].suggested_because).not.toBe("is filed with a citekey or in Zotero");
+});
+const mergeRunner=()=>new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+ const p=JSON.parse(stdin!);
+ if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
+ else log('@@change '+JSON.stringify({calibre_id:1,uuid:"uuid-1",title:"The Same Book",duplicate_resolved:{removed_id:2,removed_uuid:"uuid-2",trash:true,backup:"b"}})+'\n');
+}});
+it("re-anchors a trashed duplicate's quotes in the keeper and leaves an alias for its UUID",async()=>{
+ const {verifyPassage}=await import("../src/anchors.js");const {resolveUuid,aliasesOf}=await import("../src/data.js");
+ anchor('uuid-2','main:2');
+ const g=duplicateGroups(c,"main").groups[0];
+ expect(g.books.find(b=>b.id==="main:2")!.anchor_moves).toEqual({"main:1":{moves:1,orphaned:0,review:[]}});
+ const r=mergeRunner();
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
+ expect((await wait(r,r.start("duplicates","apply",{previewOf:preview.id}))).status).toBe("succeeded");
+ expect(c.data.prepare("SELECT calibre_uuid,book_id,status,text,start_offset FROM anchors").all()).toEqual([{calibre_uuid:"uuid-1",book_id:"main:1",status:"verified",text:"A syn",start_offset:0}]);
+ const change=c.data.prepare("SELECT kind,status,anchor FROM anchor_changes ORDER BY seq DESC LIMIT 1").get() as any;
+ expect(change).toMatchObject({kind:"reanchored",status:"verified"});expect(JSON.parse(change.anchor).calibre_uuid).toBe("uuid-1");
+ expect(c.data.prepare("SELECT detail FROM changes WHERE kind='quotes_moved'").pluck().get()).toBe("1 re-anchored from main:2");
+ expect(resolveUuid(c.data,"UUID-2")).toBe("uuid-1");expect(aliasesOf(c.data,"uuid-1")).toEqual(["uuid-2"]);
+ // After the refresh drops the trashed record, its UUID still reaches the keeper.
+ c.db.prepare("DELETE FROM books WHERE id='main:2'").run();
+ const answer=verifyPassage(c,{excludeTags:[]},{book:"uuid-2",text:"A synthetic book"});
+ expect(answer.body).toMatchObject({match:true,book:{calibre_uuid:"uuid-1",former_uuids:["uuid-2"]}});
+});
+it("blocks a merge when a quote's wording is missing from, or repeated in, the keeper",()=>{
+ anchor('uuid-2','main:2');
+ const text=c.db.prepare("SELECT text FROM pages WHERE book_id='main:1' AND page_index=0").pluck().get() as string;
+ c.db.prepare("UPDATE pages SET text=? WHERE book_id='main:1' AND page_index=0").run("Different words entirely");
+ expect(()=>plan()).toThrow(/main:2 has 1 quote that cannot be placed in main:1: quote 1 \(its wording is not in the keeper's text\)/);
+ expect(duplicateGroups(c,"main").groups[0].books.find(b=>b.id==="main:2")!.anchor_moves!["main:1"].review).toEqual([{quote_id:1,reason:"wording-not-found"}]);
+ c.db.prepare("UPDATE pages SET text=? WHERE book_id='main:1' AND page_index=0").run(text+" "+text);
+ expect(()=>plan()).toThrow(/occurs more than once/);
+ // The other way round is unaffected: main:2 keeps its quote as the keeper.
+ expect(plan(select("main:2",["main:1"])).groups[0].remove).toEqual([{id:1,uuid:"uuid-1"}]);
+});
+it("carries a lost anchor to the keeper for the next scan to find",async()=>{
+ const {moveAnchors}=await import("../src/anchors.js");
+ anchor('uuid-2','main:2');c.data.prepare("UPDATE anchors SET status='orphaned'").run();
+ expect(plan().groups[0].remove).toEqual([{id:2,uuid:"uuid-2"}]);
+ expect(moveAnchors(c,"uuid-2",getBook(c,"main:1"))).toEqual({moved:0,orphaned:1});
+ expect(c.data.prepare("SELECT calibre_uuid,status,sha256 FROM anchors").all()).toEqual([{calibre_uuid:"uuid-1",status:"orphaned",sha256:null}]);
+});
+it("re-points older aliases when their keeper is merged in turn",async()=>{
+ const {recordAlias,resolveUuid,aliasesOf}=await import("../src/data.js");
+ recordAlias(c.data,{old_uuid:"uuid-9",uuid:"uuid-2",reason:"duplicate_merged"});
+ recordAlias(c.data,{old_uuid:"uuid-2",uuid:"uuid-1",reason:"duplicate_merged"});
+ expect(resolveUuid(c.data,"uuid-9")).toBe("uuid-1");expect(aliasesOf(c.data,"uuid-1").sort()).toEqual(["uuid-2","uuid-9"]);
+ expect(resolveUuid(c.data,"uuid-1")).toBe("uuid-1");
+});
+it("records what a metadata job wrote to Calibre as sync baselines",async()=>{
+ const r=new JobRunner(c,config,{refresh:async()=>{c.db.prepare("UPDATE books SET title='The Same Book, Revised' WHERE id='main:1'").run();},calibre:async(command,stdin,log)=>{
+  const b=JSON.parse(stdin!).books[0];
+  if(command==="metadata-apply")log('@@change '+JSON.stringify({calibre_id:b.calibre_id,uuid:b.uuid,title:b.after.title,metadata:{before:b.before,after:b.after}})+'\n');
+ }});
+ const job=await wait(r,r.start("metadata","apply",{metadata:{book_id:"main:1",title:"The Same Book, Revised",authors:["Ann Author"],year:2020,before:{title:"The Same Book",authors:["Ann Author"],year:2020}}}));
+ expect(job.status).toBe("succeeded");
+ expect(c.data.prepare("SELECT surface,field,value,job_id FROM sync_baselines WHERE calibre_uuid='uuid-1' ORDER BY field").all()).toEqual([
+  {surface:"calibre",field:"authors",value:'["Ann Author"]',job_id:job.id},{surface:"calibre",field:"title",value:'"The Same Book, Revised"',job_id:job.id},{surface:"calibre",field:"year",value:"2020",job_id:job.id}]);
+});
+it("records the tags a tag job leaves on a book as its sync baseline",async()=>{
+ c.data.prepare("INSERT INTO tag_proposals(calibre_uuid,book_id,title,tags,rationale,status,approved_tags,proposed_at) VALUES('uuid-1','main:1','The Same Book','[\"social-sciences.sociology\"]','why','approved','[\"social-sciences.sociology\"]','now')").run();
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  for(const b of JSON.parse(stdin!).books)log('@@change '+JSON.stringify({calibre_id:b.calibre_id,uuid:b.uuid,title:b.title,added:b.add??[],removed:b.remove??[]})+'\n');
+ }});
+ const preview=await wait(r,r.start("tags","preview"));
+ const job=await wait(r,r.start("tags","apply",{previewOf:preview.id}));
+ expect(job.status).toBe("succeeded");
+ const before=JSON.parse(c.db.prepare("SELECT tags FROM books WHERE id='main:1'").pluck().get() as string) as string[];
+ expect(c.data.prepare("SELECT value FROM sync_baselines WHERE calibre_uuid='uuid-1' AND surface='calibre' AND field='tags'").pluck().get())
+  .toBe(JSON.stringify([...new Set([...before,"social-sciences.sociology"])].sort((a,b)=>a.localeCompare(b))));
 });

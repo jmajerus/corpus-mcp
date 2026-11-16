@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { pinnedByUuid } from "./data.js";
+import { aliasesOf, pinnedByUuid } from "./data.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { type BookRow, type Corpus, effectiveCitekey, printedIsbns } from "./tools.js";
 import { zoteroMatch } from "./zotero.js";
@@ -19,6 +19,8 @@ export const HOLDINGS_VERSION = 1;
 
 export interface HoldingsBook {
   calibre_uuid: string | null;
+  /** UUIDs of records merged into this one (duplicates trashed into it); absent when there are none. A reference kept under one of them means this book. */
+  former_uuids?: string[];
   book_id: string;
   library: string;
   title: string;
@@ -66,12 +68,13 @@ export function holdingsBook(c: Corpus, b: BookRow, zoteroLibrary?: string): Hol
       if (!citekey && match.citekey) ({ citekey, citekey_source } = { citekey: match.citekey, citekey_source: "zotero" });
     }
   }
+  const former = b.uuid ? aliasesOf(c.data, b.uuid) : [];
   const isbn = b.isbn ? validIsbn(b.isbn) : null;
   // Read at index time, so this is a JSON parse, not a scan.
   const printed = printedIsbns(b).sort((x, y) => (x.position === y.position ? x.page - y.page : x.position === "front" ? -1 : 1));
   const candidates = [...new Set(printed.map((p) => p.isbn13))].filter((i) => !isbn || i !== isbn13(isbn));
   return {
-    calibre_uuid: b.uuid, book_id: b.id, library: b.library, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year,
+    calibre_uuid: b.uuid, ...(former.length ? { former_uuids: former } : {}), book_id: b.id, library: b.library, title: b.title, authors: JSON.parse(b.authors) as string[], year: b.year,
     formats: b.format ? [b.format] : [],
     has_text: hasText(b),
     isbns: isbn ? [isbn] : [],
