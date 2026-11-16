@@ -726,3 +726,31 @@ it("orders files staged in the same millisecond by when they were staged, not by
     vi.useRealTimers();
   }
 });
+
+it("offers the waiting file of a pair as a new format once the first is in the library", () => {
+  const epub = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2009", isbn: "9780061238369" });
+  const pdf = makePdf({ pages: [["Mystic River", "Dennis Lehane", "ISBN 978-0-06-123836-9"]] });
+  const first = stageUpload(c, config, "Mystic River.epub", epub);
+  const second = stageUpload(c, config, "Mystic River.pdf", pdf);
+  expect(second.staged_matches.map(m => [m.id, m.earlier])).toEqual([[first.id, true]]);
+  expect(second.draft.action).toBe("skip");
+
+  // The apply adds the EPUB as main:3 and removes it from staging; the follow-up refresh indexes it.
+  fs.rmSync(path.join(root, "main"), { recursive: true, force: true });
+  makeLibrary(root, "main", [
+    { id: 1, title: "The Same Book", authors: ["Ada Lovelace"], pubdate: "2021-01-01", isbn: "9780306406157", files: { pdf: existingPdf } },
+    { id: 2, title: "Unique Existing", authors: ["Grace Hopper"], pubdate: "2019-01-01", files: { epub: existingEpub } },
+    { id: 3, title: "Mystic River", authors: ["Dennis Lehane"], pubdate: "2009-01-01", isbn: "9780061238369", files: { epub } },
+  ]);
+  removeStagedUpload(config, first.id);
+  c.db.close();
+  const db = openDatabase(config.dbPath);
+  scanLibraries(config, db);
+  db.close();
+  c.db = openDatabase(config.dbPath, { readonly: true });
+
+  const waiting = listStagedUploads(c, config).items.find(i => i.id === second.id)!;
+  expect(waiting.staged_matches).toEqual([]);
+  expect(waiting.suggested_action).toBe("add_format");
+  expect(waiting.draft).toMatchObject({ action: "add_format", target_book_id: "main:3" });
+});

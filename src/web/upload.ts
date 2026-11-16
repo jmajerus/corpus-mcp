@@ -59,11 +59,12 @@ function initItem(it) {
     picked[it.id] = false;
     return;
   }
-  if (picked[it.id] === undefined || (picked[it.id] === false && it.was_pending)) {
+  if (picked[it.id] === undefined || (picked[it.id] === false && (it.was_pending || it.became_ready))) {
     picked[it.id] = true;
     freshPick[it.id] = true;
   }
   it.was_pending = false;
+  it.became_ready = false;
 }
 
 /** A new batch arrives already checked, up to the preview limit. Later files wait for the next preview. */
@@ -289,6 +290,9 @@ function render() {
 async function load() {
   try {
     const prevPending = new Set(items.filter(pending).map((x) => x.id));
+    // A file that couldn't be chosen before (one waiting on its pair, now offered as a format of the book
+    // that was just added) is ticked like a new arrival. One the reader unticked themselves stays unticked.
+    const prevWaiting = new Set(items.filter((x) => !pending(x) && !actionable(x)).map((x) => x.id));
     const data = await api("/api/upload");
     items = data.items;
     if (data.max_batch_bytes) batchLimit = data.max_batch_bytes;
@@ -298,6 +302,7 @@ async function load() {
     if (items.some(pending)) pendingTimer = setTimeout(() => { if (!document.hidden) load(); }, 3000);
     items.forEach((it) => {
       if (prevPending.has(it.id) || pending(it)) it.was_pending = true;
+      if (prevWaiting.has(it.id)) it.became_ready = true;
       initItem(it);
     });
     keepSelectionWithinLimit();
