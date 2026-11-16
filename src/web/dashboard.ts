@@ -9,6 +9,8 @@ export const DASHBOARD_HTML = page({
 .pill { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 4px 12px; font-size: 0.86rem; }
 .pill .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--danger); }
 .pill.up .dot { background: var(--ok); }
+.pill.stale .dot { background: var(--warn); }
+.strip .label { font-size: 0.8rem; color: var(--muted, inherit); opacity: 0.8; align-self: center; min-width: 6.5em; }
 .warn { color: var(--warn); } .bad { color: var(--danger); } .good { color: var(--ok); }
 .big a { color: inherit; text-decoration: none; } .big a:hover { text-decoration: underline; }
 .actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
@@ -17,7 +19,9 @@ export const DASHBOARD_HTML = page({
 .action input { width: 100%; margin-bottom: 8px; }
 .status-succeeded { color: var(--ok); } .status-running { color: var(--warn); } .status-failed, .status-interrupted { color: var(--danger); }`,
   body: `
-<div class="strip" id="neighbors" aria-label="Services"></div>
+<div class="strip" id="dependencies" aria-label="Services corpus-mcp uses"></div>
+<div class="strip" id="subscribers" aria-label="Terminology subscribers" hidden></div>
+<div class="strip" id="neighbors" aria-label="Other services" hidden></div>
 <h2>Corpus</h2>
 <div id="cards" class="grid"></div>
 <h2>Actions</h2>
@@ -44,12 +48,37 @@ function calibreLibraryRows(sync) {
   return rows;
 }
 
+const probePill = (n) => '<span class="pill ' + (n.up ? "up" : "") + '" title="' + esc(n.url + (n.setting ? " (" + n.setting + ")" : "") + (n.error ? " — " + n.error : "")) + '"><span class="dot"></span>' + esc(n.name) + (n.up ? " · " + n.ms + " ms" : " · down") + "</span>";
+
+/**
+ * A terminology subscriber: green when it reported progress recently, amber when it's quiet or has a blocking
+ * change. Its lag shows only when it has changes left to apply; an up-to-date one stays short, like the other lights.
+ */
+function subscriberPill(s) {
+  const behind = s.pending ? " · " + s.pending + " behind" + (s.pending_breaking ? " (" + s.pending_breaking + " breaking)" : "") : "";
+  const state = !s.fresh ? "stale" : s.blocked ? "stale" : "up";
+  const title = s.id + " · last seen " + (s.last_seen ? ago(s.last_seen) : "never") + (s.blocked ? " · blocked on a change" : "");
+  return '<span class="pill ' + state + '" title="' + esc(title) + '"><span class="dot"></span>' + esc(s.label) + (s.fresh ? "" : " · seen " + esc(s.last_seen ? ago(s.last_seen) : "never")) + esc(behind) + "</span>";
+}
+
+function renderServices(m) {
+  const label = (text) => '<span class="label">' + esc(text) + "</span>";
+  document.getElementById("dependencies").innerHTML = label("Uses") + (m.dependencies || []).map(probePill).join("") +
+    '<span class="pill up"><span class="dot"></span>corpus-mcp ' + esc(m.service.version) + "</span>";
+  const subs = document.getElementById("subscribers"), sm = m.subscribers;
+  subs.hidden = !sm;
+  if (sm) subs.innerHTML = label("Subscribers") + (sm.error
+    ? '<span class="pill" title="' + esc(sm.url) + '"><span class="dot"></span>' + esc(sm.error) + "</span>"
+    : sm.subscribers.length ? sm.subscribers.map(subscriberPill).join("") : '<span class="note">None besides corpus-mcp.</span>');
+  const extra = document.getElementById("neighbors");
+  extra.hidden = !(m.neighbors || []).length;
+  extra.innerHTML = label("Also") + (m.neighbors || []).map(probePill).join("");
+}
+
 async function loadMetrics() {
   let m;
   try { m = await api("/api/admin/metrics"); } catch (e) { toast(e.message); return; }
-  document.getElementById("neighbors").innerHTML = m.neighbors.map((n) =>
-    '<span class="pill ' + (n.up ? "up" : "") + '" title="' + esc(n.url + (n.error ? " — " + n.error : "")) + '"><span class="dot"></span>' + esc(n.name) + (n.up ? " · " + n.ms + " ms" : " · down") + "</span>").join("") +
-    '<span class="pill up"><span class="dot"></span>corpus-mcp ' + esc(m.service.version) + "</span>";
+  renderServices(m);
   const indexed = m.index.counts.filter((r) => r.status === "indexed");
   const total = indexed.reduce((n, r) => n + r.books, 0);
   const run = m.index.runs[0];

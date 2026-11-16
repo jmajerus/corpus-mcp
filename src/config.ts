@@ -8,7 +8,10 @@ import type { AccessConfig } from "./access.js";
 /** Settings for the /admin dashboard; every field has a default, so tests and older configs can omit it. */
 export interface AdminConfig {
   access: AccessConfig;
-  /** Neighbouring LAN services shown in the dashboard's status strip. */
+  /**
+   * Other services to probe on the dashboard (CORPUS_NEIGHBORS, "name=url;…"), beside the ones corpus-mcp
+   * is configured to use and the terminology subscribers, which it finds itself. None by default.
+   */
   neighbors: { name: string; url: string }[];
   /** ssh target and key for the Calibre-Web host's forced command (deploy/corpus-source.sh). */
   source: string;
@@ -24,7 +27,6 @@ export interface AdminConfig {
   quoteMcpUrl?: string;
 }
 
-const DEFAULT_NEIGHBORS = "zotero-mcp=http://zotero-mcp.localdomain:8000/mcp;calibre-web=http://calibre-web.localdomain:8083/;authoring=http://authoring.localdomain:8787/";
 
 /** The public catalogue site (src/public/); off unless CORPUS_PUBLIC is set. */
 export interface PublicConfig {
@@ -146,7 +148,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         lanHosts: env.CORPUS_LAN_HOSTS ? env.CORPUS_LAN_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
           : [os.hostname(), `${os.hostname().split(".")[0]}.localdomain`],
       },
-      neighbors: (env.CORPUS_NEIGHBORS ?? DEFAULT_NEIGHBORS).split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {
+      neighbors: (env.CORPUS_NEIGHBORS ?? "").split(";").map((pair) => pair.trim()).filter(Boolean).map((pair) => {
         const at = pair.indexOf("=");
         return { name: pair.slice(0, at).trim(), url: pair.slice(at + 1).trim() };
       }),

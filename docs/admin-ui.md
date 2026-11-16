@@ -37,9 +37,24 @@ wherever the change shows up.
 
 ## Dashboard (`/admin`)
 
-The dashboard is the place to start. Along the top, a strip shows the
-neighbouring services (green when they answer, with response times) and the
-running corpus-mcp version. It refreshes every 30 seconds.
+The dashboard is the place to start. Along the top, up to three rows show
+other services. They refresh every 30 seconds.
+
+- **Uses:** the services corpus-mcp is set up to use, read from the same
+  settings it uses them by: Calibre-Web (`CORPUS_CALIBRE_WEB_URL`), the Zotero
+  API (`CORPUS_ZOTERO_API`), terminology-mcp (`CORPUS_TERMINOLOGY_URL`) and
+  quote-mcp (`CORPUS_QUOTE_MCP_URL`). Each is green when it answers, with its
+  response time; hover for the address and the setting. A service that's turned
+  off isn't shown. The row ends with the running corpus-mcp version.
+- **Subscribers:** the other services subscribed to the terminology log (Concept
+  Clusters, quote-mcp, iasp-mcp…), as terminology-mcp lists them. Green means
+  it reported progress in the last 15 minutes. Amber means it's been quiet longer,
+  or a change is blocking it. A subscriber with changes left to apply shows how
+  many ("· 3 behind"); one that's up to date shows nothing extra. A new
+  subscriber appears here on its own.
+- **Also:** anything else named in `CORPUS_NEIGHBORS` (`name=url;name=url`),
+  probed like the services in the first row. It's empty by default, and the row
+  is hidden then.
 
 **Corpus cards.** Each number links to the books or page behind it:
 
