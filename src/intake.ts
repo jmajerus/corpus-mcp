@@ -629,6 +629,18 @@ export function unskipIntakeFiles(c: Corpus, config: Config, paths: string[]): {
 }
 
 /**
+ * Staged intake files cleared from the Upload page while waiting on a pair that was applied: they go back
+ * on the review list (status candidate, no staged id), to be staged again with the next batch.
+ */
+export function returnIntakeStaging(data: DataStore, stagedIds: string[]): { returned: number } {
+  const now = new Date().toISOString();
+  const back = data.prepare("UPDATE intake_files SET status = 'candidate', staged_id = NULL, seen_at = ? WHERE status = 'staged' AND staged_id = ?");
+  let returned = 0;
+  for (const id of stagedIds) returned += back.run(now, id).changes;
+  return { returned };
+}
+
+/**
  * A staged upload was removed on the Upload page before Apply. Removing is a decision about the file,
  * so its NAS path is recorded as left on the NAS rather than offered again in the next batch;
  * the Intake page can offer it again.

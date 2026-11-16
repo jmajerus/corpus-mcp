@@ -59,11 +59,12 @@ function initItem(it) {
     picked[it.id] = false;
     return;
   }
-  if (picked[it.id] === undefined || (picked[it.id] === false && it.was_pending)) {
+  if (picked[it.id] === undefined || (picked[it.id] === false && (it.was_pending || it.became_ready))) {
     picked[it.id] = true;
     freshPick[it.id] = true;
   }
   it.was_pending = false;
+  it.became_ready = false;
 }
 
 /** A new batch arrives already checked, up to the preview limit. Later files wait for the next preview. */
@@ -98,7 +99,32 @@ function statusBadge(it) {
       ? '<span class="badge warn"><span class="sign" aria-hidden="true">+</span>Matches existing book · new format (' + esc(it.primary_format) + ")</span>"
       : '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Matches existing book · ' + esc(it.primary_format) + " already in library</span>";
   }
+  if (it.staged_matches && it.staged_matches.length) {
+    return '<span class="badge warn"><span class="sign" aria-hidden="true">?</span>Same book as another staged file</span>';
+  }
   return '<span class="badge good"><span class="sign" aria-hidden="true">✓</span>New book</span>';
+}
+
+/** Which other staged files look like the same book, and what to do about it. */
+function stagedMatchNote(it) {
+  const sm = it.staged_matches || [];
+  if (!sm.length) return "";
+  const list = sm.map((m) => esc(m.filename) + " (" + esc(m.evidence.join(", ")) + ")").join("; ");
+  const earlier = sm.filter((m) => m.earlier);
+  // A file becomes a new format of the other's book only when that book won't already have its format.
+  let advice;
+  if (earlier.length) {
+    const first = earlier[0];
+    advice = "Add " + esc(first.filename) + " first. " + (first.target_formats.includes(it.primary_format)
+      ? "That gives the book " + esc(it.primary_format) + " already, so skip this file, or add it then as a separate book if it's another edition."
+      : "Once it's applied, this file is offered as a new format of it; if it's another edition, add it then as a separate book.");
+  } else {
+    const later = sm.filter((m) => !it.target_formats.includes(m.primary_format));
+    advice = "Add this one first. " + (later.length
+      ? "Once it's applied, " + later.map((m) => esc(m.filename)).join(", ") + " is offered as a new format of it."
+      : "The other file has the same format, so skip it, or add it later as a separate book if it's another edition.");
+  }
+  return '<p class="warning">Also staged, and looks like the same book: ' + list + ". " + advice + "</p>";
 }
 
 function contentsTable(it) {
@@ -153,7 +179,7 @@ function updateBatch() {
   const chosen = readyItems.filter((it) => picked[it.id]);
   const addBooks = chosen.filter((it) => it.draft.action === "add_book").length;
   const addFormats = chosen.filter((it) => it.draft.action === "add_format").length;
-  const blocked = items.filter((it) => it.blockers.length || (it.matches.length && it.draft.action === "skip")).length;
+  const blocked = items.filter((it) => it.blockers.length || ((it.matches.length || (it.staged_matches || []).some((m) => m.earlier)) && it.draft.action === "skip")).length;
   const selectedBytes = chosen.reduce((sum, it) => sum + it.size, 0);
   const over = selectedBytes - batchLimit;
   const btn = document.getElementById("preview-batch");
@@ -223,7 +249,7 @@ function render() {
       choices.push('<label class="note" title="The matched record already has this format"><input type="radio" disabled> Add format to existing book (already has ' + esc(it.primary_format) + ")</label>");
     }
     if (it.allowed_actions.includes("add_book")) {
-      choices.push('<label><input type="radio" name="act-' + idx + '" data-action="' + idx + '" value="add_book"' + (act === "add_book" ? " checked" : "") + (canWrite ? "" : " disabled") + "> " + (it.matches.length ? "Add as separate book (another edition)" : "Add as new book") + "</label>");
+      choices.push('<label><input type="radio" name="act-' + idx + '" data-action="' + idx + '" value="add_book"' + (act === "add_book" ? " checked" : "") + (canWrite ? "" : " disabled") + "> " + (it.matches.length || (it.staged_matches || []).some((m) => m.earlier) ? "Add as separate book (another edition)" : "Add as new book") + "</label>");
     }
     choices.push('<label><input type="radio" name="act-' + idx + '" data-action="' + idx + '" value="skip"' + (act === "skip" ? " checked" : "") + (canWrite ? "" : " disabled") + "> Skip</label>");
 
@@ -251,6 +277,7 @@ function render() {
       it.blockers.map((b) => '<p class="bad"><strong>' + esc(b) + "</strong></p>").join("") +
       uniqueWarnings.map((w) => '<p class="warning">' + esc(w) + "</p>").join("") +
       (it.content_notes || []).map((w) => '<p class="note">' + esc(w) + "</p>").join("") +
+      stagedMatchNote(it) +
       matchedHtml +
       '<div class="choice">' + choices.join("") + "</div>" +
       targetPicker +
@@ -263,6 +290,9 @@ function render() {
 async function load() {
   try {
     const prevPending = new Set(items.filter(pending).map((x) => x.id));
+    // A file that couldn't be chosen before (one waiting on its pair, now offered as a format of the book
+    // that was just added) is ticked like a newly staged file. A file the reader unticked stays unticked.
+    const prevWaiting = new Set(items.filter((x) => !pending(x) && !actionable(x)).map((x) => x.id));
     const data = await api("/api/upload");
     items = data.items;
     if (data.max_batch_bytes) batchLimit = data.max_batch_bytes;
@@ -272,6 +302,7 @@ async function load() {
     if (items.some(pending)) pendingTimer = setTimeout(() => { if (!document.hidden) load(); }, 3000);
     items.forEach((it) => {
       if (prevPending.has(it.id) || pending(it)) it.was_pending = true;
+      if (prevWaiting.has(it.id)) it.became_ready = true;
       initItem(it);
     });
     keepSelectionWithinLimit();
@@ -358,7 +389,10 @@ document.getElementById("select-none").addEventListener("click", () => {
   render();
 });
 document.getElementById("clear-staged").addEventListener("click", async () => {
-  if (!items.length || !confirm("Remove all staged upload files? Files staged from the Intake page are marked as left on the NAS and are not staged again.")) return;
+  const back = items.filter((it) => it.returns_to_intake).length;
+  const msg = "Remove all staged upload files? Files staged from the Intake page are marked as left on the NAS and are not staged again" +
+    (back ? ", except " + back + " waiting on a book that was just added: if staged from Intake, " + (back === 1 ? "it goes" : "they go") + " back to its list, to be offered as a format of that book." : ".");
+  if (!items.length || !confirm(msg)) return;
   try {
     await post("/api/upload/clear", {});
     picked = {};
@@ -385,6 +419,8 @@ async function saveDraft(it, explicitAction = false) {
       if (picked[updated.id] === undefined) picked[updated.id] = true;
     }
     if (!actionable(updated)) picked[updated.id] = false;
+    // An edited title or author can make or break a match with another staged file, whose card changes too.
+    if ((it.staged_matches || []).length || (updated.staged_matches || []).length) { await load(); return; }
     render();
   } catch (e) {
     toast(e.message);

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { strToU8, zipSync } from "fflate";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import { notYetLogged, openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
@@ -686,4 +686,98 @@ it("still reads a short title page and copyright page from an EPUB without a cre
   const meta = extractUploadMetadata(epub, "epub", "A Short Book.epub", null);
   expect(meta.authors).toEqual(["Ada Lovelace"]);
   expect(meta.year).toBe(2019);
+});
+
+it("flags two staged files of the same book and refuses to add both as new books", () => {
+  const epub = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2009", isbn: "9780061238369", text: "The EPUB edition." });
+  const other = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2006", isbn: "9780061238369", text: "A different copy." });
+  const first = stageUpload(c, config, "Mystic River.epub", epub);
+  const second = stageUpload(c, config, "Mystic River (copy).epub", other);
+  expect(second.staged_matches).toEqual([
+    { id: first.id, filename: "Mystic River.epub", format: "EPUB", target_formats: ["EPUB"], primary_format: "EPUB", evidence: ["Matching identifier", "Matching title and authors"], earlier: true },
+  ]);
+  expect(second.draft.action).toBe("skip");
+  expect(second.allowed_actions).toContain("add_book");
+
+  const listed = listStagedUploads(c, config).items;
+  expect(listed.find(i => i.id === first.id)!.draft.action).toBe("add_book");
+  expect(listed.find(i => i.id === first.id)!.staged_matches.map(m => m.earlier)).toEqual([false]);
+
+  // Choosing both as new books in one preview is refused; one at a time is allowed.
+  const both = [first, second].map(s => ({ id: s.id, sha256: s.sha256, action: "add_book" as const }));
+  expect(() => uploadBatchPlan(c, config, both)).toThrow(/look like the same book/);
+  expect(uploadBatchPlan(c, config, [both[0]]).items).toHaveLength(1);
+
+  // A different book with the same title alone is not a match.
+  const unrelated = stageUpload(c, config, "Mystic River Poems.epub", makeRichEpub({ title: "Mystic River", author: "Someone Else", year: "1990" }));
+  expect(unrelated.staged_matches).toEqual([]);
+  expect(unrelated.draft.action).toBe("add_book");
+});
+
+it("orders files staged in the same millisecond by when they were staged, not by their random ids", () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    const book = (text: string) => makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", isbn: "9780061238369", text });
+    const staged = ["one", "two", "three", "four", "five"].map((t) => stageUpload(c, config, `Mystic River ${t}.epub`, book(t)));
+    const listed = listStagedUploads(c, config).items;
+    expect(listed.map(i => i.id)).toEqual(staged.map(s => s.id));
+    expect(listed.map(i => i.draft.action)).toEqual(["add_book", "skip", "skip", "skip", "skip"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("offers the waiting file of a pair as a new format once the first is in the library", () => {
+  const epub = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2009", isbn: "9780061238369" });
+  const pdf = makePdf({ pages: [["Mystic River", "Dennis Lehane", "ISBN 978-0-06-123836-9"]] });
+  const first = stageUpload(c, config, "Mystic River.epub", epub);
+  const second = stageUpload(c, config, "Mystic River.pdf", pdf);
+  expect(second.staged_matches.map(m => [m.id, m.earlier])).toEqual([[first.id, true]]);
+  expect(second.draft.action).toBe("skip");
+
+  // The apply adds the EPUB as main:3 and removes it from staging; the follow-up refresh indexes it.
+  fs.rmSync(path.join(root, "main"), { recursive: true, force: true });
+  makeLibrary(root, "main", [
+    { id: 1, title: "The Same Book", authors: ["Ada Lovelace"], pubdate: "2021-01-01", isbn: "9780306406157", files: { pdf: existingPdf } },
+    { id: 2, title: "Unique Existing", authors: ["Grace Hopper"], pubdate: "2019-01-01", files: { epub: existingEpub } },
+    { id: 3, title: "Mystic River", authors: ["Dennis Lehane"], pubdate: "2009-01-01", isbn: "9780061238369", files: { epub } },
+  ]);
+  removeStagedUpload(config, first.id, { applied: true });
+  c.db.close();
+  const db = openDatabase(config.dbPath);
+  scanLibraries(config, db);
+  db.close();
+  c.db = openDatabase(config.dbPath, { readonly: true });
+
+  const waiting = listStagedUploads(c, config).items.find(i => i.id === second.id)!;
+  expect(waiting.staged_matches).toEqual([]);
+  expect(waiting.returns_to_intake).toBe(true);
+  expect(waiting.suggested_action).toBe("add_format");
+  expect(waiting.draft).toMatchObject({ action: "add_format", target_book_id: "main:3" });
+});
+
+it("leaves a waiting file to be skipped when its pair is still staged, or when Skip was chosen for it", () => {
+  const book = (text: string) => makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", isbn: "9780061238369", text });
+  const first = stageUpload(c, config, "Mystic River.epub", book("one"));
+  const second = stageUpload(c, config, "Mystic River 2.epub", book("two"));
+  // Clearing while both are staged drops the pair: neither goes back.
+  expect(listStagedUploads(c, config).items.find(i => i.id === second.id)!.returns_to_intake).toBe(false);
+  removeStagedUpload(config, first.id, { applied: true });
+  expect(listStagedUploads(c, config).items[0].returns_to_intake).toBe(true);
+  // A Skip chosen on purpose stands.
+  updateStagedUpload(c, config, second.id, { action: "skip" });
+  expect(clearStagedUploads(config).returned).toEqual([]);
+});
+
+it("forgets the pair a file waited on when that file is removed rather than applied", () => {
+  const book = (text: string) => makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", text });
+  // Removed with its Remove button: the pair never reached the library.
+  const first = stageUpload(c, config, "Mystic River.epub", book("one"));
+  const second = stageUpload(c, config, "Mystic River 2.epub", book("two"));
+  expect(second.draft.action).toBe("skip");
+  removeStagedUpload(config, first.id);
+  const alone = listStagedUploads(c, config).items.find(i => i.id === second.id)!;
+  expect(alone.returns_to_intake).toBe(false);
+  expect(alone.draft.action).toBe("add_book");
+  expect(clearStagedUploads(config).returned).toEqual([]);
 });

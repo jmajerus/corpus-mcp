@@ -12,7 +12,7 @@ import { accessIdentity } from "./access.js";
 import { type About, type Deployed, aboutSource } from "./about.js";
 import { duplicateGroups, dismissDuplicate, type DuplicateGroupSelection } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
-import { listIntake, skipIntakeFiles, skipIntakeStaging, stageIntakeBatch, unskipIntakeFiles } from "./intake.js";
+import { listIntake, returnIntakeStaging, skipIntakeFiles, skipIntakeStaging, stageIntakeBatch, unskipIntakeFiles } from "./intake.js";
 import { MAX_UPLOAD_BYTES, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
 import { INTAKE_HTML } from "./web/intake.js";
 import { HEALTH_HTML } from "./web/health.js";
@@ -554,8 +554,10 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       const by = await writer(); if (by === null) return;
       await readJson(req);
       const cleared = clearStagedUploads(config);
+      // A file waiting on its applied pair goes back to the intake list; the rest are left on the NAS.
+      const { returned } = returnIntakeStaging(c.data, cleared.returned);
       skipIntakeStaging(c.data);
-      sendJson(res, 200, cleared);
+      sendJson(res, 200, { cleared: cleared.cleared, returned_to_intake: returned });
     }
     else if (req.method === "POST" && path === "/api/upload/preview") {
       const by = await writer(); if (by === null) return;
