@@ -291,7 +291,7 @@ async function load() {
   try {
     const prevPending = new Set(items.filter(pending).map((x) => x.id));
     // A file that couldn't be chosen before (one waiting on its pair, now offered as a format of the book
-    // that was just added) is ticked like a new arrival. One the reader unticked themselves stays unticked.
+    // that was just added) is ticked like a newly staged file. A file the reader unticked stays unticked.
     const prevWaiting = new Set(items.filter((x) => !pending(x) && !actionable(x)).map((x) => x.id));
     const data = await api("/api/upload");
     items = data.items;

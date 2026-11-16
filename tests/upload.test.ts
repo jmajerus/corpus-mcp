@@ -742,7 +742,7 @@ it("offers the waiting file of a pair as a new format once the first is in the l
     { id: 2, title: "Unique Existing", authors: ["Grace Hopper"], pubdate: "2019-01-01", files: { epub: existingEpub } },
     { id: 3, title: "Mystic River", authors: ["Dennis Lehane"], pubdate: "2009-01-01", isbn: "9780061238369", files: { epub } },
   ]);
-  removeStagedUpload(config, first.id);
+  removeStagedUpload(config, first.id, { applied: true });
   c.db.close();
   const db = openDatabase(config.dbPath);
   scanLibraries(config, db);
@@ -762,8 +762,22 @@ it("leaves a waiting file to be skipped when its pair is still staged, or when S
   const second = stageUpload(c, config, "Mystic River 2.epub", book("two"));
   // Clearing while both are staged drops the pair: neither goes back.
   expect(listStagedUploads(c, config).items.find(i => i.id === second.id)!.returns_to_intake).toBe(false);
-  removeStagedUpload(config, first.id);
+  removeStagedUpload(config, first.id, { applied: true });
+  expect(listStagedUploads(c, config).items[0].returns_to_intake).toBe(true);
   // A Skip chosen on purpose stands.
   updateStagedUpload(c, config, second.id, { action: "skip" });
+  expect(clearStagedUploads(config).returned).toEqual([]);
+});
+
+it("forgets the pair a file waited on when that file is removed rather than applied", () => {
+  const book = (text: string) => makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", text });
+  // Removed with its Remove button: the pair never reached the library.
+  const first = stageUpload(c, config, "Mystic River.epub", book("one"));
+  const second = stageUpload(c, config, "Mystic River 2.epub", book("two"));
+  expect(second.draft.action).toBe("skip");
+  removeStagedUpload(config, first.id);
+  const alone = listStagedUploads(c, config).items.find(i => i.id === second.id)!;
+  expect(alone.returns_to_intake).toBe(false);
+  expect(alone.draft.action).toBe("add_book");
   expect(clearStagedUploads(config).returned).toEqual([]);
 });

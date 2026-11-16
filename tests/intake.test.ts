@@ -415,7 +415,7 @@ it("sends a file waiting on its applied pair back to review when staging is clea
   expect(pdf.returns_to_intake).toBe(false);
 
   // The EPUB is applied: it leaves staging, and the PDF now goes back to intake if staging is cleared.
-  removeStagedUpload(config, epub.id);
+  removeStagedUpload(config, epub.id, { applied: true });
   c.data.prepare("UPDATE intake_files SET status = 'applied', staged_id = NULL WHERE staged_id = ?").run(epub.id);
   expect(listStagedUploads(c, config).items.find(i => i.id === pdf.id)!.returns_to_intake).toBe(true);
   const cleared = clearStagedUploads(config);

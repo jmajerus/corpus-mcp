@@ -705,12 +705,24 @@ export function updateStagedUpload(c: Corpus, config: Config, id: string, patch:
   return evaluateStagedUpload(c, config, rec, candidateBooks(c), readStagedRecords(dir));
 }
 
-export function removeStagedUpload(config: Config, id: string): { removed: boolean } {
+/**
+ * Removes one staged file. Unless it left because it was applied, a file waiting on it no longer is: its
+ * pair never reached the library, so clearing staging won't send it back to intake as a format of that book.
+ */
+export function removeStagedUpload(config: Config, id: string, opts: { applied?: boolean } = {}): { removed: boolean } {
   const dir = uploadDir(config);
-  const rec = readStagedRecords(dir).find(r => r.id === id);
+  const records = readStagedRecords(dir);
+  const rec = records.find(r => r.id === id);
   if (!rec) return { removed: false };
   fs.rmSync(path.join(dir, `${rec.id}.json`), { force: true });
   fs.rmSync(path.join(dir, `${rec.id}.${rec.ext}`), { force: true });
+  if (!opts.applied) {
+    for (const other of records) {
+      if (other.waiting_on !== id) continue;
+      delete other.waiting_on;
+      saveStagedRecord(dir, other);
+    }
+  }
   return { removed: true };
 }
 
@@ -952,8 +964,15 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   // offered as a new format (or, if it's another edition, it can be added on its own in a later preview).
   const staged_matches = stagedMatches(rec, staged);
   const waitsFor = staged_matches.find(m => m.earlier);
-  if (waitsFor && rec.waiting_on !== waitsFor.id) {
-    rec.waiting_on = waitsFor.id;
+  // The marker follows the current earlier match. Once its file has left staging the marker stays, since
+  // that file was applied (a removal clears it, in removeStagedUpload). A marker naming a file that is
+  // still staged but no longer matches goes too; drafts can't cause that today (a file's own title and
+  // authors stay match keys), but nothing then depends on it.
+  const waitingOn = waitsFor?.id
+    ?? (rec.waiting_on && staged.some(r => r.id === rec.waiting_on) ? undefined : rec.waiting_on);
+  if (waitingOn !== rec.waiting_on) {
+    if (waitingOn) rec.waiting_on = waitingOn;
+    else delete rec.waiting_on;
     saveStagedRecord(dir, rec);
   }
   const suggested_action: UploadAction = blockers.length
@@ -1250,5 +1269,5 @@ export function attachUploadPayloads(config: Config, plan: UploadBatchPlan) {
 }
 
 export function removeAppliedUploads(config: Config, appliedIds: string[]): void {
-  for (const id of appliedIds) removeStagedUpload(config, id);
+  for (const id of appliedIds) removeStagedUpload(config, id, { applied: true });
 }
