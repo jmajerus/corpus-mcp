@@ -373,3 +373,44 @@ it("shows groups at once while the server reads their files, and refuses a previ
   expect(c.data.prepare("SELECT COUNT(*) FROM file_profiles").pluck().get()).toBe(2);
  }finally{stopPdfWorkers();}
 });
+it("lets a record with only a tag proposal be trashed and moves the proposal to the keeper",async()=>{
+ const propose=(uuid:string,id:string,status:string,tags:string[],approved:string[]|null=null)=>c.data.prepare("INSERT INTO tag_proposals(calibre_uuid,book_id,title,tags,rationale,status,approved_tags,proposed_at) VALUES(?,?,?,?,?,?,?,'now')").run(uuid,id,"The Same Book",JSON.stringify(tags),"why "+id,status,approved&&JSON.stringify(approved));
+ propose("uuid-2","main:2","pending",["History"]);
+ expect(duplicateGroups(c,"main").groups[0].suggested_because).not.toBe("has saved references");
+ expect(plan().groups[0].remove).toEqual([{id:2,uuid:"uuid-2"}]);
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  const p=JSON.parse(stdin!);
+  if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
+  else log('@@change '+JSON.stringify({calibre_id:1,uuid:"uuid-1",title:"The Same Book",duplicate_resolved:{removed_id:2,removed_uuid:"uuid-2",trash:true,backup:"b"}})+'\n');
+ }});
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
+ expect((await wait(r,r.start("duplicates","apply",{previewOf:preview.id}))).status).toBe("succeeded");
+ expect(c.data.prepare("SELECT calibre_uuid,book_id,status FROM tag_proposals").all()).toEqual([{calibre_uuid:"uuid-1",book_id:"main:1",status:"pending"}]);
+ expect(c.data.prepare("SELECT detail, job_id FROM changes WHERE kind='proposal_moved'").get()).toEqual({detail:"moved from main:2",job_id:expect.any(Number)});
+});
+it("combines a moved tag proposal with the keeper's own",async()=>{
+ const {moveTagProposal}=await import("../src/tagging.js");
+ const propose=(uuid:string,id:string,status:string,tags:string[],approved:string[]|null=null)=>c.data.prepare("INSERT INTO tag_proposals(calibre_uuid,book_id,title,tags,rationale,status,approved_tags,proposed_at) VALUES(?,?,?,?,?,?,?,'now')").run(uuid,id,"Book",JSON.stringify(tags),"why "+id,status,approved&&JSON.stringify(approved));
+ const to={uuid:"uuid-1",book_id:"main:1",title:"Book"};
+ const row=()=>c.data.prepare("SELECT calibre_uuid,tags,approved_tags,status FROM tag_proposals").all();
+ propose("uuid-1","main:1","approved",["History"],["History"]);propose("uuid-2","main:2","approved",["Ethics","History"],["Ethics"]);
+ expect(moveTagProposal(c.data,"uuid-2",to)).toBe("combined");
+ expect(row()).toEqual([{calibre_uuid:"uuid-1",tags:'["History","Ethics"]',approved_tags:'["History","Ethics"]',status:"approved"}]);
+ propose("uuid-2","main:2","pending",["Law"]);
+ expect(moveTagProposal(c.data,"uuid-2",to)).toBe("combined");
+ expect(row()).toEqual([{calibre_uuid:"uuid-1",tags:'["History","Ethics","Law"]',approved_tags:null,status:"pending"}]);
+ propose("uuid-2","main:2","rejected",["Art"]);
+ expect(moveTagProposal(c.data,"uuid-2",to)).toBe("dropped");
+ expect(row()).toHaveLength(1);
+});
+it("leaves a tag proposal in place when the source reports a duplicate it did not trash",async()=>{
+ c.data.prepare("INSERT INTO tag_proposals(calibre_uuid,book_id,title,tags,rationale,status,proposed_at) VALUES('uuid-2','main:2','Book','[\"History\"]','why','pending','now')").run();
+ const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
+  const p=JSON.parse(stdin!);
+  if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
+  else log('@@change '+JSON.stringify({calibre_id:1,uuid:"uuid-1",title:"Book",duplicate_resolved:{removed_id:2,removed_uuid:"uuid-2",trash:false,backup:"b"}})+'\n');
+ }});
+ const preview=await wait(r,r.start("duplicates","preview",{duplicates:[select()]}));
+ await wait(r,r.start("duplicates","apply",{previewOf:preview.id}));
+ expect(c.data.prepare("SELECT calibre_uuid FROM tag_proposals").pluck().all()).toEqual(["uuid-2"]);
+});

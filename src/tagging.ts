@@ -196,6 +196,47 @@ export function listProposals(c: Corpus, args: ListProposalsArgs = {}) {
   };
 }
 
+/**
+ * A duplicate record was merged into its keeper and trashed: its tag proposal follows the work to the keeper.
+ * When the keeper has a proposal too, a rejected one gives way to the other, and two live ones are combined:
+ * both approved stay approved with both sets of tags; otherwise the combined proposal goes back for review.
+ */
+export function moveTagProposal(data: Corpus["data"], fromUuid: string, to: { uuid: string; book_id: string; title: string }, actor?: string | null, jobId?: number): "moved" | "combined" | "dropped" | null {
+  const get = data.prepare<[string], ProposalRow>("SELECT * FROM tag_proposals WHERE calibre_uuid = ?");
+  const from = get.get(fromUuid);
+  if (!from || fromUuid === to.uuid) return null;
+  const into = get.get(to.uuid);
+  const tags = (row: ProposalRow, approved: boolean) => JSON.parse((approved ? row.approved_tags : null) ?? row.tags) as string[];
+  let outcome: "moved" | "combined" | "dropped";
+  data.transaction(() => {
+    if (into && from.status === "rejected") {
+      data.prepare("DELETE FROM tag_proposals WHERE calibre_uuid = ?").run(fromUuid);
+      outcome = "dropped";
+      return;
+    }
+    if (into && into.status === "rejected") data.prepare("DELETE FROM tag_proposals WHERE calibre_uuid = ?").run(to.uuid);
+    if (!into || into.status === "rejected") {
+      data.prepare("UPDATE tag_proposals SET calibre_uuid = ?, book_id = ?, title = ? WHERE calibre_uuid = ?").run(to.uuid, to.book_id, to.title, fromUuid);
+      outcome = "moved";
+      return;
+    }
+    const approved = into.status === "approved" && from.status === "approved";
+    const union = (a: string[], b: string[]) => [...new Set([...a, ...b])].slice(0, 5);
+    data.prepare(`UPDATE tag_proposals SET tags = ?, approved_tags = ?, rationale = ?, status = ?,
+      reviewed_by = ?, reviewed_at = ? WHERE calibre_uuid = ?`).run(
+      JSON.stringify(union(tags(into, false), tags(from, false))),
+      approved ? JSON.stringify(union(tags(into, true), tags(from, true))) : null,
+      `${into.rationale}\n\nFrom ${from.book_id}, merged into this record: ${from.rationale}`,
+      approved ? "approved" : "pending",
+      approved ? into.reviewed_by : null, approved ? into.reviewed_at : null, to.uuid);
+    data.prepare("DELETE FROM tag_proposals WHERE calibre_uuid = ?").run(fromUuid);
+    outcome = "combined";
+  })();
+  recordChanges(data, [{ kind: "proposal_moved", source: "admin-job", job_id: jobId ?? null, book_id: to.book_id, calibre_uuid: to.uuid, title: to.title,
+    detail: `${outcome!} from ${from.book_id}`, actor: actor ?? null }]);
+  return outcome!;
+}
+
 export interface ReviewArgs { action: "approve" | "reject" | "reopen"; tags?: string[] }
 
 export function reviewProposal(c: Corpus, calibreUuid: string, args: ReviewArgs, reviewedBy?: string) {

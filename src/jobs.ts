@@ -7,7 +7,7 @@ import { duplicateBatchPlan, duplicateContents, assertDuplicateUnreferenced, typ
 import { markIntakeApplied, scanIntake } from "./intake.js";
 import { attachUploadPayloads, removeAppliedUploads, uploadBatchPlan, type UploadBatchPlan, type UploadItemPlan, type UploadSelection } from "./upload.js";
 import { assertNoBookQuotes } from "./quoteMcp.js";
-import { tagPlan } from "./tagging.js";
+import { moveTagProposal, tagPlan } from "./tagging.js";
 import { type Corpus, getBook, ToolError, tagCleanupPlan } from "./tools.js";
 
 /**
@@ -289,6 +289,13 @@ export class JobRunner {
         if (kind === "upload") {
           removeAppliedUploads(this.config, items.flatMap(it => it.upload_applied?.id ? [it.upload_applied.id] : []));
           markIntakeApplied(this.c.data, this.config.shelvesLibrary, items);
+        }
+        if (kind === "duplicates") {
+          const actor = this.c.data.prepare("SELECT requested_by FROM jobs WHERE id = ?").pluck().get(id) as string | null;
+          for (const it of items) {
+            if (it.duplicate_resolved?.trash && it.uuid) moveTagProposal(this.c.data, it.duplicate_resolved.removed_uuid,
+              { uuid: it.uuid, book_id: `${this.config.shelvesLibrary}:${it.calibre_id}`, title: it.title }, actor, id);
+          }
         }
       }
     };
