@@ -112,6 +112,8 @@ export interface StagedUploadRecord {
   staged_at: string;
   /** Staging order, one more than the highest staged so far: staged_at can tie within a millisecond. Absent on older records. */
   seq?: number;
+  /** The staged file of the same book this one was set to wait for, kept after that file is applied and leaves staging. */
+  waiting_on?: string;
   staged_by: string | null;
   problem: string | null;
   extracted: ExtractedUploadMetadata;
@@ -712,14 +714,26 @@ export function removeStagedUpload(config: Config, id: string): { removed: boole
   return { removed: true };
 }
 
-export function clearStagedUploads(config: Config): { cleared: number } {
+/**
+ * Whether clearing staging should hand this file back to intake rather than mark it left on the NAS: it
+ * was waiting for the other file of its pair, that file has left staging (normally by being applied), and
+ * nobody chose Skip for it. Next time it's staged it's matched to the book the other file became.
+ */
+function returnsToIntake(rec: StagedUploadRecord, staged: StagedUploadRecord[]): boolean {
+  if (!rec.waiting_on || staged.some(r => r.id === rec.waiting_on)) return false;
+  return !(rec.draft.action_explicit && rec.draft.action === "skip");
+}
+
+/** Removes every staged file. `returned` lists the ones waiting on an applied pair, for intake to offer again. */
+export function clearStagedUploads(config: Config): { cleared: number; returned: string[] } {
   const dir = uploadDir(config);
   const records = readStagedRecords(dir);
+  const returned = records.filter(r => returnsToIntake(r, records)).map(r => r.id);
   for (const rec of records) {
     fs.rmSync(path.join(dir, `${rec.id}.json`), { force: true });
     fs.rmSync(path.join(dir, `${rec.id}.${rec.ext}`), { force: true });
   }
-  return { cleared: records.length };
+  return { cleared: records.length, returned };
 }
 
 function stripSketch(contents: BookContents): BookContents {
@@ -938,6 +952,10 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
   // offered as a new format (or, if it's another edition, it can be added on its own in a later preview).
   const staged_matches = stagedMatches(rec, staged);
   const waitsFor = staged_matches.find(m => m.earlier);
+  if (waitsFor && rec.waiting_on !== waitsFor.id) {
+    rec.waiting_on = waitsFor.id;
+    saveStagedRecord(dir, rec);
+  }
   const suggested_action: UploadAction = blockers.length
     ? "skip"
     : addFormatMatch
@@ -994,6 +1012,7 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     exact_matches: exactMatches,
     matches,
     staged_matches,
+    returns_to_intake: returnsToIntake(rec, staged),
     blockers,
     suggested_action,
     suggested_target,

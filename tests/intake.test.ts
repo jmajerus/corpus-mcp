@@ -14,12 +14,13 @@ import {
   markIntakeApplied,
   scanIntake,
   skipIntakeFiles,
+  returnIntakeStaging,
   skipIntakeStaging,
   unskipIntakeFiles,
   stageIntakeBatch,
 } from "../src/intake.js";
 import { JobRunner, type JobCommands } from "../src/jobs.js";
-import { listStagedUploads, uploadDir } from "../src/upload.js";
+import { clearStagedUploads, listStagedUploads, removeStagedUpload, uploadDir } from "../src/upload.js";
 import { INTAKE_HTML } from "../src/web/intake.js";
 import { Vocabulary } from "../src/vocabulary.js";
 import { makeEpub, makeLibrary, makePdf, tempDir } from "./fixtures.js";
@@ -398,4 +399,33 @@ it("renders the intake page", () => {
   expect(INTAKE_HTML).toContain("Stage next batch");
   expect(INTAKE_HTML).toContain("/admin/upload");
   expect(INTAKE_HTML).toContain('href="/admin/intake" aria-current="page"');
+});
+
+it("sends a file waiting on its applied pair back to review when staging is cleared, and skips the rest", async () => {
+  fs.writeFileSync(path.join(intake, "Mystic River.epub"), makeEpub("Mystic River", [{ title: "One", paragraphs: ["The EPUB."] }]));
+  fs.writeFileSync(path.join(intake, "Mystic River.pdf"), makePdf({ pages: [["Mystic River, the PDF"]] }));
+  fs.writeFileSync(path.join(intake, "Other Book.pdf"), makePdf({ pages: [["Something else entirely"]] }));
+  await scanIntake(c, config, () => {});
+  stageIntakeBatch(c, config, "me@example.com");
+  const items = listStagedUploads(c, config).items;
+  const epub = items.find(i => i.filename === "Mystic River.epub")!;
+  const pdf = items.find(i => i.filename === "Mystic River.pdf")!;
+  expect(pdf.staged_matches.map(m => m.id)).toEqual([epub.id]);
+  expect(pdf.draft.action).toBe("skip");
+  expect(pdf.returns_to_intake).toBe(false);
+
+  // The EPUB is applied: it leaves staging, and the PDF now goes back to intake if staging is cleared.
+  removeStagedUpload(config, epub.id);
+  c.data.prepare("UPDATE intake_files SET status = 'applied', staged_id = NULL WHERE staged_id = ?").run(epub.id);
+  expect(listStagedUploads(c, config).items.find(i => i.id === pdf.id)!.returns_to_intake).toBe(true);
+  const cleared = clearStagedUploads(config);
+  expect(cleared.returned).toEqual([pdf.id]);
+  expect(returnIntakeStaging(c.data, cleared.returned).returned).toBe(1);
+  expect(skipIntakeStaging(c.data).skipped).toBe(1);
+  const status = (p: string) => c.data.prepare("SELECT status FROM intake_files WHERE path = ?").pluck().get(p);
+  expect([status("Mystic River.epub"), status("Mystic River.pdf"), status("Other Book.pdf")]).toEqual(["applied", "candidate", "skipped"]);
+
+  // The next batch stages it again.
+  expect(stageIntakeBatch(c, config, "me@example.com").staged).toBe(1);
+  expect(listStagedUploads(c, config).items.map(i => i.filename)).toEqual(["Mystic River.pdf"]);
 });

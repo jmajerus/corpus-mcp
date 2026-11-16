@@ -751,6 +751,19 @@ it("offers the waiting file of a pair as a new format once the first is in the l
 
   const waiting = listStagedUploads(c, config).items.find(i => i.id === second.id)!;
   expect(waiting.staged_matches).toEqual([]);
+  expect(waiting.returns_to_intake).toBe(true);
   expect(waiting.suggested_action).toBe("add_format");
   expect(waiting.draft).toMatchObject({ action: "add_format", target_book_id: "main:3" });
+});
+
+it("leaves a waiting file to be skipped when its pair is still staged, or when Skip was chosen for it", () => {
+  const book = (text: string) => makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", isbn: "9780061238369", text });
+  const first = stageUpload(c, config, "Mystic River.epub", book("one"));
+  const second = stageUpload(c, config, "Mystic River 2.epub", book("two"));
+  // Clearing while both are staged drops the pair: neither goes back.
+  expect(listStagedUploads(c, config).items.find(i => i.id === second.id)!.returns_to_intake).toBe(false);
+  removeStagedUpload(config, first.id);
+  // A Skip chosen on purpose stands.
+  updateStagedUpload(c, config, second.id, { action: "skip" });
+  expect(clearStagedUploads(config).returned).toEqual([]);
 });

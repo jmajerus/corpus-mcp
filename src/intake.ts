@@ -633,6 +633,15 @@ export function unskipIntakeFiles(c: Corpus, config: Config, paths: string[]): {
  * so its NAS path is recorded as left on the NAS rather than offered again in the next batch;
  * the Intake page can offer it again.
  */
+/** Puts staged intake files back on the review list, to be staged again with the next batch. */
+export function returnIntakeStaging(data: DataStore, stagedIds: string[]): { returned: number } {
+  const now = new Date().toISOString();
+  const back = data.prepare("UPDATE intake_files SET status = 'candidate', staged_id = NULL, seen_at = ? WHERE status = 'staged' AND staged_id = ?");
+  let returned = 0;
+  for (const id of stagedIds) returned += back.run(now, id).changes;
+  return { returned };
+}
+
 export function skipIntakeStaging(data: DataStore, stagedId?: string): { skipped: number } {
   const now = new Date().toISOString();
   const info = stagedId

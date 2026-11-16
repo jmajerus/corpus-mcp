@@ -389,7 +389,10 @@ document.getElementById("select-none").addEventListener("click", () => {
   render();
 });
 document.getElementById("clear-staged").addEventListener("click", async () => {
-  if (!items.length || !confirm("Remove all staged upload files? Files staged from the Intake page are marked as left on the NAS and are not staged again.")) return;
+  const back = items.filter((it) => it.returns_to_intake).length;
+  const msg = "Remove all staged upload files? Files staged from the Intake page are marked as left on the NAS and are not staged again" +
+    (back ? ", except " + back + " waiting on a book that was just added: if staged from Intake, " + (back === 1 ? "it goes" : "they go") + " back to its list, to be offered as a format of that book." : ".");
+  if (!items.length || !confirm(msg)) return;
   try {
     await post("/api/upload/clear", {});
     picked = {};
