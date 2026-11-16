@@ -16,6 +16,9 @@ export const normalAuthorsKey = (authors: string[]) =>
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
+/** References tied to one record's file or Zotero item. A tag proposal is about the work, so it moves to the keeper instead. */
+const PINNED_TABLES = REFERENCE_TABLES.filter(t => t !== "tag_proposals");
+export const pinnedReferences = (refs: Record<string, number>) => PINNED_TABLES.some(t => (refs[t] ?? 0) > 0);
 const emptyReferences = () => Object.fromEntries(REFERENCE_TABLES.map(table => [table, 0]));
 
 export function duplicateReferences(c: Corpus, uuid: string) {
@@ -211,7 +214,7 @@ export function sizeWarnings(books: { id: string; sizes: Record<string, number> 
   }
   return warnings;
 }
-const referenced = (b: DuplicateBook) => Object.values(b.references).some(n => n > 0);
+const referenced = (b: DuplicateBook) => pinnedReferences(b.references);
 
 export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismissed = false) {
   const books = candidateBooks(c);
@@ -231,7 +234,7 @@ export function duplicatePairs(c: Corpus, writableLibrary: string, includeDismis
 
 /** Books linked by candidate pairs, for review as one group. A record can be trashed only into a
  * keeper it pairs with directly (and not as a reviewed keep-both pair); a chain A–B–C does not let
- * C merge into A. The suggested keeper is a referenced record, then the one whose EPUB or PDF falls
+ * C merge into A. The suggested keeper is a record with saved references (a tag proposal moves instead), then the one whose EPUB or PDF falls
  * short least against its duplicates, then one with a colour cover, then
  * one on a Calibre-Web shelf, then an indexed one, then the one with the most formats, then the one
  * added to Calibre first (by its added date, then its id). */
@@ -347,8 +350,7 @@ export function duplicateBatchPlan(c: Corpus, library: string, selections: Dupli
   return { library, groups };
 }
 export function assertDuplicateUnreferenced(c: Corpus, uuid: string, label = "The record to trash") {
-  const refs = duplicateReferences(c, uuid);
-  if (Object.values(refs).some(n => n > 0)) throw new ToolError(`${label} has saved references or a tag proposal. Resolve those links before trashing it.`);
+  if (pinnedReferences(duplicateReferences(c, uuid))) throw new ToolError(`${label} has saved references. Resolve those links before trashing it.`);
 }
 export function dismissDuplicate(c: Corpus, library: string, ids: string[], fingerprint: string, reopen: boolean, actor?: string) {
   const pair = duplicatePairs(c, library, true).pairs.find(p => p.books.map(b => b.id).every(id => ids.includes(id)) && ids.length === 2);
