@@ -1,5 +1,5 @@
 import type { BookRow } from "./tools.js";
-import type { DataStore } from "./data.js";
+import { type DataStore, aliasesOf } from "./data.js";
 
 /**
  * quote-mcp, where quotes are kept (docs/dev-briefs/holdings-and-quotes.md §3.4). The reader shows a book's
@@ -39,9 +39,15 @@ async function call(base: string, method: "GET" | "POST", path: string, body?: u
  * tags are those on all the book's quotes, for the save bar's suggestions.
  */
 export async function readerQuotes(base: string, book: BookRow, from: number, to: number, data?: DataStore): Promise<{ quotes: ReaderQuote[]; tags: string[] }> {
-  const r = await call(base, "GET", `/api/corpus/quotes?book=${encodeURIComponent(book.uuid ?? book.id)}`);
-  if (r.status !== 200) throw new QuoteMcpError(`quote-mcp answered ${r.status} for this book's quotes.`);
-  const all = r.body.quotes as QuoteMcpQuote[];
+  // quote-mcp lists a quote under the UUID it was checked against: this record's, and those merged into it.
+  const keys = [book.uuid ?? book.id, ...(data && book.uuid ? aliasesOf(data, book.uuid) : [])];
+  const byId = new Map<number, QuoteMcpQuote>();
+  for (const key of keys) {
+    const r = await call(base, "GET", `/api/corpus/quotes?book=${encodeURIComponent(key)}`);
+    if (r.status !== 200) throw new QuoteMcpError(`quote-mcp answered ${r.status} for this book's quotes.`);
+    for (const q of r.body.quotes as QuoteMcpQuote[]) if (!byId.has(q.id)) byId.set(q.id, q);
+  }
+  const all = [...byId.values()];
   const tags = [...new Set(all.flatMap((q) => q.tags))].sort((a, b) => a.localeCompare(b));
   const sourceStructured = book.format === "epub" && (book.extractor_version ?? 1) >= 2;
   const quotes = all
@@ -79,9 +85,16 @@ export async function saveReaderQuote(base: string, book: BookRow, save: ReaderS
   throw new QuoteMcpError(`quote-mcp answered ${r.status}${typeof b.error === "string" ? ` (${b.error})` : ""}.`);
 }
 
-/** Includes unanchored quotes too: deletion must not rely only on visible reader highlights. */
-export async function assertNoBookQuotes(base: string, uuid: string): Promise<void> {
+/**
+ * Before a duplicate is trashed: every quote quote-mcp has checked against it can follow it to the keeper.
+ * A quote with no anchor needs nothing here (its book resolves to the keeper through book_aliases). One
+ * quote-mcp has an anchor for must have its anchor here too, since that is what gets re-anchored; without
+ * it the quote would silently lose its place. Fails closed when quote-mcp cannot be asked.
+ */
+export async function assertBookQuotesMovable(base: string, uuid: string, data: DataStore): Promise<void> {
   const r = await call(base, "GET", `/api/corpus/quotes?book=${encodeURIComponent(uuid)}`);
   if (r.status !== 200 || !Array.isArray(r.body.quotes)) throw new QuoteMcpError("Could not verify quote-mcp references. Try again before trashing a duplicate.");
-  if (r.body.quotes.length) throw new QuoteMcpError("The duplicate has quotes in quote-mcp, including possible unanchored quotes. Resolve those references first.");
+  const here = new Set(data.prepare("SELECT quote_id FROM anchors WHERE calibre_uuid = ?").pluck().all(uuid) as number[]);
+  const missing = (r.body.quotes as { id: number; anchor: unknown }[]).filter((q) => q.anchor && !here.has(q.id)).map((q) => q.id);
+  if (missing.length) throw new QuoteMcpError(`The duplicate has quotes in quote-mcp whose anchors are not kept here (quote ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}). Verify them again in quote-mcp first.`);
 }

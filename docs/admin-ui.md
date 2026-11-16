@@ -435,8 +435,18 @@ formats, or reference counts) makes the pair appear again automatically.
 To resolve a group, choose its **Keep** record; every record that matches the keeper
 directly is marked **Trash**. Untick any you want to leave alone. A record that only
 matches another duplicate (A–B–C, where C does not match A) cannot merge into that
-keeper, a record with quotes or anchors can only be the keeper, and a record in
-another library than the keeper cannot be trashed into it.
+keeper, a record with quotes in corpus-mcp's old quote store can only be the keeper,
+and a record in another library than the keeper cannot be trashed into it.
+
+A trashed record's quotes (those quote-mcp checked against it) move to the keeper.
+Each one is found again in the keeper's text, and moves only when its wording occurs
+exactly once there. If a quote's wording is missing from the keeper or occurs more
+than once, the record cannot be trashed into that keeper: the card names the quotes,
+and you can keep that record instead or fix the quotes in quote-mcp. A quote whose
+place was already lost goes to the keeper as lost, and the next refresh looks for it
+there. The trashed record's UUID is remembered as an alias of the keeper, so quote-mcp
+and old links still reach the book. The Changes page logs this as "Quotes moved from a
+duplicate".
 
 A trashed record's pinned citekey and Zotero filing move to the keeper when the copies
 are one edition: they share a selected file or an identifier (ISBN, ASIN and the like),
@@ -467,8 +477,9 @@ same way. Only if they share at least 90% of their text and their counts match d
 the card explain the gap (images, fonts or markup) in a note instead of warning. The count above the groups says how
 many groups have a warning, and the preview repeats them.
 
-The suggested keeper is a record with quotes or anchors, then the copy that falls
-short least, then one with a citekey or Zotero link, then one with a colour cover rather than a black-and-white or missing
+The suggested keeper is a record with old corpus-mcp quotes, then the copy that falls
+short least, then one with quotes anchored in its text, then one with a citekey or
+Zotero link, then one with a colour cover rather than a black-and-white or missing
 one, then one on a public Calibre-Web shelf, then an indexed one, then the one with
 the most formats, then the one added to Calibre first. The keeper's own files and
 cover are what survive, and older MOBI-era records often carry greyscale covers;

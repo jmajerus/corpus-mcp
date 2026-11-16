@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { type DataStore, pinnedByKey } from "./data.js";
+import { relocatedAnchorPlanner } from "./anchor-migration.js";
+import { type DataStore, pinnedByKey, resolveUuid } from "./data.js";
 import type { DB } from "./db.js";
 import { type HoldingsBook, hasText, holdingsBook, holdingsBookRows } from "./holdings.js";
 import { isbn13, validIsbn } from "./isbn.js";
@@ -48,7 +49,8 @@ function booksFor(c: Corpus, o: AnchorOptions, key: string): BookRow[] {
   if (BOOK_ID.test(key)) return rows("id = ?", key);
   const zotero = key.match(ZOTERO_KEY);
   if (zotero) return zotero[1] === o.zoteroLibrary ? matchedTo(c, o, zotero[2]) : [];
-  const byUuid = rows("uuid = ? COLLATE NOCASE", key);
+  // A UUID trashed into its keeper, or replaced by a re-import, names the record that stands for it now.
+  const byUuid = rows("uuid = ? COLLATE NOCASE", resolveUuid(c.data, key));
   if (byUuid.length) return byUuid;
   const citekey = key.toLowerCase();
   const calibre = rows("calibre_citekey = ?", citekey);
@@ -267,7 +269,9 @@ export function storeAnchor(c: Corpus, o: AnchorOptions, body: unknown): ApiAnsw
     return bad("The anchor is malformed: post it back as /api/verify returned it.");
   }
   // As verify sees books: never one with an excluded tag, even before the next scan drops it.
-  const [book] = holdingsBookRows(c, o.excludeTags, "uuid = ? AND status = 'indexed'", a.calibre_uuid);
+  // An anchor made on a record since merged into another names the keeper's file wrongly: it is found (not
+  // "no-book") and then answered as stale below, so the caller verifies again.
+  const [book] = holdingsBookRows(c, o.excludeTags, "uuid = ? AND status = 'indexed'", resolveUuid(c.data, a.calibre_uuid));
   if (!book) return { status: 404, body: { error: "no-book" } };
   const stale: ApiAnswer = { status: 409, body: { error: "stale-anchor" } };
   if (a.sha256 !== book.sha256) return stale;
@@ -330,7 +334,8 @@ export function reanchorAnchors(db: DB, data: DataStore): { reanchored: number; 
   const byUuid = db.prepare<[string], BookRow>("SELECT * FROM books WHERE uuid = ? AND status = 'indexed' ORDER BY id");
   const counts = { reanchored: 0, orphaned: 0, found: 0 };
   for (const r of data.prepare("SELECT * FROM anchors").all() as AnchorRow[]) {
-    const book = byUuid.get(r.calibre_uuid);
+    // An anchor left on a record since merged into another is looked for in the record that stands for it.
+    const book = byUuid.get(resolveUuid(data, r.calibre_uuid));
     if (book && book.sha256 === r.sha256) {
       // Same file, same place; only the section may be out of date (one stored before sectionAt).
       if (r.status !== "verified") continue;
@@ -369,6 +374,68 @@ export function reanchorAnchors(db: DB, data: DataStore): { reanchored: number; 
       }
     })();
   }
+  return counts;
+}
+
+export interface AnchorMovePlan {
+  /** Verified anchors whose wording occurs exactly once in the keeper's text, with where. */
+  moves: { quote_id: number; anchor: QuoteAnchor }[];
+  /** Verified anchors that cannot be placed without a person: wording-not-found, ambiguous-wording, and the like. */
+  review: { quote_id: number; reason: string; text: string }[];
+  /** Anchors already orphaned: they move as they are, and the next scan looks for them in the keeper. */
+  orphaned: number[];
+}
+
+/**
+ * Where a duplicate's anchors would go in its keeper's text. An anchor moves only when its wording is
+ * intact in the duplicate and occurs exactly once in the keeper (relocatedAnchorPlanner); repeated or
+ * missing wording is for a person, never a guess.
+ */
+export function planAnchorMoves(c: Corpus, fromUuid: string, keeper: BookRow): AnchorMovePlan {
+  const rows = c.data.prepare("SELECT * FROM anchors WHERE calibre_uuid = ? ORDER BY quote_id").all(fromUuid) as AnchorRow[];
+  const plan: AnchorMovePlan = { moves: [], review: [], orphaned: [] };
+  if (!rows.length) return plan;
+  const from = c.db.prepare<[string], BookRow>("SELECT * FROM books WHERE uuid = ? AND status = 'indexed'").get(fromUuid);
+  const all = (b: BookRow | undefined) => b && b.status === "indexed" ? pagesOf(c.db, b.id, 0, Math.max(0, (b.page_count ?? 1) - 1)) : [];
+  let planner: ReturnType<typeof relocatedAnchorPlanner> | undefined;
+  for (const r of rows) {
+    if (r.status === "orphaned") { plan.orphaned.push(r.quote_id); continue; }
+    if (!from || keeper.status !== "indexed") { plan.review.push({ quote_id: r.quote_id, reason: from ? "keeper-not-indexed" : "duplicate-not-indexed", text: r.text }); continue; }
+    planner ??= relocatedAnchorPlanner(all(from), all(keeper));
+    const result = planner({ start_page: r.start_page, start_offset: r.start_offset, end_page: r.end_page, end_offset: r.end_offset, text: r.text, prefix: r.prefix, suffix: r.suffix });
+    if (result.status === "review") plan.review.push({ quote_id: r.quote_id, reason: result.reason, text: r.text });
+    else plan.moves.push({ quote_id: r.quote_id, anchor: result.anchor });
+  }
+  return plan;
+}
+
+/**
+ * After Calibre trashed a duplicate: its anchors move to the keeper, each a change quote-mcp follows. A
+ * planned move is written verified at its new place. One that can no longer be placed (the preview blocks
+ * these, so only if a text changed since) and one already orphaned go to the keeper orphaned, so the next
+ * scan looks for them there and nothing is dropped.
+ */
+export function moveAnchors(c: Corpus, fromUuid: string, keeper: BookRow): { moved: number; orphaned: number } {
+  const plan = planAnchorMoves(c, fromUuid, keeper);
+  const counts = { moved: 0, orphaned: 0 };
+  const at = new Date().toISOString();
+  const row = c.data.prepare<[number], AnchorRow>("SELECT * FROM anchors WHERE quote_id = ?");
+  c.data.transaction(() => {
+    for (const m of plan.moves) {
+      const anchor = anchorOf(c, keeper, m.anchor);
+      writeAnchor(c.data, m.quote_id, keeper, anchor, "verified", at);
+      recordChange(c.data, m.quote_id, "reanchored", "verified", anchor, at);
+      counts.moved++;
+    }
+    for (const id of [...plan.review.map((r) => r.quote_id), ...plan.orphaned]) {
+      const r = row.get(id)!;
+      // sha256 null: not yet searched for in the keeper's file, so the next scan tries.
+      c.data.prepare("UPDATE anchors SET calibre_uuid = ?, book_id = ?, sha256 = NULL, status = 'orphaned', updated_at = ? WHERE quote_id = ?")
+        .run(keeper.uuid, keeper.id, at, id);
+      if (r.status !== "orphaned") recordChange(c.data, id, "orphaned", "orphaned", fromRow(r), at);
+      counts.orphaned++;
+    }
+  })();
   return counts;
 }
 
