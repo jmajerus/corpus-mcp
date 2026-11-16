@@ -431,7 +431,7 @@ it("moves a trashed duplicate's citekey and Zotero links to the keeper after Cal
  c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,trashed,replaces,synced_at) VALUES('WRONG',1,'book','Another',0,'[]','now')").run();
  c.data.prepare("INSERT INTO zotero_links(calibre_uuid,zotero_key,status,linked_at) VALUES('uuid-2','WRONG','rejected','now')").run();
  const g=duplicateGroups(c,"main").groups[0];
- expect(g.books.find(b=>b.id==="main:2")!.filing).toEqual({citekey:"same2021book",zotero:"FILED"});
+ expect(g.books.find(b=>b.id==="main:2")!.filing).toEqual({citekey:"same2021book",zotero:"FILED",stranded:null});
  const r=new JobRunner(c,config,{refresh:async()=>{},calibre:async(command,stdin,log)=>{
   const p=JSON.parse(stdin!);
   if(command==="duplicates-preview")log('@@change '+JSON.stringify({calibre_id:1,title:"The Same Book",duplicate_review:{plan:{...p.groups[0],reviewed:"ok"},blockers:[]}})+'\n');
@@ -450,4 +450,30 @@ it("blocks moving filing onto a keeper cited differently",()=>{
  c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-1','second2021book','main:1','B','now')").run();
  expect(()=>plan()).toThrow(/cited as first2020book and main:1 as second2021book/);
  expect(()=>plan({...select(),same_edition:true})).toThrow(/different editions/);
+});
+it("blocks a Zotero filing whose item is in Zotero's trash with no survivor",()=>{
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,calibre_uuid,trashed,replaces,synced_at) VALUES('GONE',1,'book','Gone','uuid-2',1,'[]','now')").run();
+ expect(()=>plan()).toThrow(/GONE, which is in Zotero's trash/);
+ expect(duplicateGroups(c,"main").groups[0].books.find(b=>b.id==="main:2")!.filing).toMatchObject({stranded:"GONE"});
+});
+it("never promotes a Zotero item rejected for the trashed record",async()=>{
+ const {moveDuplicateFiling}=await import("../src/duplicates.js");
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,calibre_uuid,trashed,replaces,synced_at) VALUES('NOPE',1,'book','Wrong','uuid-2',0,'[]','now')").run();
+ c.data.prepare("INSERT INTO zotero_links(calibre_uuid,zotero_key,status,linked_at) VALUES('uuid-2','NOPE','rejected','now')").run();
+ expect(plan().groups[0].remove).toEqual([{id:2,uuid:"uuid-2"}]);
+ expect(moveDuplicateFiling(c,"uuid-2","main:2",{uuid:"uuid-1",book_id:"main:1",title:"B"})).toEqual([]);
+ expect(c.data.prepare("SELECT calibre_uuid,zotero_key,status FROM zotero_links").all()).toEqual([{calibre_uuid:"uuid-1",zotero_key:"NOPE",status:"rejected"}]);
+});
+it("accepts only a boolean same-edition confirmation",()=>{
+ c.data.prepare("INSERT INTO citekeys(calibre_uuid,citekey,book_id,title,pinned_at) VALUES('uuid-2','k2020','main:2','B','now')").run();
+ differentFiles();
+ expect(()=>plan({...select(),same_edition:"false" as any})).toThrow(/true or false/);
+ expect(()=>plan({...select(),same_edition:false})).toThrow(/same edition/);
+});
+it("ranks only stored filing, not an ISBN match, as filed",()=>{
+ c.data.prepare("INSERT INTO zotero_items(key,version,item_type,title,trashed,replaces,synced_at) VALUES('BYISBN',1,'book','The Same Book',0,'[]','now')").run();
+ c.data.prepare("INSERT INTO zotero_isbns(isbn,key) VALUES('9780306406157','BYISBN')").run();
+ c.db.prepare("UPDATE books SET isbn='9780306406157' WHERE id='main:2'").run();
+ expect(zoteroMatch(c,getBook(c,"main:2")).match).toMatchObject({matched_by:"isbn"});
+ expect(duplicateGroups(c,"main").groups[0].suggested_because).not.toBe("is filed with a citekey or in Zotero");
 });

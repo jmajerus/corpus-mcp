@@ -258,21 +258,23 @@ export interface ZoteroMatch {
 }
 
 /**
- * The live Zotero item a record is tied to by something stored here: a confirmed link, else an item whose
- * Extra names its Calibre UUID. An ISBN match is not stored, so it is not counted. Works for a record already
- * trashed in Calibre, which zoteroMatch needs a book row for.
+ * The live Zotero item a record is tied to by something stored here, as zoteroMatch reads it: a confirmed
+ * link, else an item whose Extra names its Calibre UUID, each followed to its merged survivor and never one
+ * rejected for this record. An ISBN match is not stored, so it is not counted. Works for a record already
+ * trashed in Calibre, which zoteroMatch needs a book row for. `stranded` is a stored, unrejected filing with
+ * no live item (in Zotero's trash, not merged): nothing to move it to.
  */
-export function filedZoteroKey(c: Corpus, uuid: string): string | null {
+export function filedZotero(c: Corpus, uuid: string): { key: string | null; stranded: string | null } {
+  const rejected = new Set(c.data.prepare("SELECT zotero_key FROM zotero_links WHERE calibre_uuid = ? AND status = 'rejected'").pluck().all(uuid) as string[]);
   const confirmed = c.data.prepare("SELECT zotero_key FROM zotero_links WHERE calibre_uuid = ? AND status = 'confirmed'").pluck().get(uuid) as string | undefined;
-  if (confirmed) {
-    const i = survivor(c, confirmed);
-    if (i) return i.key;
-  }
-  for (const key of c.data.prepare("SELECT key FROM zotero_items WHERE calibre_uuid = ? ORDER BY trashed, key").pluck().all(uuid) as string[]) {
+  const stored = [...(confirmed ? [confirmed] : []),
+    ...(c.data.prepare("SELECT key FROM zotero_items WHERE calibre_uuid = ? ORDER BY trashed, key").pluck().all(uuid) as string[])]
+    .filter((key) => !rejected.has(key));
+  for (const key of stored) {
     const i = survivor(c, key);
-    if (i) return i.key;
+    if (i && !rejected.has(i.key)) return { key: i.key, stranded: null };
   }
-  return null;
+  return { key: null, stranded: stored[0] ?? null };
 }
 
 /** Where a Calibre book is in the Zotero mirror: by the Calibre UUID filing wrote to Extra, its ISBN, or a confirmed link. */

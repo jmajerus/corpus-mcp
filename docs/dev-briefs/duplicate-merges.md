@@ -25,7 +25,12 @@ A citekey or Zotero item names one edition, so filing moves only when the copies
 are shown to be the same edition: they share a selected file or a normalized
 identifier, or the reviewer confirms it on the card (`same_edition` in the group's
 plan, which the Calibre helper passes back unchanged). Even then it blocks when the
-two records are cited by different citekeys or match different Zotero items. The rule
+two records are cited by different citekeys or match different Zotero items, or when
+the trashed record's Zotero item is in Zotero's trash with nothing merged into it
+(there is nothing to move the filing to). A Zotero item rejected for the trashed
+record is never promoted; the rejection carries over instead. Only stored filing (a
+pinned citekey, a link, or Extra's UUID) counts toward the keeper ranking, not an ISBN
+match. The rule
 is `filingBlocker` in `src/duplicates.ts`, mirrored by `filingBlock` on the review
 page, and checked at planning, at apply start and again just before the helper runs.
 

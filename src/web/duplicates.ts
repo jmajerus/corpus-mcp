@@ -20,6 +20,7 @@ const filed = b => ['citekeys','zotero_links','zotero_items'].some(k=>(b.referen
 function filingBlock(g,keep,b){
  if(!filed(b))return null;
  const k=g.books.find(x=>x.id===keep),a=b.filing||{},f=(k&&k.filing)||{};
+ if(a.stranded)return {kind:'conflict',text:'Filed under Zotero item '+a.stranded+', which is in Zotero’s trash with nothing merged into it. Restore it, or clear the link, first.'};
  if(a.citekey&&f.citekey&&a.citekey.toLowerCase()!==f.citekey.toLowerCase())return {kind:'conflict',text:'Cited as '+a.citekey+', the keeper as '+f.citekey+'; they may be different editions.'};
  if(a.zotero&&f.zotero&&a.zotero!==f.zotero)return {kind:'conflict',text:'Matches a different Zotero item from the keeper; they may be different editions.'};
  const p=direct(g).get(pairKey(keep,b.id));

@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import * as mupdf from "mupdf";
 import { type BookRow, type Corpus, ToolError, effectiveCitekey } from "./tools.js";
 import { pinnedByUuid, recordChanges } from "./data.js";
-import { filedZoteroKey, zoteroMatch } from "./zotero.js";
+import { filedZotero, zoteroMatch } from "./zotero.js";
 import { isbn13, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 
@@ -26,10 +26,14 @@ export const filingReferences = (refs: Record<string, number>) => FILING_TABLES.
 /** Shared files or identifiers show two records are one edition; a title and authors alone do not. */
 export const sameEditionEvidence = (evidence: readonly string[]) => evidence.includes("Identical selected file") || evidence.includes("Matching identifier");
 
-/** A record's citekey (Calibre's, else pinned) and the Zotero item it matches, to see whether its filing can move. */
-export interface Filing { citekey: string | null; zotero: string | null }
+/**
+ * A record's citekey (Calibre's, else pinned) and the Zotero item it matches, to see whether its filing can
+ * move; `stranded`, a stored Zotero filing whose item is gone (see filedZotero).
+ */
+export interface Filing { citekey: string | null; zotero: string | null; stranded: string | null }
 export function bookFiling(c: Corpus, book: BookRow): Filing {
-  return { citekey: effectiveCitekey(book, pinnedByUuid(c.data, book.uuid)).citekey, zotero: zoteroMatch(c, book).match?.key ?? null };
+  return { citekey: effectiveCitekey(book, pinnedByUuid(c.data, book.uuid)).citekey, zotero: zoteroMatch(c, book).match?.key ?? null,
+    stranded: book.uuid ? filedZotero(c, book.uuid).stranded : null };
 }
 
 /**
@@ -39,6 +43,7 @@ export function bookFiling(c: Corpus, book: BookRow): Filing {
 export function filingBlocker(drop: { id: string; references: Record<string, number>; filing: Filing }, keep: { id: string; filing: Filing }, sameEdition: boolean): string | null {
   if (!filingReferences(drop.references)) return null;
   const a = drop.filing, b = keep.filing;
+  if (a.stranded) return `${drop.id} is filed under Zotero item ${a.stranded}, which is in Zotero's trash with nothing merged into it. Restore it, or clear the link, before trashing ${drop.id}.`;
   if (a.citekey && b.citekey && a.citekey.toLowerCase() !== b.citekey.toLowerCase()) return `${drop.id} is cited as ${a.citekey} and ${keep.id} as ${b.citekey}; they may be different editions.`;
   if (a.zotero && b.zotero && a.zotero !== b.zotero) return `${drop.id} and ${keep.id} match different Zotero items; they may be different editions.`;
   if (!sameEdition) return `${drop.id} has a citekey or Zotero link, and nothing shows it is the same edition as ${keep.id} (no shared file or identifier). Confirm the same edition to move it.`;
@@ -297,7 +302,7 @@ export function duplicateGroups(c: Corpus, writableLibrary: string, includeDismi
     ["has saved quotes or anchors", b => referenced(b) ? 0 : 1],
     ["has the most complete contents", b => b.content_flags],
     // A citekey or Zotero link moves to the keeper when the copies are one edition, so it only breaks ties.
-    ["is filed with a citekey or in Zotero", b => b.filing?.citekey || b.filing?.zotero ? 0 : 1],
+    ["is filed with a citekey or in Zotero", b => filingReferences(b.references) ? 0 : 1],
     ["has a colour cover", b => colour(b) ? 0 : 1],
     ["is on a Calibre-Web shelf", b => b.shelves.length ? 0 : 1],
     ["is indexed", b => b.status === "indexed" ? 0 : 1],
@@ -360,6 +365,7 @@ export function duplicateBatchPlan(c: Corpus, library: string, selections: Dupli
   const used = new Set<string>();
   const groups = selections.map(s => {
     const ids = [s.keep, ...s.remove];
+    if (s.same_edition !== undefined && typeof s.same_edition !== "boolean") throw new ToolError("same_edition is true or false.");
     if (!s.remove.length) throw new ToolError(`Choose at least one record to trash beside keeper ${s.keep}.`);
     for (const id of ids) {
       if (used.has(id)) throw new ToolError(`${id} appears in more than one group. Choose it once.`);
@@ -375,7 +381,7 @@ export function duplicateBatchPlan(c: Corpus, library: string, selections: Dupli
       const book = books.get(id)!;
       return { id: book.calibre_id, uuid: book.uuid! };
     });
-    const group: DuplicatePlanGroup = { keep: { id: keep.calibre_id, uuid: keep.uuid! }, remove, discard_conflicts: s.discard_conflicts === true, ...(s.same_edition ? { same_edition: true } : {}) };
+    const group: DuplicatePlanGroup = { keep: { id: keep.calibre_id, uuid: keep.uuid! }, remove, discard_conflicts: s.discard_conflicts === true, ...(s.same_edition === true ? { same_edition: true } : {}) };
     assertDuplicateMovable(c, library, group, pairs);
     return group;
   });
@@ -409,7 +415,7 @@ export function assertDuplicateMovable(c: Corpus, library: string, group: Duplic
  */
 export function moveDuplicateFiling(c: Corpus, removedUuid: string, removedId: string, keeper: { uuid: string; book_id: string; title: string }, actor?: string | null, jobId?: number): string[] {
   const moved: string[] = [];
-  const zoteroKey = filedZoteroKey(c, removedUuid);
+  const zoteroKey = filedZotero(c, removedUuid).key;
   c.data.transaction(() => {
     const pin = pinnedByUuid(c.data, removedUuid);
     if (pin) {
