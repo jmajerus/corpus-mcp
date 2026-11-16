@@ -267,6 +267,40 @@ db.close()
         blocked = review({'keep': d[0], 'remove': d[1:], 'discard_conflicts': discard})
         assert any('the keeper has none' in b for b in blocked['blockers']), blocked['blockers']
     report['checks']['conflictBetweenDuplicatesWithoutKeeperVersionBlocks'] = True
+
+    # A record whose folder is gone from disk (Calibre still lists it) blocks its group in preview,
+    # instead of passing as an empty record and failing the apply's backup.
+    for title in ['Batch H', 'Batch H', 'Batch I', 'Batch I', 'Batch J', 'Batch J']:
+        run(['/usr/bin/calibredb', 'add', '--duplicates', '--with-library', str(library), '--title', title, '--authors', 'Test Writer', str(root / 'seeds' / 'operator.pdf')])
+    with sqlite3.connect(library / 'metadata.db') as db:
+        rows = {t: [({'id': i, 'uuid': u}, p) for i, u, p in db.execute('SELECT id,uuid,path FROM books WHERE title=? ORDER BY id', (t,))] for t in ['Batch H', 'Batch I', 'Batch J']}
+    h, i, j = ([ref for ref, _ in rows[t]] for t in ['Batch H', 'Batch I', 'Batch J'])
+    shutil.rmtree(library / rows['Batch H'][1][1])
+    missing = review({'keep': h[0], 'remove': [h[1]], 'discard_conflicts': False})
+    assert any(f'folder of Calibre book {h[1]["id"]} is missing' in b for b in missing['blockers']), missing
+    report['checks']['missingFolderBlocksPreview'] = True
+    # A backup that fails anyway (the folder vanishes after the review) skips only its own group.
+    reviews = batch([{'keep': i[0], 'remove': [i[1]], 'discard_conflicts': False}, {'keep': j[0], 'remove': [j[1]], 'discard_conflicts': False}])
+    assert [r['blockers'] for r in reviews] == [[], []], reviews
+    copy_fault = root / 'fault-backup.py'
+    copy_fault.write_text(f'''import sys,runpy,shutil
+original=shutil.copytree
+def fail(src,dst,*args,**kwargs):
+ if str(dst).endswith('/{i[1]["id"]}'):
+  raise FileNotFoundError(2,'Injected missing folder',str(src))
+ return original(src,dst,*args,**kwargs)
+shutil.copytree=fail
+script=sys.argv[1];sys.argv=sys.argv[1:];runpy.run_path(script,run_name='__main__')
+''')
+    result = run(['/usr/bin/calibre-debug', '-e', str(copy_fault), '--', str(helper), str(library), str(web), '--apply'], {'groups': [r['plan'] for r in reviews]}, expected=None)
+    assert result.returncode == 1 and 'Traceback' not in result.stderr and '1 of 2 groups resolved; 1 skipped' in result.stderr, result.stderr
+    events = changes(result)
+    assert [e['duplicate_resolved']['removed_id'] for e in events if 'duplicate_resolved' in e] == [j[1]['id']], events
+    assert [e['calibre_id'] for e in events if 'duplicate_skipped' in e] == [i[0]['id']]
+    assert any('Could not back up book' in e['duplicate_skipped']['message'] for e in events if 'duplicate_skipped' in e)
+    with sqlite3.connect(library / 'metadata.db') as db:
+        assert {i[0]['id'], i[1]['id']} <= {r for (r,) in db.execute('SELECT id FROM books')}
+    report['checks']['backupFailureSkipsOnlyItsGroup'] = True
     report['scriptSha256'] = hashlib.sha256(helper.read_bytes()).hexdigest()
     report['pass'] = True
 finally:

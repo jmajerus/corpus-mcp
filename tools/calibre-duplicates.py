@@ -256,6 +256,11 @@ class Review:
             raise DuplicateReviewError(f'Calibre id {ref["id"]} belongs to a different book. Review again.')
         folder = api.field_for('path', ref['id'])
         root = inside(self.library, folder)
+        if not root.is_dir():
+            # Reading a missing folder finds no files, which would pass for an empty record until the
+            # apply's backup fails on it. Calibre lists the book, but its files are gone.
+            raise DuplicateReviewError(f'The folder of Calibre book {ref["id"]} is missing from the library ({folder}). '
+                                       'Repair or remove that record in Calibre, refresh, then review again.')
         files = {}
         for file in sorted(root.rglob('*')):
             if file.is_symlink():
@@ -289,7 +294,11 @@ def resolve(api, library, app_db, review, saved, backup):
     group_dir = saved / str(keep['id'])
     group_dir.mkdir(mode=0o700)
     for item in [keep, *(r for r, _ in review.removes)]:
-        shutil.copytree(inside(library, item['folder']), group_dir / str(item['id']), symlinks=True)
+        try:
+            shutil.copytree(inside(library, item['folder']), group_dir / str(item['id']), symlinks=True)
+        except OSError as error:
+            # Before any change: main() skips only this group and carries on with the batch.
+            raise DuplicateReviewError(f'Could not back up book {item["id"]}, so nothing in its group was changed: {error}') from error
         for name, expected in item['files'].items():
             if digest(inside(group_dir / str(item['id']), name)) != expected:
                 raise DuplicateReviewError(f'Book {item["id"]} changed during backup; no mutation was made.')
