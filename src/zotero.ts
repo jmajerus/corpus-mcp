@@ -304,7 +304,10 @@ export function zoteroMatch(c: Corpus, book: BookRow): ZoteroMatch {
     const filed = c.data.prepare("SELECT key FROM zotero_items WHERE calibre_uuid = ? ORDER BY trashed, key").pluck().all(book.uuid) as string[];
     for (const key of filed) {
       const i = survivor(c, key);
-      if (i && !rejected.has(i.key)) return found(i, "calibre_uuid");
+      // Filing wrote the book's UUID to the item's Extra, so a rejection (a verdict on a lookalike, perhaps
+      // given before the line was added) doesn't hide the item that names it. One the book's UUID item was
+      // merged into still can be rejected.
+      if (i && (i.calibre_uuid === book.uuid || !rejected.has(i.key))) return found(i, "calibre_uuid");
     }
   }
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
@@ -352,6 +355,9 @@ export function linkZotero(c: Corpus, args: { book_id: string; key: string; acti
   if (!book.uuid) throw new ToolError(`${book.id} has no Calibre UUID.`);
   const item = c.data.prepare("SELECT * FROM zotero_items WHERE key = ?").get(args.key) as MirrorItem | undefined;
   if (!item) throw new ToolError(`No Zotero item ${args.key} in the mirror.`);
+  if (args.action === "reject" && item.calibre_uuid === book.uuid) {
+    throw new ToolError(`Zotero item ${args.key} names this book in its Extra ("Calibre UUID: ${book.uuid}"), so it is this book. If it isn't, remove that line in Zotero.`);
+  }
   if (args.action === "clear") {
     c.data.prepare("DELETE FROM zotero_links WHERE calibre_uuid = ? AND zotero_key = ?").run(book.uuid, args.key);
   } else {

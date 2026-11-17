@@ -1374,6 +1374,19 @@ describe("zotero mirror", () => {
     });
   });
 
+  it("matches the item that names the book's UUID even after a person rejected it", async () => {
+    // As main:648 was: rejected as a lookalike on one day, its Extra given the book's UUID the next.
+    put("RRRR1111", { title: "Echoes", date: "2010", creators: [{ creatorType: "author", lastName: "Writer" }], citationKey: "writer2010echoesr" });
+    await syncZotero(c, zconfig);
+    linkZotero(c, { book_id: "main:2", key: "RRRR1111", action: "reject" }, "me");
+    expect(zoteroMatch(c, getBookRow("main:2")).candidates.map((x) => x.key)).not.toContain("RRRR1111");
+    put("RRRR1111", { title: "Echoes", date: "2010", creators: [{ creatorType: "author", lastName: "Writer" }], citationKey: "writer2010echoesr", extra: "Calibre UUID: uuid-2" });
+    await syncZotero(c, zconfig);
+    expect(zoteroMatch(c, getBookRow("main:2")).match).toMatchObject({ key: "RRRR1111", matched_by: "calibre_uuid" });
+    // And it can't be rejected now: the Extra line says what it is.
+    expect(() => linkZotero(c, { book_id: "main:2", key: "RRRR1111", action: "reject" }, "me")).toThrow(/names this book in its Extra/);
+  });
+
   it("keeps the last error and the library version when a sync fails", async () => {
     await syncZotero(c, zconfig);
     await expect(syncZotero(c, { ...zconfig, apiKey: "wrong" })).rejects.toThrow(/refused the API key/);
