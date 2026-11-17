@@ -9,6 +9,7 @@ import type { DB } from "./db.js";
 import { type BookFormat, openBook } from "./extract.js";
 import { type IsbnCandidate, validIsbn } from "./isbn.js";
 import type { YearCandidate } from "./years.js";
+import { pathSegment } from "./urls.js";
 import { PdfTimeout, pdfWorkers } from "./pdf-runner.js";
 import type { RenderedPage } from "./pdf-tasks.js";
 import { type TitlePageScan, mangledTitle } from "./titlepage.js";
@@ -912,7 +913,7 @@ function titlePageReport(c: Corpus) {
     const title = mangled ? scan.title : null;
     if (authors.length || title) {
       found.push({
-        book_id: b.id, review_path: `/admin/books/${encodeURIComponent(b.id)}`, title: b.title, calibre_authors: JSON.parse(b.authors) as string[],
+        book_id: b.id, review_path: `/admin/books/${pathSegment(b.id)}`, title: b.title, calibre_authors: JSON.parse(b.authors) as string[],
         authors: authors.map((a) => ({ name: a.name, from: a.sources, page: a.page })), printed_title: title?.title ?? null,
       });
     }

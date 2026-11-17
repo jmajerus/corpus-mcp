@@ -25,7 +25,7 @@ export const CATEGORIES_HTML = page({
   script: `
 let max = 1;
 function node(n, depth) {
-  const count = (n.total ? '<a href="/admin/books?tag=' + encodeURIComponent(n.tag) + '">' + num(n.total) + " book" + (n.total === 1 ? "" : "s") + "</a>" : '<span class="zero">0</span>') +
+  const count = (n.total ? '<a href="/admin/books?tag=' + qv(n.tag) + '">' + num(n.total) + " book" + (n.total === 1 ? "" : "s") + "</a>" : '<span class="zero">0</span>') +
     (n.children.length && n.books ? ' <span class="note">(' + num(n.books) + " directly)</span>" : "") +
     (n.total ? '<span class="bar" style="width:' + Math.max(2, Math.round(80 * n.total / max)) + 'px" aria-hidden="true"></span>' : "");
   const label = '<span style="padding-left:' + depth * 16 + 'px" title="' + esc(n.tag) + '">' + esc(n.name) + "</span>";
@@ -36,7 +36,7 @@ api("/api/categories").then((d) => {
   max = Math.max(1, ...d.tree.map((n) => n.total));
   document.getElementById("summary").innerHTML = num(d.categorized) + " of " + num(d.books) + ' books have a category · <a href="/admin/books?category=uncategorized">' + num(d.uncategorized) + " uncategorized</a>";
   document.getElementById("tree").innerHTML = d.tree.map((n) => node(n, 0)).join("");
-  document.getElementById("free").innerHTML = d.free.length ? d.free.map((t) => '<tr><td><a href="/admin/books?tag=' + encodeURIComponent(t.tag) + '">' + esc(t.tag) + '</a></td><td class="num">' + num(t.books) + "</td><td>" + (t.suspect ? "⚠ " + esc(t.suspect) : "") + "</td></tr>").join("")
+  document.getElementById("free").innerHTML = d.free.length ? d.free.map((t) => '<tr><td><a href="/admin/books?tag=' + qv(t.tag) + '">' + esc(t.tag) + '</a></td><td class="num">' + num(t.books) + "</td><td>" + (t.suspect ? "⚠ " + esc(t.suspect) : "") + "</td></tr>").join("")
     : '<tr><td colspan="3" class="empty">None.</td></tr>';
 }).catch((e) => toast(e.message));
 const bookList = (books) => books.slice(0, 12).map((b) => bookLink(b.book_id, b.title)).join(", ") + (books.length > 12 ? " and " + num(books.length - 12) + " more" : "");
@@ -90,7 +90,7 @@ export const SHELVES_HTML = page({
   script: `
 api("/api/shelves").then((d) => {
   document.getElementById("summary").textContent = "Calibre-Web's public shelves, synced every refresh (last export " + ago(d.exported_at) + "). Edit them in Calibre-Web.";
-  document.getElementById("rows").innerHTML = d.shelves.length ? d.shelves.map((s) => '<tr><td><a href="/admin/books?shelf=' + encodeURIComponent(s.name) + '">' + esc(s.name) + '</a></td><td class="num">' + num(s.books) + '</td><td class="num">' + num(s.indexed_books) + "</td></tr>").join("")
+  document.getElementById("rows").innerHTML = d.shelves.length ? d.shelves.map((s) => '<tr><td><a href="/admin/books?shelf=' + qv(s.name) + '">' + esc(s.name) + '</a></td><td class="num">' + num(s.books) + '</td><td class="num">' + num(s.indexed_books) + "</td></tr>").join("")
     : '<tr><td colspan="3" class="empty">No shelves synced.</td></tr>';
 }).catch((e) => toast(e.message));`,
 });

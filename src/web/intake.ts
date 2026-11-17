@@ -67,7 +67,7 @@ function renderRows() {
       (row.authors && row.authors.length ? '<br><span class="note">' + esc(row.authors.join(", ")) + "</span>" : "") +
       (row.problem ? '<br><span class="warning">' + esc(row.problem) + "</span>" : "") +
       '</td><td class="num">' + bytes(row.size) + "</td><td>" +
-      (row.book_id ? '<a href="/admin/books/' + encodeURIComponent(row.book_id) + '">' + esc(STATUS_LABELS[row.status] || row.status) + "</a>" : esc(STATUS_LABELS[row.status] || row.status)) +
+      (row.book_id ? '<a href="/admin/books/' + seg(row.book_id) + '">' + esc(STATUS_LABELS[row.status] || row.status) + "</a>" : esc(STATUS_LABELS[row.status] || row.status)) +
       (row.status === "staged" ? ' · <a href="/admin/upload">Upload</a>' : "") +
       "</td></tr>").join("");
   }

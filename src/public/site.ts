@@ -1,6 +1,7 @@
 import { FAVICON_LINK } from "../web/favicon.js";
 import { CSS } from "../web/layout.js";
 import type { PublicStore } from "./store.js";
+import { pathSegment } from "../urls.js";
 
 /**
  * The public site: the library's catalogue, read from the public snapshot (src/public/snapshot.ts) and
@@ -59,10 +60,10 @@ const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "
 const num = (n: number) => n.toLocaleString("en");
 const plural = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
 /**
- * A path segment, encoded but for colons, which a path allows as they are: /books/main:186 rather than
- * /books/main%3A186. Either form finds the page, since the path is decoded before it's looked up.
+ * A path segment, encoded but for colons and @, which a path allows as they are: /books/main:186 rather
+ * than /books/main%3A186. Either form finds the page, since the path is decoded before it's looked up.
  */
-const segment = (s: string) => encodeURIComponent(s).replace(/%3A/gi, ":");
+const segment = pathSegment;
 const bookHref = (id: string) => `/books/${segment(id)}`;
 const subjectHref = (tag: string) => `/subjects/${segment(tag)}`;
 

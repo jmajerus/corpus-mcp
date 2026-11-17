@@ -132,7 +132,11 @@ function toast(message) {
   t.textContent = message; t.style.display = "block";
   clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.style.display = "none"; }, 4000);
 }
-const bookLink = (id, title) => '<a href="/admin/books/' + encodeURIComponent(id) + '">' + esc(title || id) + "</a>";
+// Keys written readably in links (/admin/books/main:649); the same rules as src/urls.ts.
+const readable = (s) => s.replace(/%(3A|40)/gi, (m) => decodeURIComponent(m));
+const seg = (v) => readable(encodeURIComponent(v));
+const qv = (v) => readable(encodeURIComponent(v)).replace(/%20/g, "+").replace(/%(2F|2C)/gi, (m) => decodeURIComponent(m));
+const bookLink = (id, title) => '<a href="/admin/books/' + seg(id) + '">' + esc(title || id) + "</a>";
 // Vocabulary tags are slugs; pages show their titles, with the slug on hover.
 const VOCAB = fetch("/api/vocabulary").then((r) => r.json()).then((v) => new Map(v.tags.map((t) => [t.tag, t.label]))).catch(() => new Map());
 let LABELS = new Map();

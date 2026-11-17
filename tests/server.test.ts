@@ -402,6 +402,14 @@ it("verifies and anchors quote-mcp's quotes on the LAN only", async () => {
   expect((await post("/api/verify", { book: "main:1", text: "Weak ties", file_page: 1, page: 2 })).status).toBe(400);
 });
 
+it("answers a book's pages with the key written plainly or encoded", async () => {
+  for (const id of ["main:1", "main%3A1"]) {
+    expect((await fetch(`${base}/admin/books/${id}`)).status, id).toBe(200);
+    expect((await fetch(`${base}/admin/books/${id}/read`)).status, id).toBe(200);
+    expect((await (await fetch(`${base}/api/books/${id}`)).json()).book_id, id).toBe("main:1");
+  }
+});
+
 it("serves a book's CSL item on the LAN only", async () => {
   const csl = await fetch(`${base}/api/csl?book=main:1`);
   expect(csl.status).toBe(200);

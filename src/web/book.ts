@@ -109,12 +109,12 @@ function render() {
   const canCorrect = canWrite && b.metadata_writable;
   const repair = (needsAuthor || tp.title_is_file_name || needsYear) ? '<div class="editor"><h2>Correct title, authors, and year</h2>' +
     '<div class="note">Review these values against the book. Apply saves them in Calibre and regenerates the proposed citekey. Complete metadata makes the generated key available for citations and filing without pinning. Existing assigned keys are kept.</div>' +
-    '<div class="metadata-review"><a class="cover" href="/api/books/' + encodeURIComponent(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
+    '<div class="metadata-review"><a class="cover" href="/api/books/' + seg(id) + '/cover" target="_blank" rel="noopener"><img src="/api/books/' + encodeURIComponent(id) + '/cover" alt="Book cover" loading="lazy" style="max-width:120px;max-height:220px" onerror="this.parentElement.remove()"></a>' +
     '<label>Title<input id="metadata-title" style="display:block;width:100%;box-sizing:border-box" value="' + esc(tp.title_is_file_name && tp.title ? tp.title.title : b.title) + '"' + (canCorrect ? "" : " disabled") + '></label>' +
     '<label>Authors — one per line<textarea id="metadata-authors" rows="4" style="display:block;width:100%;box-sizing:border-box"' + (canCorrect ? "" : " disabled") + '>' + esc(authorValues.join("\\n")) + '</textarea></label>' +
     '<label>Publication year<input id="metadata-year" type="number" min="1001" max="9999" step="1" placeholder="Unknown" style="display:block;width:100%;box-sizing:border-box" value="' + esc(y.calibre ?? y.printed ?? "") + '"' + (canCorrect ? "" : " disabled") + '></label></div>' +
     (needsYear && y.printed ? '<p class="note">Year suggested from the book’s publication/copyright evidence above.</p>' : "") +
-    '<p><a href="/admin/books/' + encodeURIComponent(id) + '/read?page=1">Read the opening pages</a></p>' +
+    '<p><a href="/admin/books/' + seg(id) + '/read?page=1">Read the opening pages</a></p>' +
     (!b.metadata_writable ? '<p class="note">This library is read-only.</p>' : "") +
     '<p id="metadata-key-preview" role="status" aria-live="polite">Generated citekey preview…</p>' +
     '<button type="button" class="primary" id="apply-metadata"' + (canCorrect ? "" : " disabled") + '>Apply to Calibre</button></div>' : "";
@@ -128,16 +128,16 @@ function render() {
     b.changes.map((ch) => "<tr><td>" + esc(when(ch.at)) + "</td><td>" + esc(String(ch.kind).replace("_", " ")) + "</td><td>" +
       (["tag_added", "tag_removed", "tag_proposed", "proposal_approved"].includes(ch.kind) ? tagChip(ch.detail) : esc(ch.detail || "")) + "</td><td>" +
       (ch.job_id ? '<a href="/admin/jobs/' + ch.job_id + '">' + esc(ch.source) + " #" + ch.job_id + "</a>" : esc(ch.source)) + "</td><td>" + esc(ch.actor || "") + "</td></tr>").join("") +
-    '</tbody></table></div><p class="note"><a href="/admin/changes?q=' + encodeURIComponent(b.book_id) + '&range=all">All changes to this book</a></p>' : '<p class="note">No recorded changes.</p>';
+    '</tbody></table></div><p class="note"><a href="/admin/changes?q=' + qv(b.book_id) + '&range=all">All changes to this book</a></p>' : '<p class="note">No recorded changes.</p>';
   const coverUrl = "/api/books/" + encodeURIComponent(b.book_id) + "/cover";
   document.getElementById("book").innerHTML =
     '<div class="head"><div class="title"><a class="thumb" href="' + coverUrl + '" target="_blank" rel="noopener"><img src="' + coverUrl + '" alt="Book cover" onerror="this.parentElement.remove()"></a>' +
       '<div><h1>' + esc(b.title) + '</h1><p class="sub">' + esc(b.authors.join(", ")) + (b.year ? " · " + b.year : "") + (b.publisher ? " · " + esc(b.publisher) : "") + " · " + esc(b.book_id) + "</p>" + badges.join("") + "</div></div>" +
-    '<div class="links">' + (b.status === "indexed" ? '<a href="/admin/books/' + encodeURIComponent(b.book_id) + '/read">Read</a>' : "") +
+    '<div class="links">' + (b.status === "indexed" ? '<a href="/admin/books/' + seg(b.book_id) + '/read">Read</a>' : "") +
       (b.calibre_web_url ? ' · <a href="' + esc(b.calibre_web_url) + '" target="_blank" rel="noopener">Open in Calibre-Web</a>' : "") + "</div></div>" +
     (b.description ? '<p class="desc">' + esc(String(b.description).replace(/<[^>]+>/g, " ").slice(0, 600)) + "</p>" : "") +
     '<div class="cols">' + categoriesCard() + citekeyCard() +
-    '<div class="card"><h2>Shelves and other tags</h2>' + kv([["Shelves", b.shelves.length ? b.shelves.map((s) => '<a class="chip muted" href="/admin/books?shelf=' + encodeURIComponent(s) + '">' + esc(s) + "</a>").join("") : '<span class="note">None</span>'],
+    '<div class="card"><h2>Shelves and other tags</h2>' + kv([["Shelves", b.shelves.length ? b.shelves.map((s) => '<a class="chip muted" href="/admin/books?shelf=' + qv(s) + '">' + esc(s) + "</a>").join("") : '<span class="note">None</span>'],
       ["Other tags", b.other_tags.length ? b.other_tags.map((t) => '<span class="chip muted" title="' + esc(t.suspect || "") + '">' + esc(t.tag) + (t.suspect ? " ⚠" : "") + "</span>").join("") : '<span class="note">None</span>']]) + "</div>" +
     '<div class="card"><h2>ISBN</h2>' + kv([["State", badge("isbn", b.isbn.state)], ["In Calibre", b.isbn.calibre ? esc(b.isbn.calibre) + (b.isbn.valid ? "" : ' <span class="note">(fails its check digit)</span>') : null]]) + printed + "</div>" + yearCard + titlePageCard +
     '<div class="card"><h2>File</h2>' + kv([["Status", esc(b.status) + (b.error ? ' <span class="note">' + esc(b.error) + "</span>" : "")], ["Format", esc((f.format || "–").toUpperCase())],
@@ -153,7 +153,7 @@ function render() {
 // Quotes are kept in quote-mcp: link to this book's there, by its Zotero item if it has one, else its title.
 function quotesSection() {
   const work = book.zotero && book.zotero.match ? book.zotero.match.key : book.title;
-  return '<p><a href="/admin/quotes?work=' + esc(encodeURIComponent(work)) + '">Quotes from this book</a> <span class="note">in quote-mcp</span></p>';
+  return '<p><a href="/admin/quotes?work=' + esc(qv(work)) + '">Quotes from this book</a> <span class="note">in quote-mcp</span></p>';
 }
 
 function renderDesired() {

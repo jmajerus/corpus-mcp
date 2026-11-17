@@ -33,7 +33,7 @@ function render(data) {
       ["Every", num(t.every_seconds) + " s"], ["Problem", t.error ? esc(t.error) : "none"]]) : "");
   document.getElementById("list").innerHTML = data.provisional.length ? data.provisional.map((p) =>
     '<article class="card term"><h3>' + esc(p.label) + '</h3><div class="meta"><span class="path">' + esc(p.tag) + "</span> · " +
-    '<a href="/admin/books?tag=' + encodeURIComponent(p.tag) + '">' + num(p.books) + " book" + (p.books === 1 ? "" : "s") + "</a></div>" +
+    '<a href="/admin/books?tag=' + qv(p.tag) + '">' + num(p.books) + " book" + (p.books === 1 ? "" : "s") + "</a></div>" +
     (p.scopeNote ? '<p class="scope">' + esc(p.scopeNote) + "</p>" : "") + "</article>").join("") : '<p class="empty">No provisional terms.</p>';
 }
 api("/api/taxonomy").then(render, (e) => toast(e.message));`,

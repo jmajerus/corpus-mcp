@@ -98,7 +98,7 @@ async function load() {
   history.replaceState(null, "", location.pathname + "?page=" + start + location.hash);
   const kind = data.page_kind === "location" ? "location" : "page";
   document.title = data.title + " · Reader";
-  document.getElementById("back").innerHTML = '<a href="/admin/books/' + encodeURIComponent(data.book_id) + '">← ' + esc(data.title) + "</a>";
+  document.getElementById("back").innerHTML = '<a href="/admin/books/' + seg(data.book_id) + '">← ' + esc(data.title) + "</a>";
   document.getElementById("title").textContent = data.title;
   document.getElementById("sub").textContent = data.authors.join(", ") + " · " + kind + "s " + data.start + "–" + data.end + " of " + data.page_count +
     (data.page_kind === "location" ? " · locations are reading positions, not page numbers" : "");
