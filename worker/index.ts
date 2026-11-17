@@ -1,4 +1,4 @@
-import { isPublicPath, renderPublic } from "../src/public/site.js";
+import { coverBook, coverKey, isPublicPath, renderPublic } from "../src/public/site.js";
 import { FAVICON_PATHS, favicon } from "../src/web/favicon.js";
 import { type D1Database, d1Store } from "./d1.js";
 
@@ -11,10 +11,31 @@ import { type D1Database, d1Store } from "./d1.js";
  * makes clients revalidate — so a revalidation that finds nothing new is a 304 after reading only the
  * snapshot's meta: a page reads hundreds of D1 rows, and D1's free tier allows five million a day across
  * the account.
+ *
+ * Cover thumbnails (/covers/<id>.jpg) come from the R2 bucket the drain fills (COVERS). A book page names
+ * its cover with the thumbnail's stamp in the query, so a cover may be cached for a day.
  */
+
+/** The part of an R2 binding the Worker reads. */
+export interface CoverObjects {
+  get(key: string): Promise<{ body: ReadableStream; httpEtag: string } | null>;
+}
 
 export interface Env {
   DB: D1Database;
+  COVERS?: CoverObjects;
+}
+
+async function cover(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") return text(405, "Method not allowed", { allow: "GET, HEAD" });
+  const object = env.COVERS ? await env.COVERS.get(coverKey(id)) : null;
+  if (!object) return text(404, "Not found");
+  const headers = { "content-type": "image/jpeg", "cache-control": "public, max-age=86400", etag: object.httpEtag, "x-content-type-options": "nosniff" };
+  if (request.method === "HEAD" || request.headers.get("if-none-match")?.split(/\s*,\s*/).includes(object.httpEtag)) {
+    await object.body.cancel();
+    return new Response(null, { status: request.method === "HEAD" ? 200 : 304, headers });
+  }
+  return new Response(object.body, { headers });
 }
 
 /** The deployed code's build id, from worker:deploy's --define; empty under tests and wrangler dev. */
@@ -44,6 +65,8 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (FAVICON_PATHS.has(url.pathname)) {
     return new Response(request.method === "HEAD" ? null : favicon(), { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
   }
+  const coverOf = coverBook(url.pathname);
+  if (coverOf !== null) return cover(request, env, coverOf);
   if (!isPublicPath(url.pathname)) return text(404, "Not found");
   if (request.method !== "GET" && request.method !== "HEAD") return text(405, "Method not allowed", { allow: "GET, HEAD" });
   const hash = await publishedHash(env.DB);

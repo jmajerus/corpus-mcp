@@ -9,7 +9,9 @@ import type { PublicStore } from "./store.js";
  *
  *   /                      the front page: counts, search, shelves, top-level subjects, other sites
  *   /books[?q=&sort=]      books by author, title, date added, or year, or matching a search over titles, authors, and subjects
- *   /books/<id>            one book's catalogue entry, with links to it on other sites
+ *   /books/<id>            one book's catalogue entry, with its cover and links to it on other sites
+ *   /covers/<id>.jpg       a book's cover thumbnail (CORPUS_PUBLIC_COVERS), served from R2 by the Worker
+ *                          and from the thumbnail cache on the LAN, not by renderPublic
  *   /subjects[/<tag>]      the subject tree, and the books under a subject
  *   /shelves[/<id>]        Calibre-Web's public shelves
  *   /site.json             this site, for other sites (version 1)
@@ -21,6 +23,8 @@ export interface PublicResponse { status: number; type: string; body: string; et
 interface Book {
   id: string; title: string; authors: string; year: number | null; publisher: string | null; language: string | null; isbn: string | null;
   format: string | null; citekeys: string; zotero_keys: string; added: string | null;
+  /** The cover thumbnail's stamp (src/public/covers.ts); null without one, or in a replica from before covers. */
+  cover?: string | null;
 }
 interface Subject { tag: string; name: string; label: string; parent: string | null; books: number }
 interface Shelf { id: number; name: string; books: number }
@@ -42,6 +46,9 @@ form.search input { flex: 1; }
 dl.entry { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0; }
 dl.entry dt { color: var(--muted); }
 dl.entry dd { margin: 0; overflow-wrap: anywhere; }
+.book-entry { display: flex; flex-wrap: wrap; gap: 0 24px; align-items: flex-start; }
+.book-entry .cover { flex: none; width: 120px; height: auto; margin-top: 16px; border: 1px solid var(--border); border-radius: 3px; }
+.book-entry dl.entry { flex: 1 1 18rem; }
 .pager { display: flex; gap: 12px; margin: 14px 0; }
 .sorts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; }
 .sorts a[aria-current] { color: var(--text); font-weight: 600; text-decoration: none; }
@@ -53,6 +60,23 @@ const num = (n: number) => n.toLocaleString("en");
 const plural = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
 const bookHref = (id: string) => `/books/${encodeURIComponent(id)}`;
 const subjectHref = (tag: string) => `/subjects/${encodeURIComponent(tag)}`;
+
+/** A book's cover's name in R2 and in the cache's /covers/ path. */
+export const coverKey = (bookId: string) => `${bookId}.jpg`;
+
+/** The book a /covers/<id>.jpg path names, or null for any other path. */
+export function coverBook(pathname: string): string | null {
+  const m = pathname.match(/^\/covers\/([^/]+)\.jpg$/);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+/** A cover's URL, with its stamp so a new cover is a new URL. */
+const coverHref = (id: string, stamp: string) => `/covers/${encodeURIComponent(id)}.jpg?v=${encodeURIComponent(stamp)}`;
 const authorsOf = (b: Pick<Book, "authors">) => (JSON.parse(b.authors) as string[]).join(", ");
 
 type Section = "home" | "books" | "subjects" | "shelves";
@@ -187,8 +211,9 @@ async function book(store: PublicStore, id: string): Promise<string | null> {
     ...(citekeys.length ? [["Citekey", citekeys.map((k) => `<code>${esc(k)}</code>`).join(", ")] as [string, string]] : []),
   ];
   const elsewhere = links.map((l) => `<li><a href="${esc(l.url)}${esc(l.path)}">${l.kind === "quotes" ? "Quotes from this book" : "This book"} on ${esc(l.name)}</a></li>`).join("");
+  const cover = b.cover ? `<img class="cover" src="${esc(coverHref(b.id, b.cover))}" alt="" width="120">` : "";
   return page(store, b.title, "books", `<p><a href="/books">← Books</a></p><h1>${esc(b.title)}</h1>
-<dl class="entry">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+<div class="book-entry">${cover}<dl class="entry">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></div>
 ${elsewhere ? `<h2>Elsewhere</h2><ul class="tree">${elsewhere}</ul>` : ""}`);
 }
 

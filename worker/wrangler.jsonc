@@ -20,5 +20,7 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Cover thumbnails, which the drain puts through the proxy. Create it once: `npx wrangler r2 bucket create corpus-mcp-covers`.
+  "r2_buckets": [{ "binding": "COVERS", "bucket_name": "corpus-mcp-covers" }],
   "observability": { "enabled": true }
 }

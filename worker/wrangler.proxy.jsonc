@@ -17,5 +17,7 @@
       // The same database as worker/wrangler.jsonc's.
       "database_id": "bb39fcbd-b715-4c90-8045-7590fb8da64f"
     }
-  ]
+  ],
+  // The same bucket as worker/wrangler.jsonc's: the drain's cover thumbnails go in through /covers/<key>.
+  "r2_buckets": [{ "binding": "COVERS", "bucket_name": "corpus-mcp-covers" }]
 }

@@ -2,8 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { type D1Http, d1Http, d1ConfigFrom } from "./d1-http.js";
+import { coverFile, coversDir } from "./covers.js";
+import { type CoverStore, type D1Http, coverStore, d1Http, d1ConfigFrom } from "./d1-http.js";
 import { REPLICA_TABLES, type ReplicaRow, type Statement, remove, snapshotRows, upsert } from "./replica.js";
+import { coverKey } from "./site.js";
 
 /**
  * Keeps the public snapshot's replica in D1 in step, on concept-clusters' model (its publishedReplica),
@@ -21,6 +23,10 @@ import { REPLICA_TABLES, type ReplicaRow, type Statement, remove, snapshotRows, 
  * After a batch succeeds, its rows are recorded as shipped and their queue entries cleared, if their hash
  * is still the one queued. A failure leaves them queued for the next tick; every statement is idempotent,
  * so sending one again is harmless.
+ *
+ * Cover thumbnails (src/public/covers.ts) are queued the same way, as entries of their own ("covers", by
+ * book, with the thumbnail's stamp as their hash), and go to R2: new ones before any rows, so a page never
+ * names a cover that isn't there yet, and removals after them.
  */
 
 const STATE_SCHEMA = `
@@ -35,6 +41,10 @@ const BATCH = 100;
 export const DRAIN_INTERVAL_MS = 15_000;
 
 const order = new Map(REPLICA_TABLES.map(([t], i) => [t, i]));
+/** The queue's name for cover thumbnails, which go to R2 rather than D1. */
+const COVERS = "covers";
+/** Covers uploaded at once. */
+const COVER_BATCH = 6;
 const rowHash = (row: Record<string, unknown>) => createHash("sha256").update(JSON.stringify(row)).digest("hex");
 
 /** The queue and the record of what's been shipped: replica.db beside the snapshot. */
@@ -59,10 +69,17 @@ function setState(state: Database.Database, key: string, value: string): void {
 
 const snapshotHash = (snap: Database.Database) => (snap.prepare("SELECT value FROM meta WHERE key = 'hash'").pluck().get() as string | undefined) ?? "";
 
-/** The snapshot's rows by table and key, with each row's hash. */
+/** The snapshot's rows by table and key, with each row's hash, and its books' covers with their stamps. */
 function desired(snap: Database.Database): Map<string, ReplicaRow & { hash: string }> {
   const rows = new Map<string, ReplicaRow & { hash: string }>();
   for (const r of snapshotRows(snap)) rows.set(`${r.table}\u0001${r.key}`, { ...r, hash: rowHash(r.row) });
+  const hasCovers = (snap.prepare("PRAGMA table_info(books)").all() as { name: string }[]).some((c) => c.name === "cover");
+  if (hasCovers) {
+    for (const b of snap.prepare("SELECT id, cover FROM books WHERE cover IS NOT NULL ORDER BY id").iterate() as Iterable<{ id: string; cover: string }>) {
+      const key = JSON.stringify([b.id]);
+      rows.set(`${COVERS}\u0001${key}`, { table: COVERS, key, row: b, hash: b.cover });
+    }
+  }
   return rows;
 }
 
@@ -103,10 +120,18 @@ export function pending(state: Database.Database): { rows: number; removals: num
 
 interface Item { table: string; key: string; hash: string; statements: Statement[] }
 
-/** Ships the queue to D1 in batches; returns how many entries were shipped. Throws, leaving the rest queued, when a batch fails. */
-export async function drain(state: Database.Database, snap: Database.Database, d1: D1Http, renew?: () => void): Promise<number> {
-  const queue = state.prepare("SELECT tbl, key, hash FROM queue").all() as { tbl: string; key: string; hash: string }[];
-  if (!queue.length) return 0;
+/** Where the drain gets cover thumbnails and puts them. */
+export interface CoverShipping { store: CoverStore; dir: string }
+
+/**
+ * Ships the queue: new covers to R2, rows to D1 in batches, then cover removals. Returns how many entries
+ * were shipped. Throws, leaving the rest queued, when a batch fails. Without `covers`, cover entries wait.
+ */
+export async function drain(state: Database.Database, snap: Database.Database, d1: D1Http, renew?: () => void, covers?: CoverShipping): Promise<number> {
+  const all = state.prepare("SELECT tbl, key, hash FROM queue").all() as { tbl: string; key: string; hash: string }[];
+  if (!all.length) return 0;
+  const queue = all.filter((q) => q.tbl !== COVERS);
+  const coverQueue = covers ? all.filter((q) => q.tbl === COVERS) : [];
   const want = desired(snap);
   const items: Item[] = [];
   const removals = queue.filter((q) => q.hash === "").sort((a, b) => order.get(b.tbl)! - order.get(a.tbl)!);
@@ -131,6 +156,23 @@ export async function drain(state: Database.Database, snap: Database.Database, d
     }
   });
   let shipped = 0;
+  const bookOf = (key: string) => (JSON.parse(key) as string[])[0];
+  // New covers first, so no row names one that isn't in R2.
+  const puts: (Item & { file: string })[] = [];
+  for (const q of coverQueue.filter((q) => q.hash !== "")) {
+    const r = want.get(`${COVERS}\u0001${q.key}`);
+    const file = r && coverFile(covers!.dir, r.hash);
+    // A thumbnail not in the cache: the snapshot moved on; the next comparison queues its current one.
+    if (!r || !fs.existsSync(file!)) continue;
+    puts.push({ table: COVERS, key: q.key, hash: r.hash, statements: [], file: file! });
+  }
+  for (let start = 0; start < puts.length; start += COVER_BATCH) {
+    const batch = puts.slice(start, start + COVER_BATCH);
+    await Promise.all(batch.map((i) => covers!.store.put(coverKey(bookOf(i.key)), fs.readFileSync(i.file))));
+    record(batch);
+    shipped += batch.length;
+    renew?.();
+  }
   for (let start = 0; start < items.length;) {
     const batch: Item[] = [];
     let size = 0;
@@ -139,6 +181,15 @@ export async function drain(state: Database.Database, snap: Database.Database, d
       batch.push(items[start++]);
     }
     await d1.batch(batch.flatMap((i) => i.statements));
+    record(batch);
+    shipped += batch.length;
+    renew?.();
+  }
+  // Removed covers last, once no row names them.
+  const removed = coverQueue.filter((q) => q.hash === "").map((q): Item => ({ table: COVERS, key: q.key, hash: "", statements: [] }));
+  for (let start = 0; start < removed.length; start += COVER_BATCH) {
+    const batch = removed.slice(start, start + COVER_BATCH);
+    await Promise.all(batch.map((i) => covers!.store.delete(coverKey(bookOf(i.key)))));
     record(batch);
     shipped += batch.length;
     renew?.();
@@ -173,7 +224,7 @@ function releaseLease(state: Database.Database, owner: string): void {
  * One tick: compare the snapshot (if it's changed) and ship what's queued. `busy` when another tick holds
  * the lease; the next one picks up whatever is left.
  */
-export async function tick(snapshotFile: string, state: Database.Database, d1: D1Http): Promise<{ queued: number; shipped: number; busy?: boolean }> {
+export async function tick(snapshotFile: string, state: Database.Database, d1: D1Http, covers?: CoverStore): Promise<{ queued: number; shipped: number; busy?: boolean }> {
   if (!fs.existsSync(snapshotFile)) return { queued: 0, shipped: 0 };
   const owner = `${process.pid}:${randomUUID()}`;
   if (!takeLease(state, owner)) return { queued: 0, shipped: 0, busy: true };
@@ -181,7 +232,8 @@ export async function tick(snapshotFile: string, state: Database.Database, d1: D
     const snap = new Database(snapshotFile, { readonly: true, fileMustExist: true });
     try {
       const queued = enqueue(state, snap);
-      return { queued, shipped: await drain(state, snap, d1, () => takeLease(state, owner)) };
+      const shipping = covers ? { store: covers, dir: coversDir(snapshotFile) } : undefined;
+      return { queued, shipped: await drain(state, snap, d1, () => takeLease(state, owner), shipping) };
     } finally {
       snap.close();
     }
@@ -206,6 +258,7 @@ export function startDrain(snapshotFile: string, stateFile: string, env: NodeJS.
   }
   if (!config) return () => ({ ...status });
   const d1 = d1Http(config);
+  const covers = coverStore(config);
   const state = openReplicaState(stateFile);
   status.phase = "idle";
   let running = false;
@@ -213,7 +266,7 @@ export function startDrain(snapshotFile: string, stateFile: string, env: NodeJS.
     if (running) return;
     running = true;
     try {
-      const { queued, shipped } = await tick(snapshotFile, state, d1);
+      const { queued, shipped } = await tick(snapshotFile, state, d1, covers);
       Object.assign(status, { phase: "ok", error: null });
       if (queued || shipped) console.error(`Public replica: ${queued} queued, ${shipped} shipped to D1.`);
     } catch (error) {

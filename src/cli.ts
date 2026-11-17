@@ -20,8 +20,8 @@ const USAGE = `Usage:
 
 Environment: CORPUS_BOOKS_ROOT, CORPUS_LIBRARIES, CORPUS_EXCLUDE_TAGS, CORPUS_DB, CORPUS_DATA_DB,
 CORPUS_BACKUP_DIR, CORPUS_HOST, CORPUS_PORT, CORPUS_PUBLIC, CORPUS_PUBLIC_DB, CORPUS_PUBLIC_PORT,
-CORPUS_PUBLIC_TITLE, CORPUS_PUBLIC_URL, CORPUS_SITE_LINKS, CORPUS_PUBLISH_INTERVAL_MINUTES,
-CORPUS_D1_PROXY_URL, CORPUS_D1_PROXY_TOKEN`;
+CORPUS_PUBLIC_TITLE, CORPUS_PUBLIC_URL, CORPUS_PUBLIC_COVERS, CORPUS_SITE_LINKS,
+CORPUS_PUBLISH_INTERVAL_MINUTES, CORPUS_D1_PROXY_URL, CORPUS_D1_PROXY_TOKEN, CORPUS_R2_BUCKET`;
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...flags] = argv;
@@ -61,7 +61,7 @@ async function main(argv: string[]): Promise<void> {
       const { openCorpus } = await import("./server.js");
       const { publishSnapshot } = await import("./public/snapshot.js");
       const drain = await import("./public/drain.js");
-      const { d1ConfigFrom, d1Http } = await import("./public/d1-http.js");
+      const { coverStore, d1ConfigFrom, d1Http } = await import("./public/d1-http.js");
       const file = config.public?.file ?? "";
       const state = () => drain.openReplicaState(drain.replicaStateFile(file));
       if (flags.includes("--status")) {
@@ -91,7 +91,7 @@ async function main(argv: string[]): Promise<void> {
         console.error("No D1 configured (CORPUS_D1_PROXY_URL and CORPUS_D1_PROXY_TOKEN); the snapshot is built for the LAN only.");
         break;
       }
-      const shipped = await drain.tick(file, state(), d1Http(d1));
+      const shipped = await drain.tick(file, state(), d1Http(d1), coverStore(d1));
       console.error(shipped.busy ? "replica: the server's drain is shipping now; it will send this snapshot's changes too"
         : `replica: ${shipped.queued} queued, ${shipped.shipped} shipped to D1`);
       break;
