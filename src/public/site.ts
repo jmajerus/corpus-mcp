@@ -58,8 +58,13 @@ dl.entry dd { margin: 0; overflow-wrap: anywhere; }
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const num = (n: number) => n.toLocaleString("en");
 const plural = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
-const bookHref = (id: string) => `/books/${encodeURIComponent(id)}`;
-const subjectHref = (tag: string) => `/subjects/${encodeURIComponent(tag)}`;
+/**
+ * A path segment, encoded but for colons, which a path allows as they are: /books/main:186 rather than
+ * /books/main%3A186. Either form finds the page, since the path is decoded before it's looked up.
+ */
+const segment = (s: string) => encodeURIComponent(s).replace(/%3A/gi, ":");
+const bookHref = (id: string) => `/books/${segment(id)}`;
+const subjectHref = (tag: string) => `/subjects/${segment(tag)}`;
 
 /** A book's cover's name in R2 and in the cache's /covers/ path. */
 export const coverKey = (bookId: string) => `${bookId}.jpg`;
@@ -76,7 +81,7 @@ export function coverBook(pathname: string): string | null {
 }
 
 /** A cover's URL, with its stamp so a new cover is a new URL. */
-const coverHref = (id: string, stamp: string) => `/covers/${encodeURIComponent(id)}.jpg?v=${encodeURIComponent(stamp)}`;
+const coverHref = (id: string, stamp: string) => `/covers/${segment(id)}.jpg?v=${encodeURIComponent(stamp)}`;
 const authorsOf = (b: Pick<Book, "authors">) => (JSON.parse(b.authors) as string[]).join(", ");
 
 type Section = "home" | "books" | "subjects" | "shelves";

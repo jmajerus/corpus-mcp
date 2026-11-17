@@ -180,6 +180,9 @@ describe("the pages", () => {
     expect(page).toContain("Quotes from this book on Quotes");
     // main:2 matches by its Zotero item key.
     expect((await get("/books/main:2")).body).toContain("https://quotes.example.org/works/9");
+    // Links keep the colon as it is; the encoded form still finds the page.
+    expect((await get("/books")).body).toContain('href="/books/main:1"');
+    expect((await get("/books/main%3A1")).status).toBe(200);
   });
 
   it("marks a preview's pages as not yet published", async () => {
@@ -192,8 +195,8 @@ describe("the pages", () => {
       version: 1, name: "Test Library", kind: "library", url: "https://library.example.org", level: "catalogue", citekeys: "/api/public/citekeys",
     });
     expect(JSON.parse((await get("/api/public/citekeys")).body)).toEqual({
-      citekeys: { author2001networks: "/books/main%3A1", writer1999crowds: "/books/main%3A2" },
-      zotero_keys: { "users/1/ITEM2": "/books/main%3A2" },
+      citekeys: { author2001networks: "/books/main:1", writer1999crowds: "/books/main:2" },
+      zotero_keys: { "users/1/ITEM2": "/books/main:2" },
     });
   });
 });
@@ -248,7 +251,7 @@ describe("cover thumbnails", () => {
     await publishSnapshot(c, coverConfig(file));
     const stamp = stampsIn(file).get("main:1")!;
     const store = sqliteStore(new Database(file, { readonly: true }));
-    expect((await renderPublic(store, "/books/main%3A1"))!.body).toContain(`<img class="cover" src="/covers/main%3A1.jpg?v=${stamp}"`);
+    expect((await renderPublic(store, "/books/main%3A1"))!.body).toContain(`<img class="cover" src="/covers/main:1.jpg?v=${stamp}"`);
     const plain = sqliteStore(new Database(path.join(root, "uncovered.db"), { readonly: true }));
     expect((await renderPublic(plain, "/books/main%3A1"))!.body).not.toContain('class="cover"');
   });
@@ -302,7 +305,7 @@ describe("keys that are also object properties", () => {
       buildSnapshot(c, options([quotesSite]), file);
       const store = sqliteStore(new Database(file, { readonly: true }));
       expect((await renderPublic(store, "/books/main:1"))!.body).not.toContain("quotes.example.org");
-      expect(JSON.parse((await renderPublic(store, "/api/public/citekeys"))!.body).citekeys.constructor).toBe("/books/main%3A1");
+      expect(JSON.parse((await renderPublic(store, "/api/public/citekeys"))!.body).citekeys.constructor).toBe("/books/main:1");
     } finally {
       c.data.prepare("UPDATE citekeys SET citekey = 'author2001networks' WHERE calibre_uuid = 'uuid-1'").run();
     }
@@ -633,7 +636,7 @@ describe("the replica in D1", () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(r.objects.get("main:1.jpg"));
     expect((await get("/covers/main%3A1.jpg", { headers: { "if-none-match": res.headers.get("etag")! } })).status).toBe(304);
     expect((await get("/covers/main%3A9.jpg")).status).toBe(404);
-    expect(await (await get("/books/main%3A1")).text()).toContain(`/covers/main%3A1.jpg?v=${stamps.get("main:1")}`);
+    expect(await (await get("/books/main%3A1")).text()).toContain(`/covers/main:1.jpg?v=${stamps.get("main:1")}`);
 
     // Turned off, the rows lose their covers first, then R2 does.
     r.log.length = 0;
