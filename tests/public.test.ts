@@ -9,10 +9,12 @@ import type { Config } from "../src/config.js";
 import { openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
 import { scanLibraries } from "../src/indexer.js";
-import { d1Http } from "../src/public/d1-http.js";
+import * as mupdf from "mupdf";
+import { COVER_WIDTH, coverFile, coversDir } from "../src/public/covers.js";
+import { coverStore, d1Http } from "../src/public/d1-http.js";
 import { openReplicaState, pending, tick } from "../src/public/drain.js";
 import { replicaScript, snapshotRows } from "../src/public/replica.js";
-import { SNAPSHOT_SCHEMA, buildSnapshot, fetchSites, type LinkedSite, type SnapshotOptions } from "../src/public/snapshot.js";
+import { SNAPSHOT_SCHEMA, buildSnapshot, fetchSites, type LinkedSite, publishSnapshot, type SnapshotOptions } from "../src/public/snapshot.js";
 import { renderPublic } from "../src/public/site.js";
 import { sqliteStore } from "../src/public/store.js";
 import { serveHttp } from "../src/server.js";
@@ -21,7 +23,7 @@ import { Vocabulary } from "../src/vocabulary.js";
 import { FAVICON_BASE64 } from "../src/web/favicon.js";
 import { type D1Database } from "../worker/d1.js";
 import { handle } from "../worker/index.js";
-import { type ProxyEnv, handleProxy } from "../worker/proxy.js";
+import { type CoverBucket, type ProxyEnv, handleProxy } from "../worker/proxy.js";
 import { makeLibrary, makePdf, tempDir } from "./fixtures.js";
 
 let root: string;
@@ -33,6 +35,29 @@ const quotesSite: LinkedSite = {
   url: "https://quotes.example.org", name: "Quotes", kind: "quotes", fetched_at: "2026-10-28T00:00:00Z",
   keys: { citekeys: { author2001networks: "/works/7" }, zotero_keys: { "users/1/ITEM2": "/works/9" } },
 };
+
+/** A 600×900 JPEG, as Calibre's cover.jpg. */
+function coverJpeg(): Buffer {
+  const pixmap = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, 600, 900], false);
+  pixmap.clear(180);
+  return Buffer.from(pixmap.asJPEG(90));
+}
+
+const folderOf = (id: string) => path.join(root, c.db.prepare("SELECT folder FROM books WHERE id = ?").pluck().get(id) as string);
+
+/** The settings publishSnapshot reads, with covers on, writing the snapshot to `file`. */
+const coverConfig = (file: string): Config =>
+  ({ ...config, public: { level: "catalogue", file, title: "Test Library", url: "", links: [], intervalMinutes: 10, covers: true } });
+
+/** Each book's cover stamp in the snapshot at `file`. */
+function stampsIn(file: string): Map<string, string> {
+  const snap = new Database(file, { readonly: true });
+  try {
+    return new Map((snap.prepare("SELECT id, cover FROM books WHERE cover IS NOT NULL").all() as { id: string; cover: string }[]).map((b) => [b.id, b.cover]));
+  } finally {
+    snap.close();
+  }
+}
 
 const options = (sites: LinkedSite[] = []): SnapshotOptions =>
   ({ title: "Test Library", url: "https://library.example.org", excludeTags: ["private"], zoteroLibrary: "users/1", sites });
@@ -170,6 +195,62 @@ describe("the pages", () => {
       citekeys: { author2001networks: "/books/main%3A1", writer1999crowds: "/books/main%3A2" },
       zotero_keys: { "users/1/ITEM2": "/books/main%3A2" },
     });
+  });
+});
+
+describe("cover thumbnails", () => {
+  beforeAll(() => fs.writeFileSync(path.join(folderOf("main:1"), "cover.jpg"), coverJpeg()));
+
+  it("are made from cover.jpg, or a PDF's first page, for public books only, and kept until their source changes", async () => {
+    const file = path.join(root, "covered.db");
+    const lines: string[] = [];
+    await publishSnapshot(c, coverConfig(file), (l) => lines.push(l));
+    const stamps = stampsIn(file);
+    // main:1 has a cover.jpg; main:2 is a PDF without one; main:3 is private.
+    expect([...stamps.keys()].sort()).toEqual(["main:1", "main:2"]);
+    expect(lines).toContain("covers: 2 made");
+    for (const stamp of stamps.values()) {
+      expect(new mupdf.Image(fs.readFileSync(coverFile(coversDir(file), stamp))).getWidth()).toBe(COVER_WIDTH);
+    }
+
+    // Unchanged covers are neither made again nor change the snapshot.
+    lines.length = 0;
+    expect((await publishSnapshot(c, coverConfig(file), (l) => lines.push(l))).changed).toBe(false);
+    expect(lines).toEqual([]);
+
+    // A cover MuPDF can't read gives no cover, and isn't tried again until it changes.
+    const bad = path.join(folderOf("main:2"), "cover.jpg");
+    fs.writeFileSync(bad, "not a jpeg");
+    try {
+      await publishSnapshot(c, coverConfig(file), (l) => lines.push(l));
+      expect(stampsIn(file).has("main:2")).toBe(false);
+      expect(lines).toContain("covers: 0 made, 1 couldn't be read");
+      lines.length = 0;
+      await publishSnapshot(c, coverConfig(file), (l) => lines.push(l));
+      expect(lines).toEqual([]);
+    } finally {
+      fs.rmSync(bad);
+    }
+    await publishSnapshot(c, coverConfig(file));
+    expect(stampsIn(file)).toEqual(stamps);
+    // Thumbnails nothing needs are removed.
+    expect(fs.readdirSync(coversDir(file)).sort()).toEqual([...stamps.values()].map((s) => `${s}.jpg`).sort());
+  });
+
+  it("are left off without CORPUS_PUBLIC_COVERS", async () => {
+    const file = path.join(root, "uncovered.db");
+    await publishSnapshot(c, { ...config, public: { ...coverConfig(file).public!, covers: false } });
+    expect(stampsIn(file).size).toBe(0);
+  });
+
+  it("show on a book's page, with the stamp in the URL", async () => {
+    const file = path.join(root, "covered-page.db");
+    await publishSnapshot(c, coverConfig(file));
+    const stamp = stampsIn(file).get("main:1")!;
+    const store = sqliteStore(new Database(file, { readonly: true }));
+    expect((await renderPublic(store, "/books/main%3A1"))!.body).toContain(`<img class="cover" src="/covers/main%3A1.jpg?v=${stamp}"`);
+    const plain = sqliteStore(new Database(path.join(root, "uncovered.db"), { readonly: true }));
+    expect((await renderPublic(plain, "/books/main%3A1"))!.body).not.toContain('class="cover"');
   });
 });
 
@@ -322,6 +403,17 @@ describe("the server", () => {
     expect(await (await fetch(`${base}/admin`)).text()).toContain('rel="icon"');
   });
 
+  it("serves covers from the thumbnail cache on the public port", async () => {
+    await publishSnapshot(c, { ...coverConfig(file()), public: { ...coverConfig(file()).public!, title: "Served" } });
+    const res = await fetch(`${publicBase}/covers/main%3A1.jpg`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect(Buffer.from(await res.arrayBuffer()).subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+    expect((await fetch(`${publicBase}/covers/main%3A1.jpg`, { headers: { "if-none-match": res.headers.get("etag")! } })).status).toBe(304);
+    expect((await fetch(`${publicBase}/covers/main%3A3.jpg`)).status).toBe(404);
+    expect((await fetch(`${base}/covers/main%3A1.jpg`)).status).not.toBe(200);
+  });
+
   it("serves only public paths on the public port", async () => {
     expect((await fetch(`${publicBase}/books`)).status).toBe(200);
     expect((await fetch(`${publicBase}/site.json`)).status).toBe(200);
@@ -374,12 +466,28 @@ describe("the replica in D1", () => {
     return { prepare: (sql) => prepared(sql) };
   }
 
-  function setup(name: string) {
+  /** An R2 bucket in memory, logging what's done to it. */
+  function memoryBucket(log: string[] = []) {
+    const objects = new Map<string, Uint8Array>();
+    const bucket: CoverBucket & { get(key: string): Promise<{ body: ReadableStream; httpEtag: string } | null> } = {
+      put: async (key, value) => { log.push(`put ${key}`); objects.set(key, new Uint8Array(value)); },
+      delete: async (key) => { log.push(`delete ${key}`); objects.delete(key); },
+      get: async (key) => {
+        const bytes = objects.get(key);
+        return bytes ? { body: new Response(bytes).body!, httpEtag: `"${bytes.length}"` } : null;
+      },
+    };
+    return { objects, bucket };
+  }
+
+  function setup(name: string, covers?: Map<string, string>) {
     const file = path.join(root, `${name}.db`);
-    buildSnapshot(c, options([quotesSite]), file);
+    buildSnapshot(c, { ...options([quotesSite]), covers }, file);
     const replica = new Database(":memory:");
     migrate(replica);
-    const env: ProxyEnv = { DB: proxyBinding(replica), D1_PROXY_TOKEN: TOKEN };
+    const log: string[] = [];
+    const { objects, bucket } = memoryBucket(log);
+    const env: ProxyEnv = { DB: proxyBinding(replica), COVERS: bucket, D1_PROXY_TOKEN: TOKEN };
     let fail = false;
     let lose = false;
     const calls: { sql: string; params?: unknown[] }[][] = [];
@@ -388,8 +496,11 @@ describe("the replica in D1", () => {
         fail = false;
         throw new Error("connection reset");
       }
-      const body = JSON.parse(String(init.body));
-      calls.push(body.batch ?? [body]);
+      if (String(url).endsWith("/query")) {
+        const body = JSON.parse(String(init.body));
+        calls.push(body.batch ?? [body]);
+        log.push("d1");
+      }
       const response = await handleProxy(new Request(url, init), env);
       if (lose) {
         // D1 committed the batch, but its response never arrived.
@@ -399,6 +510,7 @@ describe("the replica in D1", () => {
       return response;
     }) as typeof fetch;
     const d1 = d1Http({ endpoint: "https://proxy.example/query", token: TOKEN }, fetchImpl);
+    const r2 = coverStore({ endpoint: "https://proxy.example/query", token: TOKEN }, fetchImpl);
     const state = openReplicaState(path.join(root, `${name}-replica.db`));
     const same = () => {
       const rows = (db: Database.Database) => [...snapshotRows(db)].map((r) => JSON.stringify(r));
@@ -409,7 +521,7 @@ describe("the replica in D1", () => {
         snap.close();
       }
     };
-    return { file, replica, state, calls, same, failNext: () => (fail = true), loseNext: () => (lose = true), run: () => tick(file, state, d1) };
+    return { file, replica, state, calls, same, log, objects, bucket, failNext: () => (fail = true), loseNext: () => (lose = true), run: () => tick(file, state, d1, r2) };
   }
 
   it("is created with the snapshot's schema", () => {
@@ -498,6 +610,84 @@ describe("the replica in D1", () => {
     } finally {
       pin(null);
     }
+  });
+
+  it("puts covers in R2 before the rows that name them, and removes them after", async () => {
+    const coverDb = path.join(root, "covers-source.db");
+    await publishSnapshot(c, coverConfig(coverDb));
+    const stamps = stampsIn(coverDb);
+    const r = setup("covers", stamps);
+    await r.run();
+    expect([...r.objects.keys()].sort()).toEqual(["main:1.jpg", "main:2.jpg"]);
+    expect(r.objects.get("main:1.jpg")).toEqual(new Uint8Array(fs.readFileSync(coverFile(coversDir(r.file), stamps.get("main:1")!))));
+    expect(r.log.findLastIndex((l) => l.startsWith("put"))).toBeLessThan(r.log.indexOf("d1"));
+    expect(r.same()).toBe(true);
+    expect(pending(r.state)).toMatchObject({ rows: 0, removals: 0 });
+
+    // The Worker serves them.
+    const env = { DB: workerBinding(r.replica), COVERS: r.bucket };
+    const get = (p: string, init?: RequestInit) => handle(new Request(`https://library.example.org${p}`, init), env);
+    const res = await get("/covers/main%3A1.jpg");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(r.objects.get("main:1.jpg"));
+    expect((await get("/covers/main%3A1.jpg", { headers: { "if-none-match": res.headers.get("etag")! } })).status).toBe(304);
+    expect((await get("/covers/main%3A9.jpg")).status).toBe(404);
+    expect(await (await get("/books/main%3A1")).text()).toContain(`/covers/main%3A1.jpg?v=${stamps.get("main:1")}`);
+
+    // Turned off, the rows lose their covers first, then R2 does.
+    r.log.length = 0;
+    buildSnapshot(c, options([quotesSite]), r.file);
+    await r.run();
+    expect(r.objects.size).toBe(0);
+    expect(r.log.indexOf("d1")).toBeLessThan(r.log.findIndex((l) => l.startsWith("delete")));
+    expect(r.same()).toBe(true);
+    expect(pending(r.state)).toMatchObject({ rows: 0, removals: 0 });
+  });
+
+  it("takes covers through the proxy only with its token, and only as .jpg keys", async () => {
+    const { objects, bucket } = memoryBucket();
+    const env: ProxyEnv = { DB: proxyBinding(new Database(":memory:")), COVERS: bucket, D1_PROXY_TOKEN: TOKEN };
+    const put = (key: string, token = TOKEN) =>
+      handleProxy(new Request(`https://proxy.example/covers/${key}`, { method: "PUT", headers: { authorization: `Bearer ${token}` }, body: "jpeg" }), env);
+    expect((await put("main%3A1.jpg", "wrong")).status).toBe(401);
+    expect((await put("main%3A1.png")).status).toBe(404);
+    expect((await put("..%2Fx.jpg")).status).toBe(404);
+    expect((await put("main%3A1.jpg")).status).toBe(200);
+    expect([...objects.keys()]).toEqual(["main:1.jpg"]);
+    // A body without Content-Length is counted as it arrives and refused once past the limit.
+    let sent = 0;
+    const chunked = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += 256 * 1024;
+        controller.enqueue(new Uint8Array(256 * 1024));
+        if (sent >= 64 * 1024 * 1024) controller.close();
+      },
+    });
+    const big = await handleProxy(new Request("https://proxy.example/covers/big.jpg", {
+      method: "PUT", headers: { authorization: `Bearer ${TOKEN}` }, body: chunked, duplex: "half",
+    } as RequestInit), env);
+    expect(big.status).toBe(413);
+    expect(sent).toBeLessThan(4 * 1024 * 1024);
+    expect(objects.has("big.jpg")).toBe(false);
+    expect((await handleProxy(new Request("https://proxy.example/covers/main%3A1.jpg", { method: "GET", headers: { authorization: `Bearer ${TOKEN}` } }), env)).status).toBe(405);
+  });
+
+  it("takes covers to R2's REST API when the drain uses Cloudflare's API, naming the bucket", async () => {
+    const seen: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      seen.push(`${init.method} ${url}`);
+      return new Response(init.method === "DELETE" ? "gone" : "{}", { status: init.method === "DELETE" ? 404 : 200 });
+    }) as typeof fetch;
+    const store = coverStore({ accountId: "acct", databaseId: "db", token: "t", bucket: "corpus-mcp-covers" }, fetchImpl);
+    await store.put("main:1.jpg", new Uint8Array([1]));
+    // Deleting a cover that's already gone is done.
+    await store.delete("main:1.jpg");
+    expect(seen).toEqual([
+      "PUT https://api.cloudflare.com/client/v4/accounts/acct/r2/buckets/corpus-mcp-covers/objects/main%3A1.jpg",
+      "DELETE https://api.cloudflare.com/client/v4/accounts/acct/r2/buckets/corpus-mcp-covers/objects/main%3A1.jpg",
+    ]);
+    await expect(coverStore({ accountId: "acct", databaseId: "db", token: "t" }, fetchImpl).put("main:1.jpg", new Uint8Array([1]))).rejects.toThrow(/CORPUS_R2_BUCKET/);
   });
 
   it("lets one tick at a time ship", async () => {

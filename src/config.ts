@@ -41,6 +41,8 @@ export interface PublicConfig {
   /** Other public sites' base URLs, whose key lists link their pages to these books. */
   links: string[];
   intervalMinutes: number;
+  /** Cover thumbnails on the book pages, shipped to R2 with the replica (CORPUS_PUBLIC_COVERS). */
+  covers?: boolean;
 }
 
 export interface Config {
@@ -94,6 +96,7 @@ function publicConfig(env: NodeJS.ProcessEnv): PublicConfig {
     url: (env.CORPUS_PUBLIC_URL ?? "").replace(/\/+$/, ""),
     links: (env.CORPUS_SITE_LINKS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     intervalMinutes: interval(env.CORPUS_PUBLISH_INTERVAL_MINUTES, 10),
+    covers: /^(?:on|true|yes|1)$/i.test(env.CORPUS_PUBLIC_COVERS ?? ""),
   };
 }
 

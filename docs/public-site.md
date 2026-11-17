@@ -13,6 +13,7 @@ everything else stays private. This site's copy is at
 | Calibre-Web's public shelves | Tag proposals, jobs, and the change log |
 | Citekeys: pinned, set in Calibre, or from the matched Zotero item | Proposed citekeys |
 | Links to the same book on other public sites | `/admin`, `/api`, `/mcp` |
+| Cover thumbnails, with `CORPUS_PUBLIC_COVERS` | |
 
 Books with an excluded tag (`CORPUS_EXCLUDE_TAGS`, by default `private`) aren't
 indexed, so they're never in the catalogue either.
@@ -28,7 +29,8 @@ show anything else.
 |---|---|
 | `/` | Counts, a search box, the shelves, the top-level subjects, and links to other sites |
 | `/books` | Every book, by author. `?q=` searches titles, authors, and subjects |
-| `/books/<id>` | One book's catalogue entry, with links to it on other sites |
+| `/books/<id>` | One book's catalogue entry, with its cover and links to it on other sites |
+| `/covers/<id>.jpg` | A book's cover thumbnail; see [Covers](#covers) |
 | `/subjects` | The subject tree, each with a count that includes narrower subjects |
 | `/subjects/<tag>` | The books under a subject, and its narrower subjects |
 | `/shelves`, `/shelves/<id>` | Calibre-Web's public shelves, in the shelf's own order |
@@ -56,6 +58,31 @@ site, and that site's page links back.
 Only real keys go in the key list: a book's pinned or Calibre citekey, and the
 Zotero item the mirror matched it to, with that item's citekey. A book links to
 another site only once it's filed in Zotero or pinned.
+
+## Covers
+
+With `CORPUS_PUBLIC_COVERS=on`, a book's page shows a small cover beside its
+entry. Each rebuild makes a 240-pixel-wide JPEG of every public book's cover,
+taken from Calibre's `cover.jpg`, or from page 1 of a PDF that has no
+`cover.jpg`. The pages display it at half that width, so it stays sharp on
+high-density screens. A book without either has no cover, and its page looks
+as it did before.
+
+The thumbnails are kept in `covers/`, next to the snapshot. Each one is named
+by a stamp taken from its source file's path, size, and modification time, so
+a new cover is made only when Calibre replaces the old one. A cover MuPDF can't
+read is noted and not tried again until its file changes. The snapshot records
+each book's stamp. The drain uploads changed thumbnails to the R2 bucket
+`corpus-mcp-covers` before the rows that name them, and deletes removed ones
+after those rows. The page puts the stamp in the cover's URL, so browsers can
+cache a cover for a day and still pick up a new one at once.
+
+The drain uploads through the D1 proxy (`PUT /covers/<key>`, using the proxy's
+token), or through Cloudflare's R2 API when it uses the REST API. In that case,
+the API token needs R2 edit as well. Set the bucket with `CORPUS_R2_BUCKET`;
+the bucket named in `worker/wrangler.jsonc` is used only when that file is in
+the server's working directory. On the LAN, the public port
+serves covers from `covers/`.
 
 ## From the LAN to the web
 
@@ -105,6 +132,7 @@ the catalogue should now point at the catalogue's port.
 | `CORPUS_PUBLIC_PORT` | `8001` | The listener that serves only the public pages (the default); `off` for none |
 | `CORPUS_PUBLIC_DB` | `/var/lib/corpus-mcp/public.db` | Where the snapshot is written |
 | `CORPUS_PUBLISH_INTERVAL_MINUTES` | `10` | How often the snapshot is rebuilt |
+| `CORPUS_PUBLIC_COVERS` | `on` | Cover thumbnails on the book pages (default off); see [Covers](#covers) |
 
 **In `.env` on your workstation**, which every deploy copies to the server:
 
@@ -130,7 +158,9 @@ another site's: both snapshots have tables such as `meta`.
    ```
 
 5. Deploy the public Worker: `npm run worker:deploy`.
-6. Deploy corpus-mcp. Within about 15 seconds of the server starting, the first
+6. For covers, create their bucket before deploying either Worker:
+   `npx wrangler r2 bucket create corpus-mcp-covers`.
+7. Deploy corpus-mcp. Within about 15 seconds of the server starting, the first
    upload reaches D1 and the site is live.
 
 ## Schema changes
@@ -147,6 +177,16 @@ Deploy in this order:
 If corpus-mcp is deployed before the migration, D1 rejects the new rows and the
 upload stays queued (`/health` shows it under `replica`). It goes through once the
 migration is applied.
+
+**Turning covers on** works the same way. First create the bucket
+(`npx wrangler r2 bucket create corpus-mcp-covers`) and apply the migrations.
+Then deploy the D1 proxy and the public Worker, which both bind the bucket.
+Last, set `CORPUS_PUBLIC_COVERS=on` and restart corpus-mcp. If the proxy is
+older than the setting, the first cover upload fails and the drain stops
+there, with the error under `replica`, until the proxy is deployed. The first
+rebuild makes a thumbnail for every book, which takes a few minutes for a
+large library. The work runs in the background MuPDF worker, so the server
+keeps answering in the meantime.
 
 ## Day to day
 

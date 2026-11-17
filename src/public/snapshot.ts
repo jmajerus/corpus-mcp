@@ -5,6 +5,7 @@ import type { Config } from "../config.js";
 import { pinnedByUuid } from "../data.js";
 import { type BookRow, type Corpus, effectiveCitekey } from "../tools.js";
 import { zoteroMatch } from "../zotero.js";
+import { coversDir, prepareCovers } from "./covers.js";
 
 /**
  * The public snapshot: the library's catalogue as the public site may show it, copied out of the index
@@ -24,7 +25,7 @@ export const SNAPSHOT_SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE books (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, authors TEXT NOT NULL, year INTEGER, publisher TEXT, language TEXT, isbn TEXT,
-  format TEXT, citekeys TEXT NOT NULL, zotero_keys TEXT NOT NULL, sort TEXT NOT NULL, added TEXT
+  format TEXT, citekeys TEXT NOT NULL, zotero_keys TEXT NOT NULL, sort TEXT NOT NULL, added TEXT, cover TEXT
 );
 CREATE TABLE subjects (tag TEXT PRIMARY KEY, name TEXT NOT NULL, label TEXT NOT NULL, parent TEXT, books INTEGER NOT NULL);
 CREATE TABLE book_subjects (book_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (book_id, tag));
@@ -56,9 +57,18 @@ export interface SnapshotOptions {
   /** The Zotero library the mirror reads ("users/<id>" or "groups/<id>"), for Zotero item keys. */
   zoteroLibrary?: string;
   sites: LinkedSite[];
+  /** Each book's cover thumbnail stamp (src/public/covers.ts); a book without one shows no cover. */
+  covers?: Map<string, string>;
 }
 
 type Row = Record<string, unknown>;
+
+/** The books the catalogue shows: all but those carrying an excluded tag. */
+function publicBooks(c: Corpus, excludeTags: string[]): (BookRow & { folder: string | null })[] {
+  const excluded = new Set(excludeTags.map((t) => t.toLowerCase()));
+  return (c.db.prepare("SELECT * FROM books ORDER BY id").all() as (BookRow & { folder: string | null })[])
+    .filter((b) => !(JSON.parse(b.tags) as string[]).some((t) => excluded.has(t.toLowerCase())));
+}
 
 /** Copies what's public into an empty snapshot database. */
 function fill(c: Corpus, snap: Database.Database, o: SnapshotOptions): void {
@@ -69,9 +79,7 @@ function fill(c: Corpus, snap: Database.Database, o: SnapshotOptions): void {
   const vocabulary = c.vocabulary;
   // By id, grouping terms included: find() leaves those out, but they head the subject tree.
   const terms = new Map(vocabulary.terms.map((t) => [t.tag, t]));
-  const excluded = new Set(o.excludeTags.map((t) => t.toLowerCase()));
-  const books = (c.db.prepare("SELECT * FROM books ORDER BY id").all() as BookRow[])
-    .filter((b) => !(JSON.parse(b.tags) as string[]).some((t) => excluded.has(t.toLowerCase())));
+  const books = publicBooks(c, o.excludeTags);
 
   // Subjects: the vocabulary terms books carry, and the terms above them, so the tree can be browsed.
   const used = new Map<string, Set<string>>();
@@ -109,7 +117,7 @@ function fill(c: Corpus, snap: Database.Database, o: SnapshotOptions): void {
     const sorts = JSON.parse(b.author_sorts) as string[];
     insert("books", {
       id: b.id, title: b.title, authors: b.authors, year: b.year, publisher: b.publisher, language: b.language, isbn: b.isbn, format: b.format,
-      citekeys: JSON.stringify([...citekeys]), zotero_keys: JSON.stringify(zotero), added: b.added ?? null,
+      citekeys: JSON.stringify([...citekeys]), zotero_keys: JSON.stringify(zotero), added: b.added ?? null, cover: o.covers?.get(b.id) ?? null,
       sort: `${(sorts[0] ?? authors[0] ?? "￿").toLowerCase()}\u0000${b.title.toLowerCase()}`,
     });
     const subjects = subjectsOf.get(b.id)!;
@@ -274,11 +282,15 @@ export async function fetchSites(urls: string[], file: string, fetchImpl: typeof
   return { sites, errors };
 }
 
-/** Fetches the linked sites, then builds the snapshot; what `corpus-mcp publish` and the server's timer run. */
+/**
+ * Fetches the linked sites and, with CORPUS_PUBLIC_COVERS, makes the cover thumbnails, then builds the
+ * snapshot; what `corpus-mcp publish` and the server's timer run.
+ */
 export async function publishSnapshot(c: Corpus, config: Config, log: (line: string) => void = () => {}): Promise<SnapshotSummary> {
   const p = config.public;
   if (!p || p.level === "none") throw new Error("There's nothing to publish with CORPUS_PUBLIC=none; set it to catalogue.");
   const { sites, errors } = await fetchSites(p.links, p.file);
   for (const e of errors) log(`linked site not refreshed: ${e}`);
-  return buildSnapshot(c, { title: p.title, url: p.url, excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library, sites }, p.file);
+  const covers = p.covers ? await prepareCovers(c.booksRoot, publicBooks(c, config.excludeTags), coversDir(p.file), log) : undefined;
+  return buildSnapshot(c, { title: p.title, url: p.url, excludeTags: config.excludeTags, zoteroLibrary: config.zotero?.library, sites, covers }, p.file);
 }

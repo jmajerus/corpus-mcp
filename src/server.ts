@@ -46,7 +46,8 @@ import { TerminologyFollower } from "./taxonomy/terminology.js";
 import { replicaStateFile, startDrain } from "./public/drain.js";
 import { publishSnapshot } from "./public/snapshot.js";
 import { FAVICON_PATHS, favicon } from "./web/favicon.js";
-import { isPublicPath, renderPublic } from "./public/site.js";
+import { coverBook, isPublicPath, renderPublic } from "./public/site.js";
+import { coverFile, coversDir } from "./public/covers.js";
 import { etagMatches, holdingsBooksResponse } from "./holdings.js";
 import { usePdfWorkers } from "./pdf-runner.js";
 import { anchorChanges, cslAnswer, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
@@ -741,6 +742,32 @@ async function servePublic(read: () => PublicStore | null, req: http.IncomingMes
   }
 }
 
+/**
+ * A book's cover thumbnail on the public port, from the cache beside the snapshot: the one the snapshot
+ * names, so the preview shows what goes out next.
+ */
+async function servePublicCover(read: () => PublicStore | null, snapshotFile: string, id: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { allow: "GET, HEAD" }).end();
+    return;
+  }
+  try {
+    const stamp = (await read()?.first<{ cover: string | null }>("SELECT cover FROM books WHERE id = ?", id))?.cover;
+    const file = stamp ? coverFile(coversDir(snapshotFile), stamp) : null;
+    if (!file || !fs.existsSync(file)) {
+      res.writeHead(404).end();
+      return;
+    }
+    const etag = `"${stamp}"`;
+    const headers = { "content-type": "image/jpeg", "cache-control": "public, max-age=86400", etag };
+    if (req.headers["if-none-match"] === etag) res.writeHead(304, headers).end();
+    else res.writeHead(200, headers).end(req.method === "HEAD" ? undefined : fs.readFileSync(file));
+  } catch (error) {
+    console.error("public cover failed", error);
+    if (!res.headersSent) res.writeHead(500).end();
+  }
+}
+
 /** The request's URL, or null after answering 400 when it can't be parsed (a target such as "//"). */
 function requestUrl(req: http.IncomingMessage, res: http.ServerResponse): URL | null {
   try {
@@ -829,7 +856,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
   const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
   // Ships the snapshot's changes to its replica in D1, when the proxy (or the REST API) is configured.
-  const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file)) : null;
+  const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file), process.env, "worker/wrangler.jsonc") : null;
   const about = aboutSource(fullConfig, VERSION);
   web.about = () => about({
     books: db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get() as number,
@@ -844,7 +871,9 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
     ? http.createServer(async (req, res) => {
       const url = requestUrl(req, res);
       if (!url || serveFavicon(req, res, url)) return;
-      if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url, preview());
+      const cover = coverBook(url.pathname);
+      if (cover !== null) await servePublicCover(readPublic, fullConfig.public!.file, cover, req, res);
+      else if (isPublicPath(url.pathname)) await servePublic(readPublic, req, res, url, preview());
       else res.writeHead(404).end();
     })
     : null;

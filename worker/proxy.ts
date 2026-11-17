@@ -5,6 +5,9 @@
  * src/public/d1-http.ts only changes its endpoint and token (CORPUS_D1_PROXY_URL and CORPUS_D1_PROXY_TOKEN).
  * A copy of quote-mcp's worker/proxy.ts.
  *
+ * It also takes the drain's cover thumbnails: PUT and DELETE /covers/<key> write the public site's R2
+ * bucket (COVERS), which the public Worker reads.
+ *
  * It runs any SQL it's given, so its bearer token is as powerful as a D1 edit token. Without
  * D1_PROXY_TOKEN set, every request is refused. It's a separate Worker from the public site's, which
  * never writes D1.
@@ -23,10 +26,20 @@ interface Database {
   batch(statements: Prepared[]): Promise<Result[]>;
 }
 
+/** The part of an R2 binding the proxy uses. */
+export interface CoverBucket {
+  put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string; cacheControl?: string } }): Promise<unknown>;
+  delete(key: string): Promise<void>;
+}
+
 export interface ProxyEnv {
   DB: Database;
+  COVERS?: CoverBucket;
   D1_PROXY_TOKEN?: string;
 }
+
+/** A thumbnail is a few tens of kilobytes; anything near this isn't one. */
+const MAX_COVER_BYTES = 2 * 1024 * 1024;
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -55,11 +68,75 @@ const isStatement = (v: unknown): v is Statement =>
 
 const prepared = (db: Database, s: Statement) => (s.params?.length ? db.prepare(s.sql).bind(...s.params) : db.prepare(s.sql));
 
+/** A cover's key from /covers/<key>: one path segment ending .jpg, or null. */
+function coverKeyOf(pathname: string): string | null {
+  const m = pathname.match(/^\/covers\/([^/]+)$/);
+  if (!m) return null;
+  try {
+    const key = decodeURIComponent(m[1]);
+    return /^[^/\\]{1,500}\.jpg$/.test(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The request's body, counted as it arrives, or null once it passes `limit`. Content-Length can be missing
+ * or wrong (a chunked upload), so it alone can't keep a large body out of memory.
+ */
+async function readLimited(request: Request, limit: number): Promise<ArrayBuffer | null> {
+  if (!request.body) return new ArrayBuffer(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return body.buffer;
+}
+
+async function handleCover(request: Request, env: ProxyEnv, key: string): Promise<Response> {
+  if (request.method !== "PUT" && request.method !== "DELETE") return failure("Method not allowed", 405);
+  if (!env.COVERS) return failure("The proxy has no COVERS bucket; redeploy it with worker/wrangler.proxy.jsonc.", 503);
+  if (request.method === "DELETE") {
+    await env.COVERS.delete(key);
+    return json({ success: true, errors: [], result: [] });
+  }
+  if (Number(request.headers.get("content-length") ?? 0) > MAX_COVER_BYTES) return failure("That's too large for a cover thumbnail.", 413);
+  const body = await readLimited(request, MAX_COVER_BYTES);
+  if (body === null) return failure("That's too large for a cover thumbnail.", 413);
+  if (!body.byteLength) return failure("The body is empty.", 400);
+  await env.COVERS.put(key, body, { httpMetadata: { contentType: "image/jpeg" } });
+  return json({ success: true, errors: [], result: [] });
+}
+
 export async function handleProxy(request: Request, env: ProxyEnv): Promise<Response> {
-  if (new URL(request.url).pathname !== "/query") return failure("Not found", 404);
-  if (request.method !== "POST") return failure("Method not allowed", 405);
+  const pathname = new URL(request.url).pathname;
+  const cover = coverKeyOf(pathname);
+  if (pathname !== "/query" && cover === null) return failure("Not found", 404);
+  if (cover === null && request.method !== "POST") return failure("Method not allowed", 405);
   if (!env.D1_PROXY_TOKEN) return failure("The D1 proxy's token isn't configured.", 503);
   if (!(await authorized(request, env.D1_PROXY_TOKEN))) return failure("Unauthorized", 401);
+  if (cover !== null) {
+    try {
+      return await handleCover(request, env, cover);
+    } catch (error) {
+      return failure((error as Error).message, 500);
+    }
+  }
   let body: unknown;
   try {
     body = await request.json();
