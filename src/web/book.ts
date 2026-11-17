@@ -7,6 +7,8 @@ export const BOOK_HTML = page({
   css: `
 .head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: flex-start; }
 .head .links { font-size: 0.9rem; }
+.head .title { display: flex; gap: 14px; align-items: flex-start; min-width: 0; }
+.head .thumb img { display: block; width: 72px; max-height: 110px; object-fit: contain; border: 1px solid var(--border); border-radius: 3px; }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-top: 14px; }
 .metadata-review { display:grid; grid-template-columns:minmax(0,1fr) 120px; gap:12px; align-items:start; }
 .metadata-review .cover { grid-column:2; grid-row:1 / span 3; }
@@ -127,8 +129,10 @@ function render() {
       (["tag_added", "tag_removed", "tag_proposed", "proposal_approved"].includes(ch.kind) ? tagChip(ch.detail) : esc(ch.detail || "")) + "</td><td>" +
       (ch.job_id ? '<a href="/admin/jobs/' + ch.job_id + '">' + esc(ch.source) + " #" + ch.job_id + "</a>" : esc(ch.source)) + "</td><td>" + esc(ch.actor || "") + "</td></tr>").join("") +
     '</tbody></table></div><p class="note"><a href="/admin/changes?q=' + encodeURIComponent(b.book_id) + '&range=all">All changes to this book</a></p>' : '<p class="note">No recorded changes.</p>';
+  const coverUrl = "/api/books/" + encodeURIComponent(b.book_id) + "/cover";
   document.getElementById("book").innerHTML =
-    '<div class="head"><div><h1>' + esc(b.title) + '</h1><p class="sub">' + esc(b.authors.join(", ")) + (b.year ? " · " + b.year : "") + (b.publisher ? " · " + esc(b.publisher) : "") + " · " + esc(b.book_id) + "</p>" + badges.join("") + "</div>" +
+    '<div class="head"><div class="title"><a class="thumb" href="' + coverUrl + '" target="_blank" rel="noopener"><img src="' + coverUrl + '" alt="Book cover" onerror="this.parentElement.remove()"></a>' +
+      '<div><h1>' + esc(b.title) + '</h1><p class="sub">' + esc(b.authors.join(", ")) + (b.year ? " · " + b.year : "") + (b.publisher ? " · " + esc(b.publisher) : "") + " · " + esc(b.book_id) + "</p>" + badges.join("") + "</div></div>" +
     '<div class="links">' + (b.status === "indexed" ? '<a href="/admin/books/' + encodeURIComponent(b.book_id) + '/read">Read</a>' : "") +
       (b.calibre_web_url ? ' · <a href="' + esc(b.calibre_web_url) + '" target="_blank" rel="noopener">Open in Calibre-Web</a>' : "") + "</div></div>" +
     (b.description ? '<p class="desc">' + esc(String(b.description).replace(/<[^>]+>/g, " ").slice(0, 600)) + "</p>" : "") +
