@@ -79,8 +79,9 @@ cache a cover for a day and still pick up a new one at once.
 
 The drain uploads through the D1 proxy (`PUT /covers/<key>`, using the proxy's
 token), or through Cloudflare's R2 API when it uses the REST API. In that case,
-the API token needs R2 edit as well, and the bucket comes from
-`CORPUS_R2_BUCKET` or `worker/wrangler.jsonc`. On the LAN, the public port
+the API token needs R2 edit as well. Set the bucket with `CORPUS_R2_BUCKET`;
+the bucket named in `worker/wrangler.jsonc` is used only when that file is in
+the server's working directory. On the LAN, the public port
 serves covers from `covers/`.
 
 ## From the LAN to the web

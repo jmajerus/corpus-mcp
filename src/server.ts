@@ -856,7 +856,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
   const stopPublishing = publicOn && options.publishTimer !== false ? startPublishing(corpus, fullConfig) : () => {};
   // Ships the snapshot's changes to its replica in D1, when the proxy (or the REST API) is configured.
-  const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file)) : null;
+  const replica = publicOn && options.publishTimer !== false ? startDrain(fullConfig.public!.file, replicaStateFile(fullConfig.public!.file), process.env, "worker/wrangler.jsonc") : null;
   const about = aboutSource(fullConfig, VERSION);
   web.about = () => about({
     books: db.prepare("SELECT COUNT(*) FROM books WHERE status = 'indexed'").pluck().get() as number,

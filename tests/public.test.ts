@@ -655,6 +655,21 @@ describe("the replica in D1", () => {
     expect((await put("..%2Fx.jpg")).status).toBe(404);
     expect((await put("main%3A1.jpg")).status).toBe(200);
     expect([...objects.keys()]).toEqual(["main:1.jpg"]);
+    // A body without Content-Length is counted as it arrives and refused once past the limit.
+    let sent = 0;
+    const chunked = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += 256 * 1024;
+        controller.enqueue(new Uint8Array(256 * 1024));
+        if (sent >= 64 * 1024 * 1024) controller.close();
+      },
+    });
+    const big = await handleProxy(new Request("https://proxy.example/covers/big.jpg", {
+      method: "PUT", headers: { authorization: `Bearer ${TOKEN}` }, body: chunked, duplex: "half",
+    } as RequestInit), env);
+    expect(big.status).toBe(413);
+    expect(sent).toBeLessThan(4 * 1024 * 1024);
+    expect(objects.has("big.jpg")).toBe(false);
     expect((await handleProxy(new Request("https://proxy.example/covers/main%3A1.jpg", { method: "GET", headers: { authorization: `Bearer ${TOKEN}` } }), env)).status).toBe(405);
   });
 

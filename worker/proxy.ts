@@ -80,6 +80,34 @@ function coverKeyOf(pathname: string): string | null {
   }
 }
 
+/**
+ * The request's body, counted as it arrives, or null once it passes `limit`. Content-Length can be missing
+ * or wrong (a chunked upload), so it alone can't keep a large body out of memory.
+ */
+async function readLimited(request: Request, limit: number): Promise<ArrayBuffer | null> {
+  if (!request.body) return new ArrayBuffer(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return body.buffer;
+}
+
 async function handleCover(request: Request, env: ProxyEnv, key: string): Promise<Response> {
   if (request.method !== "PUT" && request.method !== "DELETE") return failure("Method not allowed", 405);
   if (!env.COVERS) return failure("The proxy has no COVERS bucket; redeploy it with worker/wrangler.proxy.jsonc.", 503);
@@ -88,8 +116,9 @@ async function handleCover(request: Request, env: ProxyEnv, key: string): Promis
     return json({ success: true, errors: [], result: [] });
   }
   if (Number(request.headers.get("content-length") ?? 0) > MAX_COVER_BYTES) return failure("That's too large for a cover thumbnail.", 413);
-  const body = await request.arrayBuffer();
-  if (!body.byteLength || body.byteLength > MAX_COVER_BYTES) return failure(body.byteLength ? "That's too large for a cover thumbnail." : "The body is empty.", body.byteLength ? 413 : 400);
+  const body = await readLimited(request, MAX_COVER_BYTES);
+  if (body === null) return failure("That's too large for a cover thumbnail.", 413);
+  if (!body.byteLength) return failure("The body is empty.", 400);
   await env.COVERS.put(key, body, { httpMetadata: { contentType: "image/jpeg" } });
   return json({ success: true, errors: [], result: [] });
 }
