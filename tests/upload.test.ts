@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
+import Database from "better-sqlite3";
 import { strToU8, zipSync } from "fflate";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import { notYetLogged, openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
 import { epubProfile, profilesSettled } from "../src/duplicate-contents.js";
+import { identifierKey, unrelatedBooks } from "../src/duplicates.js";
 import { scanLibraries } from "../src/indexer.js";
 import { type JobCommands, JobRunner } from "../src/jobs.js";
 import { usePdfWorkers } from "../src/pdf-runner.js";
@@ -688,6 +690,114 @@ it("still reads a short title page and copyright page from an EPUB without a cre
   expect(meta.year).toBe(2019);
 });
 
+/** A publisher's EPUB with its ISBN only in the OPF and a last page advertising other books, as Pragmatic Bookshelf's are. */
+function makeAdvertisingEpub(title: string, isbn: string, lastPage: string): Buffer {
+  const spine = ["cover", "c1", "c2", "c3", "c4", "c5", "c6", "ads"];
+  const opf = `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier>urn:isbn:${isbn}</dc:identifier><dc:title>${title}</dc:title><dc:creator>Pat Author</dc:creator><dc:publisher>A Press</dc:publisher></metadata>
+<manifest>${spine.map(id => `<item id="${id}" href="${id}.xhtml" media-type="application/xhtml+xml"/>`).join("")}</manifest>
+<spine>${spine.map(id => `<itemref idref="${id}"/>`).join("")}</spine></package>`;
+  const xhtml = (body: string) => strToU8(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>${body}</body></html>`);
+  return Buffer.from(zipSync({
+    "mimetype": strToU8("application/epub+zip"),
+    "META-INF/container.xml": strToU8('<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'),
+    "OEBPS/content.opf": strToU8(opf),
+    ...Object.fromEntries(spine.map(id => [`OEBPS/${id}.xhtml`, xhtml(id === "ads" ? lastPage : `<p>${title}, part ${id}.</p>`)])),
+  }));
+}
+
+it("doesn't take the ISBNs a publisher's adverts print for the book's own", () => {
+  const ads = (isbns: string[]) => isbns.map(i => `<p>Another Book by Someone (234 pages) ISBN: ${i} $45.95</p>`).join("");
+  // The upload advertises main:1's ISBN, and main:2's printed ISBNs are adverts naming the upload's.
+  const upload = makeAdvertisingEpub("Genetic Things", "9781680506204", ads(["9780306406157", "9781680502725", "9781680502398"]));
+  const db = openDatabase(config.dbPath);
+  db.prepare("UPDATE books SET printed_isbns = ? WHERE id = 'main:2'").run(JSON.stringify([
+    { isbn: "9781680506204", isbn13: "9781680506204", format: null, page: 40, position: "back", page_label: null, context: "(234 pages) ISBN: 9781680506204 $45.95" },
+  ]));
+  db.close();
+  const staged = stageUpload(c, config, "Genetic Things.epub", upload);
+  expect(staged.extracted.identifiers).toEqual({ isbn: "9781680506204" });
+  expect(staged.extracted.printed_isbns).toEqual([]);
+  expect(staged.matches).toEqual([]);
+
+  // A second publisher EPUB advertising the first is not the same book either.
+  const second = stageUpload(c, config, "Other Things.epub", makeAdvertisingEpub("Other Things", "9781680502992", ads(["9781680506204"])));
+  expect(second.staged_matches).toEqual([]);
+
+  // An ebook that puts its copyright page last still matches by the ISBN printed there.
+  const copyrightLast = stageUpload(c, config, "Same Book Again.epub", makeAdvertisingEpub("Same Book Again", "9781402894626", "<p>Copyright 2021. eBook ISBN 978-0-306-40615-7</p>"));
+  expect(copyrightLast.extracted.printed_isbns).toEqual(["9780306406157"]);
+  expect(copyrightLast.matches.map((m: { book: { id: string } }) => m.book.id)).toEqual(["main:1"]);
+});
+
+it("doesn't match a book by a shared ISBN when its title and authors are unrelated", () => {
+  // main:1 is "The Same Book" by Ada Lovelace, ISBN 9780306406157.
+  const wrong = stageUpload(c, config, "Gardening.epub", makeRichEpub({ title: "Gardening Basics", author: "Bob Grower", isbn: "9780306406157" }));
+  expect(wrong.matches).toEqual([]);
+  expect(wrong.suggested_action).toBe("add_book");
+  expect(wrong.content_notes[0]).toContain("main:1 (The Same Book, Ada Lovelace) has this file's ISBN 9780306406157");
+  // A retitled edition keeps its author, and still matches.
+  const retitled = stageUpload(c, config, "Retitled.epub", makeRichEpub({ title: "Collected Thoughts", author: "Ada Lovelace", isbn: "9780306406157" }));
+  expect(retitled.matches.map((m: { book: { id: string }; evidence: string[] }) => [m.book.id, m.evidence])).toEqual([["main:1", ["Matching identifier"]]]);
+  // Two staged files sharing an ISBN under unrelated titles aren't paired either.
+  const other = stageUpload(c, config, "Knitting.epub", makeRichEpub({ title: "Knitting Patterns", author: "Cy Knitter", isbn: "9780306406157" }));
+  expect(other.staged_matches).toEqual([]);
+});
+
+it("passes books it didn't count as matches to the Calibre script as reviewed, so applying isn't blocked", () => {
+  const wrong = stageUpload(c, config, "Gardening.epub", makeRichEpub({ title: "Gardening Basics", author: "Bob Grower", isbn: "9780306406157" }));
+  expect(wrong.unrelated_matches.map((m: { id: string }) => m.id)).toEqual(["main:1"]);
+  const [item] = uploadBatchPlan(c, config, [{ id: wrong.id, sha256: wrong.sha256, action: "add_book" }]).items;
+  expect(item.known_matches).toEqual([{ id: 1, uuid: expect.any(String) }]);
+});
+
+it("reads a DOI however it's written, and matches a book by it", () => {
+  const key = ["identifier", "doi", "10.1000/abc-1"];
+  expect(identifierKey("doi", "10.1000/ABC-1")).toEqual(key);
+  expect(identifierKey("uri", "https://doi.org/10.1000/abc-1")).toEqual(key);
+  expect(identifierKey("", "doi:10.1000/abc-1")).toEqual(key);
+  expect(identifierKey("", "urn:doi:10.1000/abc-1")).toEqual(key);
+  // A bare 10.… value is a DOI only where the type says so.
+  expect(identifierKey("isbn", "10.1000/abc-1")?.[1]).toBe("isbn");
+  expect(identifierKey("doi", "not a doi")).toBeNull();
+
+  const db = new Database(path.join(root, "main/metadata.db"));
+  db.prepare("INSERT INTO identifiers(book,type,val) VALUES(?,?,?)").run(2, "doi", "10.1000/ABC-1");
+  db.close();
+  const epub = Buffer.from(zipSync({
+    "mimetype": strToU8("application/epub+zip"),
+    "META-INF/container.xml": strToU8('<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'),
+    "content.opf": strToU8(`<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier>https://doi.org/10.1000/abc-1</dc:identifier><dc:title>Unique Existing</dc:title><dc:creator>Grace Hopper</dc:creator></metadata>
+<manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`),
+    "c1.xhtml": strToU8('<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>Text.</p></body></html>'),
+  }));
+  const staged = stageUpload(c, config, "Unique Existing (DOI).epub", epub);
+  expect(staged.extracted.identifiers).toEqual({ doi: "10.1000/abc-1" });
+  expect(staged.matches.find((m: { book: { id: string } }) => m.book.id === "main:2")?.evidence).toContain("Matching identifier");
+
+  // The Calibre script, which checks the live library again before adding, reads DOIs the same way.
+  const py = spawnSync("python3", ["-I", "-c", `import importlib.util, json, sys
+s = importlib.util.spec_from_file_location("cu", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(json.dumps([m.identifier_key("doi", "10.1000/ABC-1"), m.identifier_key("uri", "https://doi.org/10.1000/abc-1"), m.identifier_key("isbn", "10.1000/abc-1")]))`,
+    path.resolve("tools/calibre-upload.py")], { encoding: "utf8" });
+  expect(JSON.parse(py.stdout)).toEqual([key, key, ["identifier", "isbn", "10.1000/abc1"]]);
+});
+
+it("reads a staged file's ISBNs again when it was staged with its adverts' ones", () => {
+  const upload = makeAdvertisingEpub("Genetic Things", "9781680506204", "<p>(234 pages) ISBN: 9780306406157 $45.95</p>");
+  const staged = stageUpload(c, config, "Genetic Things.epub", upload);
+  // As an older release recorded it.
+  const file = path.join(uploadDir(config), `${staged.id}.json`);
+  const rec = JSON.parse(fs.readFileSync(file, "utf8"));
+  rec.extracted.printed_isbns = ["9780306406157"];
+  delete rec.extracted.own_isbns_only;
+  fs.writeFileSync(file, JSON.stringify(rec));
+  const [listed] = listStagedUploads(c, config).items;
+  expect(listed.extracted.printed_isbns).toEqual([]);
+  expect(listed.matches).toEqual([]);
+});
+
 it("flags two staged files of the same book and refuses to add both as new books", () => {
   const epub = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2009", isbn: "9780061238369", text: "The EPUB edition." });
   const other = makeRichEpub({ title: "Mystic River", author: "Dennis Lehane", year: "2006", isbn: "9780061238369", text: "A different copy." });
@@ -780,4 +890,13 @@ it("forgets the pair a file waited on when that file is removed rather than appl
   expect(alone.returns_to_intake).toBe(false);
   expect(alone.draft.action).toBe("add_book");
   expect(clearStagedUploads(config).returned).toEqual([]);
+});
+
+it("judges unrelated books by title words and authors, and leaves authorless or mangled records alone", () => {
+  const book = (title: string, ...authors: string[]) => ({ titles: [title], authors });
+  expect(unrelatedBooks(book("Genetic Algorithms and Machine Learning for Programmers", "Frances Buontempo"), book("A Common-Sense Guide to AI Engineering", "Jay Wengrow"))).toBe(true);
+  expect(unrelatedBooks(book("Genetic Algorithms and Machine Learning", "Frances Buontempo"), book("Genetic Algorithm Recipes", "Someone Else"))).toBe(false);
+  expect(unrelatedBooks(book("Der Prozess", "Franz Kafka"), book("The Trial", "Kafka, Franz"))).toBe(false);
+  expect(unrelatedBooks(book("Cafe Theory", "Ann Author"), book("Other"))).toBe(false);
+  expect(unrelatedBooks(book("Cafe Theory", "Ann Author"), book("B0123_ebook.epub", "Bo Writer"))).toBe(false);
 });

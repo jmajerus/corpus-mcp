@@ -7,8 +7,9 @@ import { type BookRow, type Corpus, ToolError, effectiveCitekey } from "./tools.
 import { pinnedByUuid, recordChanges } from "./data.js";
 import { filedZotero, zoteroMatch } from "./zotero.js";
 import { planAnchorMoves } from "./anchors.js";
-import { isbn13, validIsbn } from "./isbn.js";
+import { type IsbnCandidate, isbn13, ownPrintedIsbns, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
+import { mangledTitle } from "./titlepage.js";
 
 export const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 /** Normalize a single author name into sorted tokens so "Last, First" and "First Last" produce the same key. */
@@ -16,6 +17,29 @@ export const normalAuthor = (s: string) => normal(s).split(/\s+/).filter(Boolean
 export const normalAuthorsKey = (authors: string[]) =>
   authors.map(normalAuthor).filter(a => a && a !== "unknown").sort().join("|");
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
+
+/** Words that say nothing about which book a title names. */
+const TITLE_FILLER = new Set(("a an the and or of for in on to with from by at as into its your our my how what why "
+  + "guide introduction edition volume vol book handbook part second third new revised complete").split(" "));
+const titleWords = (title: string) => new Set(normal(title).split(" ")
+  .filter(w => w.length > 1 && !TITLE_FILLER.has(w)).map(w => w.length > 3 ? w.replace(/s$/, "") : w));
+
+/**
+ * Whether records that share an identifier can't be the same book: their titles have no word in common
+ * and, with authors known on both sides, no author is on both. A wrong ISBN in Calibre or an EPUB's metadata looks like this; a retitled or
+ * translated edition keeps a word or an author. A title too mangled to judge doesn't count.
+ */
+export function unrelatedBooks(a: { titles: string[]; authors: string[] }, b: { titles: string[]; authors: string[] }): boolean {
+  const usable = (titles: string[]) => titles.filter(t => t.trim() && !mangledTitle(t)).map(titleWords).filter(w => w.size);
+  const ta = usable(a.titles), tb = usable(b.titles);
+  if (!ta.length || !tb.length) return false;
+  if (ta.some(x => tb.some(y => [...x].some(w => y.has(w))))) return false;
+  const surnames = (authors: string[]) => new Set(authors.flatMap(n => normal(n).split(" ")).filter(w => w.length > 2 && w !== "unknown"));
+  const aa = surnames(a.authors), ab = surnames(b.authors);
+  // A record with no author is often a bad import, titled from its file: it can't be judged.
+  if (!aa.size || !ab.size) return false;
+  return ![...aa].some(w => ab.has(w));
+}
 
 const REFERENCE_TABLES = ["quotes", "anchors", "citekeys", "zotero_links", "zotero_items", "tag_proposals"] as const;
 /** corpus-mcp's own old quotes (before quote-mcp) cannot move: a record that has any must be the keeper. */
@@ -131,12 +155,24 @@ interface DuplicateCandidate {
 }
 const EVIDENCE = ["Identical selected file", "Matching identifier", "Matching title and authors"] as const;
 
+/**
+ * A DOI in one form however it's written ("10.1000/X", "doi:10.1000/x", "urn:doi:…", "https://doi.org/…";
+ * DOIs ignore case), or null. A bare 10.… value counts only where the type says DOI.
+ */
+export function doiKey(type: string, value: string): string | null {
+  const m = /^(urn:doi:|doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/\S+)$/i.exec(value.trim());
+  return m && (m[1] || type.toLowerCase() === "doi") ? m[2].toLowerCase() : null;
+}
+
 /** One key per real-world identifier, whichever Calibre field holds it: a KFX import stores
  * the ASIN as bookid "urn:asin:…" where a MOBI import wrote mobi-asin, and ISBNs arrive as
  * isbn, EbookISBN or isbn-id, in ISBN-10 or ISBN-13 form. */
 export function identifierKey(type: string, value: string): string[] | null {
   const t = type.toLowerCase();
   if (t === "citekey" || t === "calibre") return null;
+  const doi = doiKey(type, value);
+  if (doi) return ["identifier", "doi", doi];
+  if (t === "doi") return null;
   const urn = /^urn:(asin|isbn):(.+)$/i.exec(value.trim());
   const kind = urn ? urn[1].toLowerCase() : t.includes("asin") || t.startsWith("amazon") ? "asin" : t.includes("isbn") ? "isbn" : t;
   const id = (urn ? urn[2] : value).replace(/[\s-]/g, "").toLowerCase();
@@ -227,7 +263,7 @@ export function candidateBooks(c: Corpus) {
     shelves.set(r.book_id, [...(shelves.get(r.book_id) ?? []), r.name]);
   }
   return (c.db.prepare("SELECT * FROM books ORDER BY id").all() as (BookRow & { folder: string })[]).map(b => {
-    const printedIsbns = b.printed_isbns ? (JSON.parse(b.printed_isbns) as { isbn13?: string; isbn?: string }[]).map(x => x.isbn13 ?? x.isbn ?? "").filter(Boolean) : [];
+    const printedIsbns = b.printed_isbns ? ownPrintedIsbns(JSON.parse(b.printed_isbns) as IsbnCandidate[]).map(x => x.isbn13 ?? x.isbn ?? "").filter(Boolean) : [];
     const book = {
       id: b.id, uuid: b.uuid, library: b.library, calibre_id: b.calibre_id, title: b.title,
       authors: JSON.parse(b.authors) as string[], year: b.year, format: b.format, status: b.status,

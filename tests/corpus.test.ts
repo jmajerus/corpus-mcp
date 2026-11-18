@@ -14,7 +14,7 @@ import { calibreCsl, proposeCitekey } from "../src/citekey.js";
 import { type Change, type DataStore, backupDataStore, notYetLogged, openDataStore, pinnedByUuid, queryChanges, recordChanges } from "../src/data.js";
 import { type DB, SCHEMA_VERSION, openDatabase } from "../src/db.js";
 import { extractBook, sectionPaths } from "../src/extract.js";
-import { findPrintedIsbns } from "../src/isbn.js";
+import { findPrintedIsbns, ownPrintedIsbns } from "../src/isbn.js";
 import { findPrintedYears, printedYear } from "../src/years.js";
 import { adminBooks, adminCategories } from "../src/adminQueries.js";
 import { citeQuote, deleteQuote, locate, normalizeQuote, quotesOnPages, reanchorQuotes, reflow, saveQuote, searchQuotes, updateQuote } from "../src/quotes.js";
@@ -495,6 +495,18 @@ describe("printed ISBNs", () => {
   it("marks ISBNs in the last pages, which are often adverts for other books", () => {
     const found = findPrintedIsbns([page(2, "ISBN 978-0-306-40615-7"), page(158, "Also available: ISBN 978-1-4028-9462-6")], 160);
     expect(found.map((f) => f.position)).toEqual(["front", "back"]);
+  });
+
+  it("keeps only the ISBNs that can be the book's own, not adverts, reading lists or links", () => {
+    const back = (page_index: number, text: string) => ({ ...page(page_index, text), position: "back" as const });
+    const advert = back(200, ["(234 pages) ISBN: 9781680506204 $45.95", "(274 pages) ISBN: 9781680502725 $45.95"].join("\n"));
+    const links = back(199, "See https://www.oreilly.com/library/view/data-mesh/9781492092384/ for more.");
+    const many = back(201, ["ISBN 9781680502398", "ISBN 9781680502527", "ISBN 9781680502992", "ISBN 9781680501841", "ISBN 9781680502688"].join("\n"));
+    // Nothing at the front: the only candidates are a back-of-book copyright page's.
+    expect(ownPrintedIsbns(findPrintedIsbns([links, advert, many, back(202, "eBook ISBN 978-0-306-40615-7")])).map((f) => f.isbn13)).toEqual(["9780306406157"]);
+    expect(ownPrintedIsbns(findPrintedIsbns([links, advert, many]))).toEqual([]);
+    // A front-matter ISBN outranks a back-of-book one.
+    expect(ownPrintedIsbns(findPrintedIsbns([page(3, "ISBN 978-1-4028-9462-6"), back(202, "ISBN 978-0-306-40615-7")])).map((f) => f.isbn13)).toEqual(["9781402894626"]);
   });
 
   it("separates an ISBN from a number printed right after it", () => {

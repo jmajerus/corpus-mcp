@@ -87,9 +87,20 @@ def isbn13(isbn):
     return f'{body}{(10 - (total % 10)) % 10}'
 
 
+def doi_key(id_type, value):
+    """A DOI in one form however it's written (as doiKey in src/duplicates.ts), or None."""
+    m = re.match(r'^(urn:doi:|doi:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$', str(value or '').strip(), flags=re.I)
+    return m.group(2).lower() if m and (m.group(1) or str(id_type or '').lower() == 'doi') else None
+
+
 def identifier_key(id_type, value):
     t = str(id_type or '').lower()
     if t in ('citekey', 'calibre'):
+        return None
+    doi = doi_key(id_type, value)
+    if doi:
+        return ('identifier', 'doi', doi)
+    if t == 'doi':
         return None
     m = re.match(r'^urn:(asin|isbn):(.+)$', str(value or '').strip(), flags=re.I)
     kind = m.group(1).lower() if m else ('asin' if 'asin' in t or t.startswith('amazon') else 'isbn' if 'isbn' in t else t)

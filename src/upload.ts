@@ -7,8 +7,8 @@ import * as mupdf from "mupdf";
 import { DEFAULT_PRESET, proposeCitekey } from "./citekey.js";
 import type { Config } from "./config.js";
 import { type BookContents, type ContentProfile, contentFindings, contentProfile, isPending } from "./duplicate-contents.js";
-import { type DuplicateBook, GREYSCALE_COVER, candidateBooks, coverColour, identifierKey, normal, normalAuthorsKey, sizeWarnings } from "./duplicates.js";
-import { findPrintedIsbns, isbn13, validIsbn } from "./isbn.js";
+import { type DuplicateBook, GREYSCALE_COVER, candidateBooks, coverColour, doiKey, identifierKey, normal, normalAuthorsKey, sizeWarnings, unrelatedBooks } from "./duplicates.js";
+import { findPrintedIsbns, isbn13, ownPrintedIsbns, validIsbn } from "./isbn.js";
 import { mangledTitle, personName, scanTitlePage } from "./titlepage.js";
 import { type Corpus, ToolError } from "./tools.js";
 import { findPrintedYears, printedYear } from "./years.js";
@@ -87,6 +87,8 @@ export interface ExtractedUploadMetadata {
   printed_isbns: string[];
   metadata_source: "embedded" | "titlepage" | "filename";
   author_order_aligned?: boolean;
+  /** Set once printed_isbns holds only the ISBNs that can be the book's own (ownPrintedIsbns), not adverts. */
+  own_isbns_only?: boolean;
 }
 
 export interface StagedUploadDraft {
@@ -350,6 +352,11 @@ function textValue(node: unknown): string {
 function recordIdentifier(identifiers: Record<string, string>, scheme: string, rawValue: string): void {
   const val = rawValue.trim();
   if (!val) return;
+  const doi = doiKey(scheme, val);
+  if (doi) {
+    identifiers.doi = doi;
+    return;
+  }
   const urn = /^urn:(asin|isbn):(.+)$/i.exec(val);
   const s = (urn ? urn[1] : scheme).toLowerCase();
   const body = (urn ? urn[2] : val).trim();
@@ -376,6 +383,7 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
     identifiers: {},
     printed_isbns: [],
     metadata_source: "filename",
+    own_isbns_only: true,
   };
   if (problem) return out;
 
@@ -430,7 +438,7 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
         position: (idx < 6 ? "front" : "back") as "front" | "back",
         text: strFromU8(files[p]).replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, " ").replace(/<\/?(p|div|h[1-6]|li|br|tr)\b[^>]*>/gi, "\n").replace(/<[^>]*>/g, " "),
       }));
-      const printed = findPrintedIsbns(pages, pages.length, 2);
+      const printed = ownPrintedIsbns(findPrintedIsbns(pages, pages.length, 2));
       out.printed_isbns = printed.map(p => p.isbn13);
       if (!out.identifiers.isbn && printed.length) out.identifiers.isbn = printed[0].isbn13;
       // A sampled spine item is a whole file, which in a book without front matter is a chapter: its
@@ -483,7 +491,7 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
             } finally { stext.destroy(); }
           } finally { page.destroy(); }
         });
-        const printed = findPrintedIsbns(pages, total, 2);
+        const printed = ownPrintedIsbns(findPrintedIsbns(pages, total, 2));
         out.printed_isbns = printed.map(p => p.isbn13);
         if (printed.length) out.identifiers.isbn = printed[0].isbn13;
         const py = printedYear(findPrintedYears(pages, total, 2));
@@ -754,8 +762,11 @@ function stripSketch(contents: BookContents): BookContents {
   );
 }
 
-/** What a staged file is matched by: its identifiers (and printed ISBNs), titles, and author lists, from the file and the draft. */
-function matchKeys(rec: StagedUploadRecord): { ids: Set<string>; titles: Set<string>; authors: Set<string> } {
+/**
+ * What a staged file is matched by: its identifiers (and printed ISBNs), titles, and author lists, from
+ * the file and the draft; `named` keeps the titles and authors as written, for unrelatedBooks.
+ */
+function matchKeys(rec: StagedUploadRecord): { ids: Set<string>; titles: Set<string>; authors: Set<string>; named: { titles: string[]; authors: string[] } } {
   const ids = new Set<string>();
   for (const [type, val] of Object.entries(rec.extracted.identifiers)) {
     const k = identifierKey(type, val);
@@ -767,13 +778,14 @@ function matchKeys(rec: StagedUploadRecord): { ids: Set<string>; titles: Set<str
   }
   const titles = new Set([normal(rec.extracted.title), normal(rec.draft.title)].filter(Boolean));
   const authors = new Set([rec.extracted.authors, rec.draft.authors].map(normalAuthorsKey).filter(Boolean));
-  return { ids, titles, authors };
+  const named = { titles: [rec.extracted.title, rec.draft.title], authors: [...rec.extracted.authors, ...rec.draft.authors] };
+  return { ids, titles, authors, named };
 }
 
 /** Why two staged files look like the same book, by the same evidence a library match uses; empty when they don't. */
 function stagedEvidence(a: ReturnType<typeof matchKeys>, b: ReturnType<typeof matchKeys>): string[] {
   const evidence: string[] = [];
-  if ([...a.ids].some(k => b.ids.has(k))) evidence.push("Matching identifier");
+  if ([...a.ids].some(k => b.ids.has(k)) && !unrelatedBooks(a.named, b.named)) evidence.push("Matching identifier");
   const title = [...a.titles].find(t => b.titles.has(t));
   if (title) {
     if ([...a.authors].some(x => b.authors.has(x))) evidence.push("Matching title and authors");
@@ -824,9 +836,22 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     rec.extracted.author_order_aligned = true;
     saveStagedRecord(dir, rec);
   }
+  // Records staged before ownPrintedIsbns kept every ISBN the sampled pages printed, adverts for the
+  // publisher's other books included, and matched each of those books: read the file's ISBNs again.
+  if (!rec.extracted.own_isbns_only) {
+    const fresh = extractUploadMetadata(fs.readFileSync(binPath), rec.ext, rec.filename, rec.problem);
+    rec.extracted.identifiers = fresh.identifiers;
+    rec.extracted.printed_isbns = fresh.printed_isbns;
+    rec.extracted.own_isbns_only = true;
+    saveStagedRecord(dir, rec);
+  }
 
   // Keys for identifier and title/author matching (from both extracted and draft metadata).
-  const { ids: uploadIdKeys, titles: titleSet, authors: authorSignatures } = matchKeys(rec);
+  const { ids: uploadIdKeys, titles: titleSet, authors: authorSignatures, named } = matchKeys(rec);
+  // Identifiers shared with a book whose title and authors have nothing in common with this one's: one
+  // of the two carries a wrong ISBN, which is worth fixing, but it is no evidence they are one book.
+  const identifierNotes: string[] = [];
+  const unrelatedMatches: DuplicateBook[] = [];
 
   const exactMatches: { id: string; title: string; authors: string[]; year: number | null; formats: string[]; library: string; calibre_id: number; matched_format: string }[] = [];
   const candidateMap = new Map<string, { book: DuplicateBook; evidence: Set<string> }>();
@@ -860,16 +885,15 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     }
 
     // 2. Identifier match (ISBN-10/13, ASIN, etc., plus printed ISBNs in the book's text).
-    for (const [type, val] of Object.entries(b.identifiers)) {
-      const k = identifierKey(type, val);
-      if (k && uploadIdKeys.has(JSON.stringify(k))) {
-        addEvidence(b, "Matching identifier");
-      }
-    }
-    for (const printedIsbn of b.printed_isbns ?? []) {
-      const k = identifierKey("isbn", printedIsbn);
-      if (k && uploadIdKeys.has(JSON.stringify(k))) {
-        addEvidence(b, "Matching identifier");
+    const shared = [
+      ...Object.entries(b.identifiers).map(([type, val]) => identifierKey(type, val)),
+      ...(b.printed_isbns ?? []).map(isbn => identifierKey("isbn", isbn)),
+    ].filter((k): k is string[] => !!k && uploadIdKeys.has(JSON.stringify(k)));
+    if (shared.length) {
+      if (!unrelatedBooks(named, { titles: [b.title], authors: b.authors })) addEvidence(b, "Matching identifier");
+      else {
+        unrelatedMatches.push(b);
+        identifierNotes.push(`${b.id} (${b.title}${b.authors.length ? `, ${b.authors.join(", ")}` : ""}) has this file's ${shared[0][1].toUpperCase()} ${shared[0][2]}, but its title and authors have nothing in common with this one's, so it isn't counted as a match. One of them probably carries the wrong ${shared[0][1].toUpperCase()}.`);
       }
     }
 
@@ -1028,8 +1052,11 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     proposed_citekey: { key: citekey.key, blockers: citekey.blockers, provisional },
     contents: stripSketch(uploadContents),
     ...findings,
+    content_notes: [...identifierNotes, ...findings.content_notes],
     exact_matches: exactMatches,
     matches,
+    /** Books that share an identifier but nothing else (see content_notes): shown, so not news when applying. */
+    unrelated_matches: unrelatedMatches.map(b => ({ id: b.id, library: b.library, calibre_id: b.calibre_id, uuid: b.uuid })),
     staged_matches,
     returns_to_intake: returnsToIntake(rec, staged),
     blockers,
@@ -1232,9 +1259,9 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
       tags,
       identifiers: rec.extracted.identifiers,
       printed_isbns: rec.extracted.printed_isbns,
-      known_matches: evaluated.matches
-        .filter(m => m.book.library === config.shelvesLibrary && m.book.uuid !== null)
-        .map(m => ({ id: m.book.calibre_id, uuid: m.book.uuid! })),
+      known_matches: [...evaluated.matches.map(m => m.book), ...evaluated.unrelated_matches]
+        .filter(b => b.library === config.shelvesLibrary && b.uuid !== null)
+        .map(b => ({ id: b.calibre_id, uuid: b.uuid! })),
     };
   });
 

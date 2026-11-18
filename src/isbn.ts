@@ -97,6 +97,29 @@ function lineAround(text: string, start: number, end: number, width = 90): strin
   return `${from > lineStart ? "…" : ""}${text.slice(from, to).replace(/\s+/g, " ").trim()}${to < lineEnd ? "…" : ""}`;
 }
 
+/** A copyright page lists a few editions' ISBNs; a page with more is an advert or a reading list. */
+const MAX_EDITION_ISBNS = 4;
+
+/**
+ * The printed ISBNs that can stand for the book itself, as evidence that another copy is the same
+ * edition. Left out: a catalogue listing ("(234 pages) ISBN: 978… $45.95"), an ISBN inside a web address
+ * (a reference list's …/library/view/data-mesh/978…/), and every ISBN on a page that prints more than a
+ * copyright page would. Back-of-book ISBNs count only when the front prints none, as in ebooks that put
+ * the copyright page last; otherwise they are the "you may also like" pages.
+ */
+export function ownPrintedIsbns<T extends Pick<IsbnCandidate, "isbn" | "page" | "position"> & { context?: string }>(found: readonly T[]): T[] {
+  const perPage = new Map<string, number>();
+  const pageKey = (x: T) => `${x.position}:${x.page}`;
+  for (const x of found) perPage.set(pageKey(x), (perPage.get(pageKey(x)) ?? 0) + 1);
+  const own = found.filter(x => {
+    const context = x.context ?? "";
+    if ((perPage.get(pageKey(x)) ?? 0) > MAX_EDITION_ISBNS) return false;
+    if (/[$£€]\s?\d|\(\s*\d+\s+pages?\s*\)/i.test(context)) return false;
+    return !new RegExp(`[/=]${x.isbn}|${x.isbn}/`).test(context);
+  });
+  return own.some(x => x.position === "front") ? own.filter(x => x.position === "front") : own;
+}
+
 /**
  * Every valid ISBN printed in the given pages, once each (ISBN-10 and -13 forms merged), in page order.
  * A match counts when "ISBN" precedes it nearby, or when it is 13 digits starting 978/979; bare 10-digit
