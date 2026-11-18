@@ -25,6 +25,26 @@ describe("title-page scan", () => {
     expect(names(r)).toEqual(["Rahul Sharma", "Vesa Kaihlavirta"]);
   });
 
+  it("reads the names under the full title, after a series' list of its other books", () => {
+    const title = "Anywhere-Anytime Signals and Systems Laboratory: From MATLAB to Smartphones, Third Edition";
+    const r = scanTitlePage([
+      page(1, "Anywhere-Anytime\nSignals and Systems Laboratory\nFrom MATLAB to Smartphones\nThird Edition"),
+      // The series list names the earlier edition's authors under its (shorter) title: not this book's.
+      page(4, "iv\nAnywhere-Anytime Signals and Systems Laboratory: from MATLAB to Smartphones\nNasser Kehtarnavaz and Fatemeh Saki\n2017\nAn Introduction to Kalman Filtering with MATLAB Examples\nNarayan Kovvali, Mahesh Banavar, and Andreas Spanias\n2013"),
+      page(6, `Copyright © 2020 by Morgan & Claypool\nAll rights reserved.\n${title}\nNasser Kehtarnavaz, Fatemeh Saki, Adrian Duran, and Arian Azarang\nwww.morganclaypool.com`),
+      page(7, "Anywhere-Anytime\nSignals and Systems Laboratory\nFrom MATLAB to Smartphones\nThird Edition\nNasser Kehtarnavaz, Fatemeh Saki, Adrian Duran, and Arian Azarang\nUniversity of Texas at Dallas\nSYNTHESIS LECTURES ON SIGNAL PROCESSING #18"),
+    ], title);
+    expect(names(r)).toEqual(["Nasser Kehtarnavaz", "Fatemeh Saki", "Adrian Duran", "Arian Azarang"]);
+    expect(r.authors[0].sources).toEqual(["title_page"]);
+  });
+
+  it("leaves out a line under the title when any name in it can't be read", () => {
+    const title = "Fundamentals of Electronics: Book 1 Electronic Devices and Circuit Applications";
+    // The "Th" ligature has no text in this PDF, so "Thomas" is read as "omas".
+    expect(names(scanTitlePage([page(10, `Copyright © 2014 by Morgan & Claypool\n${title}\nomas F. Schubert, Jr. and Ernest M. Kim`)], title))).toEqual([]);
+    expect(names(scanTitlePage([page(10, "Arduino II\nSystems\nSteven F. Barrett\nUniversity of Wyoming, Laramie, WY")], "Arduino II: Systems"))).toEqual(["Steven F. Barrett"]);
+  });
+
   it("never takes a run-together line as one person", () => {
     const r = scanTitlePage([page(1, "Mastering Rust\n\nRahul Sharma Vesa Kaihlavirta", "Title Page")], "Mastering Rust");
     expect(names(r)).toEqual([]);

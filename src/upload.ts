@@ -87,8 +87,8 @@ export interface ExtractedUploadMetadata {
   printed_isbns: string[];
   metadata_source: "embedded" | "titlepage" | "filename";
   author_order_aligned?: boolean;
-  /** Set once printed_isbns holds only the ISBNs that can be the book's own (ownPrintedIsbns), not adverts. */
-  own_isbns_only?: boolean;
+  /** The UPLOAD_METADATA_SCAN this was read with; older records are read again (evaluateStagedUpload). */
+  metadata_scan?: number;
 }
 
 export interface StagedUploadDraft {
@@ -370,6 +370,15 @@ function recordIdentifier(identifiers: Record<string, string>, scheme: string, r
   }
 }
 
+/**
+ * Bump when reading a file's metadata improves, so staged files are read again: 1, printed ISBNs without
+ * adverts (ownPrintedIsbns); 2, 20 front pages of a PDF and names under the title (scanTitlePage).
+ */
+const UPLOAD_METADATA_SCAN = 2;
+
+/** The front pages of a PDF read for its metadata, as many as the indexer reads for a library book. */
+const PDF_FRONT_PAGES = 20;
+
 /** The most text an EPUB spine file can hold and still be read as front or back matter, not a chapter. */
 const FRONT_MATTER_CHARS = 6000;
 
@@ -383,7 +392,7 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
     identifiers: {},
     printed_isbns: [],
     metadata_source: "filename",
-    own_isbns_only: true,
+    metadata_scan: UPLOAD_METADATA_SCAN,
   };
   if (problem) return out;
 
@@ -481,13 +490,13 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
           out.metadata_source = "embedded";
         }
         const total = doc.countPages();
-        const indices = [...new Set([...Array.from({ length: Math.min(8, total) }, (_, i) => i), ...Array.from({ length: Math.min(2, total) }, (_, i) => total - 2 + i).filter(i => i >= 0)])];
+        const indices = [...new Set([...Array.from({ length: Math.min(PDF_FRONT_PAGES, total) }, (_, i) => i), ...Array.from({ length: Math.min(2, total) }, (_, i) => total - 2 + i).filter(i => i >= 0)])];
         const pages = indices.map(i => {
           const page = doc.loadPage(i);
           try {
             const stext = page.toStructuredText("preserve-whitespace,dehyphenate");
             try {
-              return { page_index: i, label: page.getLabel() || null, section_path: null, position: (i < 8 ? "front" : "back") as "front" | "back", text: stext.asText() };
+              return { page_index: i, label: page.getLabel() || null, section_path: null, position: (i < PDF_FRONT_PAGES ? "front" : "back") as "front" | "back", text: stext.asText() };
             } finally { stext.destroy(); }
           } finally { page.destroy(); }
         });
@@ -836,13 +845,22 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     rec.extracted.author_order_aligned = true;
     saveStagedRecord(dir, rec);
   }
-  // Records staged before ownPrintedIsbns kept every ISBN the sampled pages printed, adverts for the
-  // publisher's other books included, and matched each of those books: read the file's ISBNs again.
-  if (!rec.extracted.own_isbns_only) {
+  // A file staged before reading improved (UPLOAD_METADATA_SCAN) is read again: its identifiers and
+  // printed ISBNs are replaced, and authors and a year fill in only where neither file nor draft had any,
+  // so nothing a person typed is overwritten.
+  if ((rec.extracted.metadata_scan ?? 0) < UPLOAD_METADATA_SCAN) {
     const fresh = extractUploadMetadata(fs.readFileSync(binPath), rec.ext, rec.filename, rec.problem);
     rec.extracted.identifiers = fresh.identifiers;
     rec.extracted.printed_isbns = fresh.printed_isbns;
-    rec.extracted.own_isbns_only = true;
+    if (!rec.extracted.authors.length && fresh.authors.length) {
+      rec.extracted.authors = fresh.authors;
+      if (!rec.draft.authors.length) rec.draft.authors = fresh.authors;
+    }
+    if (rec.extracted.year === null && fresh.year !== null) {
+      rec.extracted.year = fresh.year;
+      if (rec.draft.year === null) rec.draft.year = fresh.year;
+    }
+    rec.extracted.metadata_scan = UPLOAD_METADATA_SCAN;
     saveStagedRecord(dir, rec);
   }
 

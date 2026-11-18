@@ -784,6 +784,32 @@ print(json.dumps([m.identifier_key("doi", "10.1000/ABC-1"), m.identifier_key("ur
   expect(JSON.parse(py.stdout)).toEqual([key, key, ["identifier", "isbn", "10.1000/abc1"]]);
 });
 
+it("reads a PDF's title page past a long series list, and fills in a staged draft's missing authors", () => {
+  const series = Array.from({ length: 10 }, (_, i) => [`Another Lecture Number ${i + 1}`, "Pat Writer and Lee Author", "2015"]);
+  const pdf = makePdf({ pages: [
+    ["Signals Laboratory", "Third Edition"],
+    ...series,
+    ["Copyright 2020 by Morgan and Claypool", "Signals Laboratory, Third Edition", "Nasser Kehtarnavaz, Fatemeh Saki, and Arian Azarang"],
+    ["Signals Laboratory", "Third Edition", "Nasser Kehtarnavaz, Fatemeh Saki, and Arian Azarang", "University of Texas at Dallas"],
+    ["Chapter 1"],
+  ] });
+  const staged = stageUpload(c, config, "Signals Laboratory, Third Edition.pdf", pdf);
+  expect(staged.draft.authors).toEqual(["Nasser Kehtarnavaz", "Fatemeh Saki", "Arian Azarang"]);
+  expect(staged.draft.year).toBe(2020);
+
+  // As an older release staged it: no authors or year. Reading it again fills them in, but never over a person's edits.
+  const file = path.join(uploadDir(config), `${staged.id}.json`);
+  const rec = JSON.parse(fs.readFileSync(file, "utf8"));
+  Object.assign(rec.extracted, { authors: [], year: null });
+  Object.assign(rec.draft, { authors: [], year: 2019 });
+  delete rec.extracted.metadata_scan;
+  fs.writeFileSync(file, JSON.stringify(rec));
+  const [listed] = listStagedUploads(c, config).items;
+  expect(listed.draft.authors).toEqual(["Nasser Kehtarnavaz", "Fatemeh Saki", "Arian Azarang"]);
+  expect(listed.draft.year).toBe(2019);
+  expect(listed.extracted.year).toBe(2020);
+});
+
 it("reads a staged file's ISBNs again when it was staged with its adverts' ones", () => {
   const upload = makeAdvertisingEpub("Genetic Things", "9781680506204", "<p>(234 pages) ISBN: 9780306406157 $45.95</p>");
   const staged = stageUpload(c, config, "Genetic Things.epub", upload);
@@ -791,7 +817,7 @@ it("reads a staged file's ISBNs again when it was staged with its adverts' ones"
   const file = path.join(uploadDir(config), `${staged.id}.json`);
   const rec = JSON.parse(fs.readFileSync(file, "utf8"));
   rec.extracted.printed_isbns = ["9780306406157"];
-  delete rec.extracted.own_isbns_only;
+  delete rec.extracted.metadata_scan;
   fs.writeFileSync(file, JSON.stringify(rec));
   const [listed] = listStagedUploads(c, config).items;
   expect(listed.extracted.printed_isbns).toEqual([]);
