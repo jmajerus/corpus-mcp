@@ -1198,7 +1198,8 @@ function coverView(config: Config, rec: StagedUploadRecord) {
   if (cover?.file) {
     return { status: "found" as const, source: cover.source, label: cover.label, page_url: cover.page_url, url: `/api/upload/files/${encodeURIComponent(rec.id)}/cover`, use: rec.draft.use_cover !== false };
   }
-  return { status: cover?.plain ? "plain" as const : "none" as const, error: cover?.error ?? null };
+  // A failed lookup only gets as far as OTL for a plain cover, so it is shown as one, with the error.
+  return { status: cover?.plain || cover?.error ? "plain" as const : "none" as const, error: cover?.error ?? null };
 }
 
 /** How much of the staging quota is already used, and which hashes are already staged. */

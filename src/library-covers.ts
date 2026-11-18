@@ -48,6 +48,8 @@ export async function previewLibraryCovers(c: Corpus, config: Config, log: (text
   for (const b of rows) {
     const coverFile = path.join(c.booksRoot, b.folder, "cover.jpg");
     const printed = b.printed_isbns ? ownPrintedIsbns(JSON.parse(b.printed_isbns) as IsbnCandidate[]).map(x => x.isbn13 ?? x.isbn) : [];
+    // The cover as judged; if Calibre replaces it while the lookup runs, the book is left for the next preview.
+    const before = fs.existsSync(coverFile) ? coverSha256(fs.readFileSync(coverFile)) : null;
     let result;
     try {
       result = await findCover({ title: b.title, authors: JSON.parse(b.authors) as string[], isbns: [b.isbn, ...printed].filter((i): i is string => !!i), current: { image: coverFile } },
@@ -59,13 +61,17 @@ export async function previewLibraryCovers(c: Corpus, config: Config, log: (text
     }
     if (result.plain) plain++;
     if (!result.cover) continue;
+    const after = fs.existsSync(coverFile) ? coverSha256(fs.readFileSync(coverFile)) : null;
+    if (after !== before) {
+      log(`${b.id} ${b.title}: its cover changed during the lookup; preview again to check it.\n`);
+      continue;
+    }
     found++;
     const sha256 = coverSha256(result.cover.bytes);
     const name = `${sha256}.${result.cover.ext}`;
     fs.writeFileSync(path.join(dir, name), result.cover.bytes, { mode: 0o600 });
     keep.add(name);
-    const old = fs.existsSync(coverFile) ? coverSha256(fs.readFileSync(coverFile)) : null;
-    const item: CoverFound = { source: "otl", label: result.cover.label, page_url: result.cover.page_url, sha256, ext: result.cover.ext, old_cover_sha256: old };
+    const item: CoverFound = { source: "otl", label: result.cover.label, page_url: result.cover.page_url, sha256, ext: result.cover.ext, old_cover_sha256: before };
     log(`${b.id} ${b.title} ← Open Textbook Library: ${result.cover.label}\n`);
     log(`@@change ${JSON.stringify({ calibre_id: b.calibre_id, uuid: b.uuid, title: b.title, cover_found: item })}\n`);
   }

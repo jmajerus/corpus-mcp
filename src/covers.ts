@@ -95,12 +95,56 @@ const OTL_HEADERS = { "User-Agent": "corpus-mcp cover lookup (+https://open.umn.
 /** How long a downloaded catalogue is used before it is downloaded again. */
 const CATALOGUE_DAYS = 7;
 const MAX_COVER_BYTES = 10 * 1024 * 1024;
+const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+/** The only host lookups talk to. Every URL comes from OTL's own responses, so each one is checked. */
+const OTL_ORIGIN = "https://open.umn.edu";
 
 /** The HTTP client the lookups use; tests replace it. */
 export const coverNet: { fetch: typeof fetch; pause: (ms: number) => Promise<void> } = {
   fetch: (...args) => fetch(...args),
   pause: (ms) => new Promise(r => setTimeout(r, ms)),
 };
+
+/** The URL if it is on the OTL site over HTTPS (with no credentials or other port), or null. */
+export function otlUrl(raw: string | URL, base?: string): URL | null {
+  let url: URL;
+  try { url = new URL(raw, base); } catch { return null; }
+  return url.origin === OTL_ORIGIN && !url.username && !url.password ? url : null;
+}
+
+/**
+ * Fetches a URL on the OTL site, following at most five redirects and only to the OTL site, and reads at
+ * most `max` bytes of the body: a longer one is abandoned as soon as it passes the limit.
+ */
+export async function otlFetch(raw: string | URL, opts: { accept?: string; max: number; timeoutMs: number }): Promise<{ status: number; body: Buffer | null }> {
+  let url = otlUrl(raw);
+  if (!url) throw new Error(`Not an Open Textbook Library address: ${String(raw)}`);
+  const signal = AbortSignal.timeout(opts.timeoutMs);
+  for (let hops = 0; ; hops++) {
+    const res = await coverNet.fetch(url, { headers: { ...OTL_HEADERS, ...(opts.accept ? { Accept: opts.accept } : {}) }, redirect: "manual", signal });
+    if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+      await res.body?.cancel();
+      const next = otlUrl(res.headers.get("location")!, url.href);
+      if (!next) throw new Error(`Open Textbook Library redirected off its site: ${res.headers.get("location")}`);
+      if (hops >= 5) throw new Error("Open Textbook Library redirected too many times.");
+      url = next;
+      continue;
+    }
+    if (!res.ok) { await res.body?.cancel(); return { status: res.status, body: null }; }
+    if (Number(res.headers.get("content-length") ?? 0) > opts.max || !res.body) { await res.body?.cancel(); return { status: res.status, body: null }; }
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > opts.max) { await reader.cancel(); return { status: res.status, body: null }; }
+      chunks.push(value);
+    }
+    return { status: res.status, body: Buffer.concat(chunks) };
+  }
+}
 
 interface OtlContributor { contribution?: string; first_name?: string | null; middle_name?: string | null; last_name?: string | null; corporate?: boolean; corporate_name?: string | null }
 interface OtlRecord { id: number; title: string; isbn13?: string | null; isbn10?: string | null; copyright_year?: number | null; url: string; contributors?: OtlContributor[] }
@@ -134,10 +178,11 @@ export async function otlCatalogue(dataDir: string): Promise<OtlBook[]> {
       const books: OtlBook[] = [];
       let next: string | null = `${OTL_CATALOGUE}?page=1`;
       for (let pages = 0; next && pages < 1000; pages++) {
-        const res = await coverNet.fetch(next, { headers: { ...OTL_HEADERS, Accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
-        if (!res.ok) throw new Error(`Open Textbook Library catalogue: HTTP ${res.status}`);
-        const body = (await res.json()) as { data?: OtlRecord[]; links?: { next?: string | null } };
-        books.push(...(body.data ?? []).map(otlBook));
+        const res = await otlFetch(next, { accept: "application/json", max: MAX_PAGE_BYTES, timeoutMs: 30_000 });
+        if (!res.body) throw new Error(`Open Textbook Library catalogue: HTTP ${res.status}${res.status < 300 ? ", page too large" : ""}`);
+        const body = JSON.parse(res.body.toString("utf8")) as { data?: OtlRecord[]; links?: { next?: string | null } };
+        // A book page that isn't on the OTL site is never opened (otlCover); drop it here.
+        books.push(...(body.data ?? []).filter(r => typeof r.url === "string" && otlUrl(r.url)).map(otlBook));
         next = body.links?.next ?? null;
         if (next) await coverNet.pause(200);
       }
@@ -250,8 +295,8 @@ export function otlCoverUrl(html: string, pageUrl: string): URL | null {
   const tag = [...html.matchAll(/<img\b[^>]*>/gi)].map(m => m[0]).find(t => /class=["'][^"']*\bcover\b/i.test(t));
   const src = tag?.match(/\ssrc=["']([^"']+)["']/i)?.[1];
   if (!src || /placeholder/i.test(src)) return null;
-  const url = new URL(decodeEntities(src), pageUrl);
-  if (url.protocol !== "https:") return null;
+  const url = otlUrl(decodeEntities(src), pageUrl);
+  if (!url) return null;
   const variant = url.pathname.match(/^\/rails\/active_storage\/representations\/(?:redirect|proxy)\/([^/]+)\/[^/]+\/([^/]+)$/);
   if (!variant) return null;
   return new URL(`/rails/active_storage/blobs/redirect/${variant[1]}/${variant[2]}`, url);
@@ -259,16 +304,14 @@ export function otlCoverUrl(html: string, pageUrl: string): URL | null {
 
 /** The cover an OTL book page shows, or null if it has only the placeholder. */
 export async function otlCover(book: OtlBook): Promise<FoundCover | null> {
-  const page = await coverNet.fetch(book.url, { headers: { ...OTL_HEADERS, Accept: "text/html" }, signal: AbortSignal.timeout(30_000) });
-  if (!page.ok) throw new Error(`Open Textbook Library page ${book.url}: HTTP ${page.status}`);
-  const url = otlCoverUrl(await page.text(), book.url);
+  const page = await otlFetch(book.url, { accept: "text/html", max: MAX_PAGE_BYTES, timeoutMs: 30_000 });
+  if (!page.body) throw new Error(`Open Textbook Library page ${book.url}: HTTP ${page.status}${page.status < 300 ? ", page too large" : ""}`);
+  const url = otlCoverUrl(page.body.toString("utf8"), book.url);
   if (!url) return null;
-  const res = await coverNet.fetch(url, { headers: OTL_HEADERS, signal: AbortSignal.timeout(60_000) });
-  if (!res.ok) throw new Error(`Open Textbook Library cover for ${book.title}: HTTP ${res.status}`);
-  if (Number(res.headers.get("content-length") ?? 0) > MAX_COVER_BYTES) return null;
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > MAX_COVER_BYTES) return null;
-  const image = normalImage(bytes);
+  const res = await otlFetch(url, { max: MAX_COVER_BYTES, timeoutMs: 60_000 });
+  if (res.status >= 300) throw new Error(`Open Textbook Library cover for ${book.title}: HTTP ${res.status}`);
+  if (!res.body) return null; // larger than 10 MB
+  const image = normalImage(res.body);
   return image ? { source: "otl", label: book.title, page_url: book.url, ...image } : null;
 }
 

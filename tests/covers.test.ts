@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import * as mupdf from "mupdf";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
-import { type OtlBook, coverNet, findCover, imageLook, intakeImage, isPlainCover, matchOtl, otlCatalogue, otlCoverUrl, titleKey } from "../src/covers.js";
+import { type OtlBook, coverNet, findCover, imageLook, intakeImage, isPlainCover, matchOtl, otlCatalogue, otlCover, otlCoverUrl, otlFetch, otlUrl, titleKey } from "../src/covers.js";
 import { openDataStore } from "../src/data.js";
 import { scanLibraries } from "../src/indexer.js";
 import { openDatabase } from "../src/db.js";
@@ -116,6 +116,28 @@ describe("finding covers", () => {
     expect(otlCoverUrl('<meta property="og:image" content="https://open.umn.edu/card.jpg">', "https://open.umn.edu/x")).toBeNull();
     expect(String(otlCoverUrl('<img title="t" class="cover" src="https://open.umn.edu/rails/active_storage/representations/redirect/b1/v1/A%20B.jpg?disposition=inline&amp;x=1">', "https://open.umn.edu/x")))
       .toBe("https://open.umn.edu/rails/active_storage/blobs/redirect/b1/A%20B.jpg");
+  });
+
+  it("talks only to the OTL site, and stops reading a response that passes its limit", async () => {
+    expect(otlUrl("https://open.umn.edu/a")?.href).toBe("https://open.umn.edu/a");
+    for (const bad of ["http://open.umn.edu/a", "https://open.umn.edu.evil.example/a", "https://user@open.umn.edu/a", "https://open.umn.edu:8443/a", "https://127.0.0.1/a"]) expect(otlUrl(bad)).toBeNull();
+    expect(otlCoverUrl('<img class="cover" src="https://evil.example/rails/active_storage/representations/redirect/b/v/x.jpg">', "https://open.umn.edu/x")).toBeNull();
+    await expect(otlFetch("https://169.254.169.254/latest", { max: 10, timeoutMs: 1000 })).rejects.toThrow(/Not an Open Textbook Library address/);
+
+    let pulled = 0;
+    coverNet.fetch = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/hop")) return new Response(null, { status: 302, headers: { location: "http://10.0.0.1/internal" } });
+      if (url.endsWith("/big")) {
+        // No content-length: a stream that would go on for 100 MB.
+        return new Response(new ReadableStream({ pull(ctl) { pulled++; ctl.enqueue(new Uint8Array(1024 * 1024)); if (pulled >= 100) ctl.close(); } }));
+      }
+      return new Response("ok");
+    }) as typeof fetch;
+    await expect(otlFetch("https://open.umn.edu/hop", { max: 10, timeoutMs: 1000 })).rejects.toThrow(/redirected off its site/);
+    expect((await otlFetch("https://open.umn.edu/big", { max: 3 * 1024 * 1024, timeoutMs: 5000 })).body).toBeNull();
+    expect(pulled).toBeLessThan(10);
+    expect(await otlCover({ id: 1, title: "X", authors: [], isbns: [], year: null, url: "https://elsewhere.example/x" }).catch(e => (e as Error).message)).toMatch(/Not an Open Textbook Library address/);
   });
 
   it("leaves a colour cover alone and doesn't look it up", async () => {
@@ -231,6 +253,32 @@ describe("covers for staged uploads", () => {
     expect(refreshes).toBe(1);
     expect(c.data.prepare("SELECT kind, book_id, detail FROM changes WHERE job_id = ?").all(apply.id))
       .toEqual([{ kind: "cover_set", book_id: "main:2", detail: "Open Textbook Library: General Microbiology" }]);
+  });
+
+  it("leaves a book whose cover changes during the lookup for the next preview", async () => {
+    const folder = c.db.prepare("SELECT folder FROM books WHERE id = 'main:2'").pluck().get() as string;
+    const coverFile = path.join(root, folder, "cover.jpg");
+    fs.writeFileSync(coverFile, image([252, 252, 252]));
+    const fetchBefore = coverNet.fetch;
+    coverNet.fetch = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/gm")) fs.writeFileSync(coverFile, image([10, 120, 200])); // someone sets a cover in Calibre meanwhile
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+    const r = new JobRunner(c, config, { refresh: async () => {}, calibre: async () => { throw new Error("not expected"); } });
+    const id = r.start("covers", "preview", {}, "me@example.com");
+    let j = r.get(id);
+    for (let i = 0; i < 200 && j.status === "running"; i++) { await new Promise(ok => setTimeout(ok, 10)); j = r.get(id); }
+    expect(j.status, j.log).toBe("succeeded");
+    expect(j.items).toEqual([]);
+    expect(j.log).toMatch(/main:2 General Microbiology: its cover changed during the lookup/);
+  });
+
+  it("shows a failed lookup as a plain cover, with the error", async () => {
+    coverNet.fetch = (async () => new Response("down", { status: 503 })) as typeof fetch;
+    const staged = stageUpload(c, config, "General Microbiology.pdf", makePdf({ pages: [["General Microbiology"]] }), "me@example.com");
+    await stagedCoversSettled();
+    expect(listStagedUploads(c, config).items.find((x: { id: string }) => x.id === staged.id)!.cover)
+      .toEqual({ status: "plain", error: "Open Textbook Library catalogue: HTTP 503" });
   });
 
   it("looks nothing up when lookups are off and the file has no intake folder", async () => {
