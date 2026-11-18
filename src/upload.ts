@@ -237,8 +237,18 @@ export function sniffUpload(data: Buffer, ext: UploadExtension): {
   };
 }
 
+/** Words a title keeps in lower case, but for its first. */
+const MINOR_WORDS = /^(?:a|an|the|and|or|nor|but|of|for|in|on|at|to|by|from|with|as|vs)$/i;
+
 function fallbackFromFilename(filename: string, ext: UploadExtension): { title: string; authors: string[]; year: number | null } {
   let stem = filename.slice(0, filename.length - ext.length - 1).replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  // A publisher's download name, "9781789954050-DEPLOYMENT_OF_MICROSOFT_AZURE_CLOUD_SOLUTIONS": the
+  // ISBN is no part of the title (the pages print it), and capitals throughout are no title's casing.
+  const isbnPrefix = /^(97[89]\d{10}|\d{9}[\dX])[-\s]+(?=\S)/i.exec(stem);
+  if (isbnPrefix && validIsbn(isbnPrefix[1])) stem = stem.slice(isbnPrefix[0].length);
+  if (/\p{Lu}/u.test(stem) && !/\p{Ll}/u.test(stem)) {
+    stem = stem.toLowerCase().split(" ").map((w, i) => (i > 0 && MINOR_WORDS.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
+  }
   let year: number | null = null;
   const yearMatch = stem.match(/\((1[4-9]\d\d|20\d\d)\)\s*$/);
   if (yearMatch) {
@@ -372,9 +382,10 @@ function recordIdentifier(identifiers: Record<string, string>, scheme: string, r
 
 /**
  * Bump when reading a file's metadata improves, so staged files are read again: 1, printed ISBNs without
- * adverts (ownPrintedIsbns); 2, 20 front pages of a PDF and names under the title (scanTitlePage).
+ * adverts (ownPrintedIsbns); 2, 20 front pages of a PDF and names under the title (scanTitlePage); 3, the
+ * printed title for one from a file name, and "About the author" names only where a paragraph starts.
  */
-const UPLOAD_METADATA_SCAN = 2;
+const UPLOAD_METADATA_SCAN = 3;
 
 /** The front pages of a PDF read for its metadata, as many as the indexer reads for a library book. */
 const PDF_FRONT_PAGES = 20;
@@ -458,13 +469,15 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
         const py = printedYear(findPrintedYears(matter, matter.length, 2));
         if (py) out.year = py.year;
       }
-      if (!out.authors.length || mangledTitle(out.title)) {
-        const tp = scanTitlePage(matter, out.title);
+      // A title from the file name is a guess: the printed one replaces it when the pages show it.
+      const guessed = out.metadata_source === "filename" || mangledTitle(out.title);
+      if (!out.authors.length || guessed) {
+        const tp = scanTitlePage(matter, out.title, { findTitle: guessed });
         if (!out.authors.length && tp.authors.length) {
           out.authors = tp.authors.map(a => a.name);
           if (out.metadata_source === "filename") out.metadata_source = "titlepage";
         }
-        if (mangledTitle(out.title) && tp.title) {
+        if (guessed && tp.title) {
           out.title = tp.title.title;
           if (out.metadata_source === "filename") out.metadata_source = "titlepage";
         }
@@ -506,13 +519,14 @@ export function extractUploadMetadata(data: Buffer, ext: UploadExtension, filena
         const py = printedYear(findPrintedYears(pages, total, 2));
         if (py) out.year = py.year;
         else if (!out.year) out.year = parseYear(infoDate);
-        if (!out.authors.length || mangledTitle(out.title)) {
-          const tp = scanTitlePage(pages, out.title);
+        const guessed = out.metadata_source === "filename" || mangledTitle(out.title);
+        if (!out.authors.length || guessed) {
+          const tp = scanTitlePage(pages, out.title, { findTitle: guessed });
           if (!out.authors.length && tp.authors.length) {
             out.authors = tp.authors.map(a => a.name);
             if (out.metadata_source === "filename") out.metadata_source = "titlepage";
           }
-          if (mangledTitle(out.title) && tp.title) {
+          if (guessed && tp.title) {
             out.title = tp.title.title;
             if (out.metadata_source === "filename") out.metadata_source = "titlepage";
           }
@@ -845,22 +859,16 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     rec.extracted.author_order_aligned = true;
     saveStagedRecord(dir, rec);
   }
-  // A file staged before reading improved (UPLOAD_METADATA_SCAN) is read again: its identifiers and
-  // printed ISBNs are replaced, and authors and a year fill in only where neither file nor draft had any,
-  // so nothing a person typed is overwritten.
+  // A file staged before reading improved (UPLOAD_METADATA_SCAN) is read again. Its identifiers and
+  // printed ISBNs are replaced; its title, authors and year are too, where the draft still holds what was
+  // read before, so nothing a person typed is overwritten.
   if ((rec.extracted.metadata_scan ?? 0) < UPLOAD_METADATA_SCAN) {
     const fresh = extractUploadMetadata(fs.readFileSync(binPath), rec.ext, rec.filename, rec.problem);
-    rec.extracted.identifiers = fresh.identifiers;
-    rec.extracted.printed_isbns = fresh.printed_isbns;
-    if (!rec.extracted.authors.length && fresh.authors.length) {
-      rec.extracted.authors = fresh.authors;
-      if (!rec.draft.authors.length) rec.draft.authors = fresh.authors;
-    }
-    if (rec.extracted.year === null && fresh.year !== null) {
-      rec.extracted.year = fresh.year;
-      if (rec.draft.year === null) rec.draft.year = fresh.year;
-    }
-    rec.extracted.metadata_scan = UPLOAD_METADATA_SCAN;
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    if (same(rec.draft.title, rec.extracted.title)) rec.draft.title = fresh.title;
+    if (same(rec.draft.authors, rec.extracted.authors)) rec.draft.authors = fresh.authors;
+    if (same(rec.draft.year, rec.extracted.year)) rec.draft.year = fresh.year;
+    rec.extracted = { ...fresh, author_order_aligned: true };
     saveStagedRecord(dir, rec);
   }
 

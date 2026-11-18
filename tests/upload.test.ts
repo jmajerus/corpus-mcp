@@ -810,6 +810,29 @@ it("reads a PDF's title page past a long series list, and fills in a staged draf
   expect(listed.extracted.year).toBe(2020);
 });
 
+it("takes a publisher's download name for a guess: no ISBN, no capitals, and the printed title over it", () => {
+  const pdf = makePdf({ pages: [["Deployment of Microsoft Azure", "Cloud Solutions"], ["Copyright 2018 Packt Publishing", "Authors: Florian Klaffenbach, Ritesh Modi"]] });
+  const staged = stageUpload(c, config, "9781789954050-DEPLOYMENT_OF_MICROSOFT_AZURE_CLOUD_SOLUTIONS.pdf", pdf);
+  expect(staged.draft.title).toBe("Deployment of Microsoft Azure Cloud Solutions");
+  expect(staged.draft.authors).toEqual(["Florian Klaffenbach", "Ritesh Modi"]);
+  // With nothing printed to go by, the name still loses its ISBN and capitals.
+  const bare = extractUploadMetadata(makePdf({ pages: [["Chapter 1"]] }), "pdf", "9781789954050-THINKING_IN_CSS.pdf", null);
+  // Title case can't know an acronym ("CSS"); the printed title, when there is one, puts it right.
+  expect(bare.title).toBe("Thinking in Css");
+
+  // Staged by an older release: the draft that still holds what was read then is read again; an edited one isn't.
+  const file = path.join(uploadDir(config), `${staged.id}.json`);
+  const rec = JSON.parse(fs.readFileSync(file, "utf8"));
+  const old = { title: "9781789954050-DEPLOYMENT OF MICROSOFT AZURE CLOUD SOLUTIONS", authors: ["Florian Klaffenbach", "Apache Spark"] };
+  Object.assign(rec.extracted, old, { metadata_scan: 2 });
+  Object.assign(rec.draft, old, { authors: ["Florian Klaffenbach"] });
+  fs.writeFileSync(file, JSON.stringify(rec));
+  const [listed] = listStagedUploads(c, config).items.filter((i: { id: string }) => i.id === staged.id);
+  expect(listed.draft.title).toBe("Deployment of Microsoft Azure Cloud Solutions");
+  expect(listed.draft.authors).toEqual(["Florian Klaffenbach"]);
+  expect(listed.extracted.authors).toEqual(["Florian Klaffenbach", "Ritesh Modi"]);
+});
+
 it("reads a staged file's ISBNs again when it was staged with its adverts' ones", () => {
   const upload = makeAdvertisingEpub("Genetic Things", "9781680506204", "<p>(234 pages) ISBN: 9780306406157 $45.95</p>");
   const staged = stageUpload(c, config, "Genetic Things.epub", upload);
