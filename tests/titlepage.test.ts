@@ -45,6 +45,53 @@ describe("title-page scan", () => {
     expect(names(scanTitlePage([page(10, "Arduino II\nSystems\nSteven F. Barrett\nUniversity of Wyoming, Laramie, WY")], "Arduino II: Systems"))).toEqual(["Steven F. Barrett"]);
   });
 
+  it("takes an About-the-authors name only where a PDF paragraph starts, not a wrapped line's", () => {
+    const r = scanTitlePage([page(4, [
+      "Contributors", "", "About the authors", "",
+      "Pranav Shukla is the founder and CEO of Valens DataLabs, a technologist, husband, and",
+      "scalable, reactive, and data-driven applications using Java/Scala, the Hadoop ecosystem,",
+      "Apache Spark, and NoSQL databases. Pranav founded Valens DataLabs with the vision of",
+      "enjoys reading books, playing musical instruments, and playing tennis. ", "",
+      "I would like to thank Parth Mistry, Gopal Ghanghar, and Krishna Meet. Special thanks to Alex Bolduc,",
+      "Eddie Moojen, Wart Fransen, Vinod Patel, and Satyendra Bhatt for their help and",
+      "support.", "",
+      "Sharath Kumar M N did his master's in computer science at the University of Texas, Dallas,",
+      "USA. He is currently working as a senior principal architect at Broadcom.",
+    ].join("\n"))], "Learning Elastic Stack 7.0");
+    expect(names(r)).toEqual(["Pranav Shukla", "Sharath Kumar M N"]);
+  });
+
+  it("carries an About section without section names onto one more page, not every page after it", () => {
+    const r = scanTitlePage([
+      page(5, "About the authors\n\nMario Döbler is a Ph.D. student.\n"),
+      page(6, "Tim Großmann is a CS student.\n"),
+      page(7, "Preface\n\nJupyter Notebook is a web application.\n"),
+    ], "Data Visualization with Python");
+    expect(names(r)).toEqual(["Mario Döbler", "Tim Großmann"]);
+  });
+
+  it("reads Packt's credits: an Authors line, or an Authors heading over a name a line", () => {
+    expect(names(scanTitlePage([page(2, "Expert C++ Programming\nCopyright © 2018 Packt Publishing\nAuthors: Jeganathan Swaminathan, Maya Posch, Jacek Galowicz\nReviewer: Brandon James, Louis E. Mauget")], "Expert C++ Programming")))
+      .toEqual(["Jeganathan Swaminathan", "Maya Posch", "Jacek Galowicz"]);
+    expect(names(scanTitlePage([page(1, "R: Recipes for Analysis,\nVisualization and Machine Learning"), page(3, "Credits\nAuthors\nViswa Viswanathan\nShanthi Viswanathan \nYu-Wei, Chiu (David Chiu)\nReviewers\nKenneth D. Graves")], "R: Recipes")))
+      .toEqual(["Viswa Viswanathan", "Shanthi Viswanathan", "David Chiu"]);
+  });
+
+  it("finds the printed title for one made from a publisher's download name", () => {
+    expect(mangledTitle("9781789954050-DEPLOYMENT OF MICROSOFT AZURE CLOUD SOLUTIONS")).toBe(true);
+    const pages = [
+      page(1, "Learning Elastic Stack 7.0\nSecond Edition\nDistributed search, analytics, and visualization"),
+      page(2, "Fundamentals of Electronics\nBook 2\nAmplifiers: Analysis and Design"),
+      page(3, "Copyright\nFundamentals of Electronics: Book 2 Amplifiers: Analysis and Design\nThomas Kim"),
+    ];
+    expect(scanTitlePage(pages, "Learning Elastic Stack 70 Second Edition", { findTitle: true }).title?.title).toBe("Learning Elastic Stack 7.0 Second Edition");
+    // A readable title asked about takes no longer line that merely starts the same way.
+    expect(scanTitlePage(pages, "Learning Elastic Stack", { findTitle: true }).title).toBeNull();
+    // A title on one line beats the same title joined from several.
+    expect(scanTitlePage(pages, "fundamentalsofelectronics book2amplifiers analysisanddesign", { findTitle: true }).title?.title)
+      .toBe("Fundamentals of Electronics: Book 2 Amplifiers: Analysis and Design");
+  });
+
   it("never takes a run-together line as one person", () => {
     const r = scanTitlePage([page(1, "Mastering Rust\n\nRahul Sharma Vesa Kaihlavirta", "Title Page")], "Mastering Rust");
     expect(names(r)).toEqual([]);
@@ -73,7 +120,7 @@ describe("title-page scan", () => {
   it("matches a squashed title, edition and all", () => {
     expect(scanTitlePage([page(1, "Microsoft Power BI Cookbook Third Edition\n\nConvert raw data\n\nGreg Deckler\n\nBrett Powell", "Cover")], "microsoftpowerbicookbook 3rd edition").title?.title)
       .toBe("Microsoft Power BI Cookbook Third Edition");
-    expect(scanTitlePage([page(1, "Mastering Go\n\nFourth Edition")], "masteringgo fourthedition").title?.title).toBe("Mastering Go");
+    expect(scanTitlePage([page(1, "Mastering Go\n\nFourth Edition")], "masteringgo fourthedition").title?.title).toBe("Mastering Go Fourth Edition");
   });
 
   it("keeps a company's suffix with it, so a publisher holding the copyright is no author", () => {

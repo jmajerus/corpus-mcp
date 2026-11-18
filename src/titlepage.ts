@@ -8,13 +8,14 @@
  *   about        an "About the author(s)" section: each paragraph that opens with a name ("Rahul Sharma is…")
  *   by           a "by …" line ("BY WILLIAM STRUNK, Jr.")
  *   copyright    the copyright holder ("Copyright 2016 by Kelly Oliver", "© Kit Eason 2022"), not a publisher
+ *   credits      a credits list: "Authors: A, B, C", or an "Authors" heading over one name a line (Packt's)
  *   title_page   a name on its own line on the title page, which also orders the others. Found only there,
  *                it counts when its line holds one name, since "Rahul Sharma Vesa Kaihlavirta" is two.
  *                Or the line right under the book's full title, on its title or copyright page, when every
  *                name in it reads as one ("Nasser Kehtarnavaz, Fatemeh Saki, and Arian Azarang").
  */
 
-export type AuthorSource = "about" | "by" | "copyright" | "title_page";
+export type AuthorSource = "about" | "by" | "copyright" | "credits" | "title_page";
 
 export interface AuthorCandidate {
   name: string;
@@ -90,7 +91,7 @@ function splitNames(list: string): string[] {
 }
 
 /** A biography's opening name: "Rahul Sharma is…", "Ivo Pinto, CISSP, is…". */
-const LEAD = /^\s*((?:(?:Dr|Prof)\.?\s+)?\p{Lu}[\p{L}'’.-]*(?:\s+(?:\p{Lu}[\p{L}'’.-]*|de|da|di|del|der|van|von|la|le|bin|al)){1,3})(?=,|\s+(?:is|has|was|works|holds|serves|leads|lives|joined|started|spent|currently|began|brings|teaches)\b)/u;
+const LEAD = /^\s*((?:(?:Dr|Prof)\.?\s+)?\p{Lu}[\p{L}'’.-]*(?:\s+(?:\p{Lu}[\p{L}'’.-]*|de|da|di|del|der|van|von|la|le|bin|al)){1,3})(?=,|\s+(?:is|has|was|works|holds|serves|leads|lives|joined|started|spent|currently|began|brings|teaches|did|earned|received|graduated|studied|completed)\b)/u;
 
 const lineAt = (text: string, at: number, width = 90) => {
   const start = text.lastIndexOf("\n", at) + 1;
@@ -111,7 +112,7 @@ export const squash = (s: string) => s.toLowerCase().normalize("NFKD").replace(/
  * run together in lower case ("awscloudprojects", "masteringgo fourthedition").
  */
 export function mangledTitle(title: string): boolean {
-  return /^(?:unknown|untitled|no title)?$/i.test(title.trim()) || /\.(?:docx?|indd|pdf|epub|txt|rtf)$/i.test(title) || /^Microsoft Word - /i.test(title) || /^[A-Z]?\d{4,}_/.test(title)
+  return /^(?:unknown|untitled|no title)?$/i.test(title.trim()) || /^97[89]\d{10}[-_\s]/.test(title) || /\.(?:docx?|indd|pdf|epub|txt|rtf)$/i.test(title) || /^Microsoft Word - /i.test(title) || /^[A-Z]?\d{4,}_/.test(title)
     || title.split(/\s+/).some((w) => /^[a-z0-9+#-]{14,}$/.test(w))
     || (title === title.toLowerCase() && title.split(/\s+/).some((w) => /^[a-z0-9+#-]{10,}$/.test(w)));
 }
@@ -130,12 +131,24 @@ const isTitlePage = (p: ScanPage) => titlePageRank(p) > 0;
  * fourthedition"), or they may part only near the end, where an edition is written differently ("Third
  * Edition" for "3rd edition"). Title pages first.
  */
-function findTitle(pages: ScanPage[], calibreTitle: string): TitleCandidate | null {
-  const want = squash(calibreTitle.replace(/^(?:the|an?)\s+/i, "").replace(/^Microsoft Word - /i, "").replace(/\.\w{2,4}$/, "").replace(/^[A-Z]?\d{4,}_/, ""));
+function findTitle(pages: ScanPage[], calibreTitle: string, exact = false): TitleCandidate | null {
+  const want = squash(calibreTitle.replace(/^(?:the|an?)\s+/i, "").replace(/^Microsoft Word - /i, "").replace(/\.\w{2,4}$/, "").replace(/^[A-Z]?\d{4,}_/, "").replace(/^97[89]\d{10}[-_\s]+/, ""));
   if (want.length < 10) return null;
-  let best: TitleCandidate & { score: number } | null = null;
+  let best: TitleCandidate & { score: number; joined: boolean } | null = null;
   for (const p of [...pages.filter(isTitlePage), ...pages.filter((x) => !isTitlePage(x))]) {
-    for (const line of p.text.split("\n")) {
+    const lines = p.text.split("\n").map((l) => l.trim()).filter(Boolean);
+    // A title printed over two or three lines ("Learning Elastic Stack 7.0" / "Second Edition") is read
+    // whole: each line, then with the next ones joined on while the title goes on.
+    const runs = lines.flatMap((line, i) => {
+      const out = [{ text: line, joined: false }];
+      for (let j = i + 1; j < Math.min(lines.length, i + 3); j++) {
+        const text = `${out.at(-1)!.text} ${lines[j]}`;
+        if (!want.startsWith(squash(text))) break;
+        out.push({ text, joined: true });
+      }
+      return out;
+    });
+    for (const { text: line, joined } of runs) {
       let got = squash(line), common = 0;
       if (got.length < 10 || line.length > 160) continue;
       for (const candidate of [got, squash(line.replace(/^(?:the|an?)\s+/i, ""))]) {
@@ -146,14 +159,18 @@ function findTitle(pages: ScanPage[], calibreTitle: string): TitleCandidate | nu
       if (common < 10) continue;
       const shorter = Math.min(got.length, want.length);
       if (common < shorter && (common < 15 || common < 0.6 * shorter)) continue;
-      if (!best || common > best.score) best = { title: line.replace(/\s+/g, " ").trim(), page: p.page_index + 1, score: common };
+      if (exact && (common !== want.length || got.length !== want.length)) continue;
+      // On a tie, a title printed on one line (a copyright page's, punctuated) beats one joined from several.
+      if (!best || common > best.score || (common === best.score && best.joined && !joined)) {
+        best = { title: line.replace(/\s+/g, " ").trim(), page: p.page_index + 1, score: common, joined };
+      }
     }
   }
   return best ? { title: best.title, page: best.page } : null;
 }
 
-/** Author candidates and, for a mangled Calibre title, the printed title, from a book's front matter and "about" pages. */
-export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePageScan {
+/** Author candidates and, for a mangled Calibre title (or when asked), the printed title, from a book's front matter and "about" pages. */
+export function scanTitlePage(pages: ScanPage[], calibreTitle: string, opts: { findTitle?: boolean } = {}): TitlePageScan {
   const found = new Map<string, AuthorCandidate>();
   const add = (raw: string, source: AuthorSource, page: ScanPage, at: number) => {
     const name = personName(raw);
@@ -172,10 +189,20 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
   // next pages: it carries on while they follow on directly, until a boundary or another section.
   const ABOUT = /\babout the authors?\b/i;
   const BOUNDARY = /\babout the (?:technical )?(?:reviewers?|editors?|translators?|illustrators?)\b|\babout the cover\b/i;
-  let about: { page_index: number; section: string | null } | null = null;
+  // A PDF's text breaks at every printed line, so a line that opens with a name may be the middle of a
+  // sentence ("Apache Spark, and NoSQL databases."): a name counts only where a paragraph starts, after a
+  // blank line or a finished sentence. Without section names to follow, the section carries on for one
+  // page at most, not into every page after it.
+  const SENTENCE_END = /[.!?:]["”’)]?$/;
+  type AboutRun = { page_index: number; section: string | null; last: string; carried: number };
+  let about: AboutRun | null = null;
   for (const p of pages) {
     const text = p.text;
-    const continues = !!about && p.page_index === about.page_index + 1 && (p.section_path === about.section || ABOUT.test(p.section_path ?? ""));
+    const continues: boolean = !!about && p.page_index === about.page_index + 1
+      && (p.section_path === about.section || ABOUT.test(p.section_path ?? ""))
+      && (p.section_path !== null || about.carried < 1);
+    const before: AboutRun | null = about;
+    const carried: number = before ? before.carried : 0;
     const heading = text.match(ABOUT);
     const from = heading ? heading.index! + heading[0].length : continues || ABOUT.test(p.section_path ?? "") ? 0 : -1;
     about = null;
@@ -183,11 +210,19 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
       const rest = text.slice(from);
       const stop = rest.search(BOUNDARY);
       const section = stop < 0 ? rest : rest.slice(0, stop);
-      for (const para of section.split(/\n+/)) {
-        const lead = para.match(LEAD);
-        if (lead) add(lead[1], "about", p, from + section.indexOf(para));
+      const lines = section.split("\n");
+      // The page's first line follows on from the last page's when the section carried over.
+      let previous: string = !heading && continues && before ? before.last : "";
+      let blank = !previous;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) { blank = true; continue; }
+        const lead = (blank || SENTENCE_END.test(previous)) && trimmed.match(LEAD);
+        if (lead) add(lead[1], "about", p, from + section.indexOf(line));
+        previous = trimmed;
+        blank = false;
       }
-      if (stop < 0) about = { page_index: p.page_index, section: p.section_path };
+      if (stop < 0) about = { page_index: p.page_index, section: p.section_path, last: previous, carried: continues && !heading ? carried + 1 : 0 };
     }
     for (const line of text.split("\n")) {
       const at = text.indexOf(line);
@@ -205,7 +240,33 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
     }
   }
 
-  const title = mangledTitle(calibreTitle) ? findTitle(pages, calibreTitle) : null;
+  // Credits: "Authors: Jeganathan Swaminathan, Maya Posch, Jacek Galowicz" on a copyright page, or an
+  // "Authors" heading over a name a line, up to the next role ("Reviewers"). A name printed with another
+  // in brackets, "Yu-Wei, Chiu (David Chiu)", is read by whichever form is a name.
+  const creditName = (raw: string) => {
+    const bracket = /\(([^)]*)\)/.exec(raw)?.[1] ?? "";
+    const bare = raw.replace(/\([^)]*\)/g, " ").trim();
+    return personName(bare) ? bare : personName(bracket) ? bracket : null;
+  };
+  for (const p of pages.filter((x) => x.page_index < 20)) {
+    const lines = p.text.split("\n").map((l) => l.trim());
+    lines.forEach((line, i) => {
+      const inline = /^(?:authors?|written by)\s*:\s*(.{3,200})$/i.exec(line);
+      if (inline) for (const n of splitNames(inline[1])) add(n, "credits", p, p.text.indexOf(line));
+      if (!/^authors?$/i.test(line)) return;
+      for (const next of lines.slice(i + 1, i + 13).filter(Boolean)) {
+        const name = creditName(next);
+        if (!name) break;
+        add(name, "credits", p, p.text.indexOf(next));
+      }
+    });
+  }
+
+  // A file-name title ("awscloudprojects") takes the printed line it starts like; a readable one asked
+  // about ("Nodejs Complete Reference Guide") takes only one that reads the same but for case and
+  // punctuation, never a longer line that merely starts the same way ("Mystic River, the PDF").
+  const mangled = mangledTitle(calibreTitle);
+  const title = (opts.findTitle ?? mangled) ? findTitle(pages, calibreTitle, !mangled) : null;
   const titles = [calibreTitle, title?.title ?? ""].map(squash).filter((t) => t.length >= 6);
 
   // The title page orders the names it shows, and adds a name printed alone on its own line.

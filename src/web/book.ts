@@ -98,11 +98,11 @@ function render() {
       y.candidates.map((p) => "<tr><td>" + p.year + "</td><td>" + esc(yearKinds[p.kind] || p.kind) + "</td><td>" + (p.position === "back" ? "back page " : "page ") + p.page +
         '</td><td class="note">' + esc(p.context) + "</td></tr>").join("") + "</tbody></table>" : "") + "</div>";
   const tp = b.title_page;
-  const fromLabels = { about: "About the author", by: "a by-line", copyright: "the copyright line", title_page: "the title page" };
+  const fromLabels = { about: "About the author", by: "a by-line", copyright: "the copyright line", credits: "the credits", title_page: "the title page" };
   const authorNote = { calibre: "", printed: "Review the correction below and apply it to Calibre.",
     none: "Enter the author from the cover or title page below.", merged: "Calibre has several people in one author record; these are printed separately in the book." };
   const corroborated = tp.authors.filter(a => a.sources.includes("title_page"));
-  const candidates = corroborated.length ? corroborated : tp.authors.filter(a => a.sources.includes("about") || a.sources.includes("by"));
+  const candidates = corroborated.length ? corroborated : tp.authors.filter(a => a.sources.includes("about") || a.sources.includes("by") || a.sources.includes("credits"));
   const needsAuthor = tp.author_state !== "calibre";
   const authorValues = needsAuthor && candidates.length ? candidates.map(a => a.name) : tp.author_state === "none" ? [] : b.authors.map(a => a.replaceAll("|", ","));
   const needsYear = y.calibre === null;
