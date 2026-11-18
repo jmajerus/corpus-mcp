@@ -181,7 +181,7 @@ inside the folder. Kindle `.kfx-zip` archives need calibre's DeDRM plugin,
 with the account's keyfile imported, and KFX Input; one still encrypted after
 the add is removed again and counts as failed. The convert job then gives
 every book without an EPUB or PDF one: an EPUB from MOBI, AZW, AZW3, PRC or KFX
-(for chapter locators), or the PDF inside a print-replica KFX. For browser uploads, use `/admin/upload` (`upload-preview` / `upload-apply`, backed by `tools/calibre-upload.py`), which checks for duplicates first, attaches missing formats to existing records, and converts MOBI/AZW/KFX files automatically.
+(for chapter locators), or the PDF inside a print-replica KFX. For browser uploads, use `/admin/upload` (`upload-preview` / `upload-apply`, backed by `tools/calibre-upload.py`), which checks for duplicates first, attaches missing formats to existing records, and converts MOBI/AZW/KFX files automatically. A new book whose cover would be a plain title page gets the cover found for it (an image beside it in the intake folder, or the Open Textbook Library); the covers job (`covers-apply`, `tools/calibre-covers.py`) does the same for books already in the library.
 
 ## Master ebook directory
 

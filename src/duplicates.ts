@@ -10,6 +10,7 @@ import { planAnchorMoves } from "./anchors.js";
 import { type IsbnCandidate, isbn13, ownPrintedIsbns, validIsbn } from "./isbn.js";
 import { type BookContents, contentFindings, contentProfile } from "./duplicate-contents.js";
 import { mangledTitle } from "./titlepage.js";
+import { GREYSCALE_COVER, pixmapLook } from "./covers.js";
 
 export const normal = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 /** Normalize a single author name into sorted tokens so "Last, First" and "First Last" produce the same key. */
@@ -221,28 +222,11 @@ export function coverColour(file: string): number | null {
   try { const st = fs.statSync(file); stamp = `${file}|${st.size}|${st.mtimeMs}`; } catch { return null; }
   if (coverColours.has(stamp)) return coverColours.get(stamp)!;
   let result: number | null = null;
-  try {
-    let pix = new mupdf.Image(fs.readFileSync(file)).toPixmap();
-    if (pix.getNumberOfComponents() - (pix.getAlpha() ? 1 : 0) === 1) result = 0;
-    else {
-      if (pix.getNumberOfComponents() - (pix.getAlpha() ? 1 : 0) !== 3) pix = pix.convertToColorSpace(mupdf.ColorSpace.DeviceRGB);
-      const w = pix.getWidth(), h = pix.getHeight(), n = pix.getNumberOfComponents(), stride = pix.getStride(), px = pix.getPixels();
-      const step = Math.max(1, Math.round(Math.sqrt((w * h) / 40000)));
-      let k = 0, srg = 0, syb = 0, qrg = 0, qyb = 0;
-      for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
-        const o = y * stride + x * n, r = px[o], g = px[o + 1], b = px[o + 2];
-        const rg = r - g, yb = (r + g) / 2 - b;
-        srg += rg; syb += yb; qrg += rg * rg; qyb += yb * yb; k++;
-      }
-      const mrg = srg / k, myb = syb / k;
-      result = Math.sqrt(Math.max(0, qrg / k - mrg * mrg) + Math.max(0, qyb / k - myb * myb)) + 0.3 * Math.hypot(mrg, myb);
-    }
-  } catch { result = null; }
+  try { result = pixmapLook(new mupdf.Image(fs.readFileSync(file)).toPixmap()).colour; } catch { result = null; }
   coverColours.set(stamp, result);
   return result;
 }
-/** Below this a cover reads as black and white. */
-export const GREYSCALE_COVER = 5;
+export { GREYSCALE_COVER };
 
 /** For one possible keeper: how many of a record's quotes would move there, and the ones that need a person. */
 export interface AnchorMoveSummary { moves: number; orphaned: number; review: { quote_id: number; reason: string }[] }

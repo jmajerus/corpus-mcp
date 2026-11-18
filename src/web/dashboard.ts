@@ -128,6 +128,7 @@ function renderActions() {
     backup: "Copy data.db (pinned citekeys, proposals, jobs, change log) to the backup directory.",
     tags: "Make Calibre match every approved category set: adds and removes vocabulary tags. Preview lists each book; apply runs that list.",
     cleanup: "Remove non-subject tags (BISAC codes, publisher names, statuses, pasted descriptions) from Calibre.",
+    covers: "Books whose cover is a plain title page (most Pressbooks and LaTeX PDFs) or missing get the cover the Open Textbook Library shows for them. The preview shows each one beside the current cover; the apply keeps the old cover in the backup.",
     convert: "Give every book with no EPUB or PDF a readable copy: an EPUB from MOBI, AZW, AZW3, PRC or KFX, or the PDF inside a print-replica KFX. DRM-encrypted files are listed, not converted.",
     zotero: "Fetch what changed in the Zotero library since the last sync (it also runs on its own timer), and pin the citekeys of matched books.",
   };

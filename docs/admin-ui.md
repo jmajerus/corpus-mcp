@@ -82,6 +82,7 @@ Amber and red numbers are the ones that need attention.
 | Apply approved tags to Calibre | Preview, then apply |
 | Remove non-subject tags from Calibre | Preview, then apply; type extra tags to remove in the box |
 | Convert books that have no EPUB or PDF | Preview, then apply |
+| Find covers for books with plain title-page covers | Preview, then apply |
 | Sync from Zotero now | Run at once; normally every 30 minutes |
 | Scan the master ebook directory | Opens Intake. The scan runs only when you start it there |
 
@@ -95,6 +96,16 @@ and add them through DeDRM. Each conversion stops after `CONVERT_TIMEOUT`
 seconds (default 600). Apply converts only the books the preview listed, and
 skips any whose record, formats or file bytes changed since. Its card links to **Books with no readable file**, the
 Books page filtered to `problem=no_file`.
+
+The covers job is for books whose cover is a plain page of text on white, or missing. Calibre makes a
+PDF's cover from its first page, and most Pressbooks and LaTeX textbooks start with a plain title page and
+keep their cover art on the publisher's site. The preview looks every cover in the library over and, for
+each plain one, looks the book up in the Open Textbook Library's public catalogue (downloaded weekly beside
+data.db). A book matches only by ISBN, or by its title (ignoring edition statements such as "2e") with an
+author's surname in common; anything weaker matches nothing, so a book never gets another book's cover. The
+preview shows each current cover beside the one found. Apply (`covers-apply`, `tools/calibre-covers.py`)
+backs up `metadata.db`, saves each replaced cover.jpg beside that backup, and skips any book whose cover
+changed since the preview. Set `CORPUS_COVER_LOOKUP=off` to turn lookups off.
 
 Starting a job opens its page. Below the actions are the recent jobs and the
 refresh history.
@@ -376,6 +387,11 @@ Calibre:
      **Add as separate book (another edition)** if it is a distinct edition to keep.
    - **No match:** defaults to **Add as new book**, with editable title, authors,
      publication year, tags, and a live generated citekey preview.
+   - **Cover:** a new book whose first page is a plain title page is looked up in the
+     Open Textbook Library in the background, the same way as the covers job. An image
+     saved next to the file in the intake folder whose name includes the title (such as
+     `OER-Textbook-Cover-General-Microbiology-350x453.png`) is used first. The card shows
+     the cover found with **Use this cover**; untick it to keep Calibre's own.
 3. Choose **Preview selected** to verify the batch against the live Calibre database on
    the source host (`upload-preview`), then **Apply this preview** (`upload-apply` via
    `tools/calibre-upload.py`) to back up `metadata.db`, run DeDRM and EPUB/PDF

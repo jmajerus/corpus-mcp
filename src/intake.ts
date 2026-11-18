@@ -561,7 +561,7 @@ export function stageIntakeBatch(c: Corpus, config: Config, actor?: string, limi
       note.run("Changed since the last scan. Scan again before staging it.", now(), row.path);
       continue;
     }
-    const evaluated = stageUpload(c, config, path.posix.basename(row.path), data, actor);
+    const evaluated = stageUpload(c, config, path.posix.basename(row.path), data, actor, { sourceDir: path.dirname(real) });
     const tags = intakeTags(row.path);
     if (tags.length && !evaluated.draft.tags.length) updateStagedUpload(c, config, evaluated.id, { tags });
     mark.run(evaluated.id, now(), row.path);

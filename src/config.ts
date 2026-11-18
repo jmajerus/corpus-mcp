@@ -71,6 +71,8 @@ export interface Config {
   terminology?: TerminologyConfig;
   admin?: AdminConfig;
   public?: PublicConfig;
+  /** Look up covers for books whose cover is a plain title page in the Open Textbook Library (src/covers.ts). Off when absent. */
+  coverLookup?: boolean;
   host: string;
   port: number;
 }
@@ -164,6 +166,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       quoteMcpUrl: /^off$/i.test(env.CORPUS_QUOTE_MCP_URL ?? "") ? undefined : (env.CORPUS_QUOTE_MCP_URL || "http://quote-mcp.localdomain:8000").replace(/\/+$/, ""),
     },
     public: publicConfig(env),
+    coverLookup: !/^(?:off|false|no|0)$/i.test(env.CORPUS_COVER_LOOKUP ?? ""),
     host: env.CORPUS_HOST ?? "0.0.0.0",
     port: Number.parseInt(env.CORPUS_PORT ?? "8000", 10),
   };

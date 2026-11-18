@@ -88,6 +88,9 @@ async function load() {
         (it.upload_applied ? '<p>' + (it.upload_applied.action === 'add_book' ? 'Added new book with ' : 'Added format to existing book: ') + esc((it.upload_applied.formats || []).join(', ')) + '. Backup: ' + esc(it.upload_applied.backup) + '</p>' : '') +
         (it.metadata ? '<div>' + (it.metadata.partial ? '<strong>Partially applied</strong><br>' : '') + '<span class="chg del">' + esc(it.metadata.before.title) + ' · ' + esc(it.metadata.before.authors.join("; ")) + " · " + esc(it.metadata.before.year ?? "year unknown") + '</span><br><span class="chg add">' + esc(it.metadata.after.title) + ' · ' + esc(it.metadata.after.authors.join("; ")) + " · " + esc(it.metadata.after.year ?? "year unknown") + '</span></div>' : "") +
         (it.convert_skipped ? '<span class="status-failed">Not converted: ' + esc(it.convert_skipped === "encrypted" ? "DRM-encrypted; download it again and add it through DeDRM" : it.convert_skipped === "unrecognized" ? "unrecognized file" : it.convert_skipped) + (it.source_format ? " (" + esc(String(it.source_format).toUpperCase()) + ")" : "") + "</span>" : "") +
+        (it.cover_found ? coverReview(it, library, j.mode) : "") +
+        (it.cover_set ? '<p>Cover set from ' + esc(it.cover_set.source === "otl" ? "the Open Textbook Library" : it.cover_set.source) + ' (' + esc(it.cover_set.label) + '). Previous cover saved in ' + esc(it.cover_set.backup) + '</p>' : "") +
+        (it.cover_skipped ? '<p class="status-failed">Cover not set: ' + esc(it.cover_skipped) + '</p>' : "") +
         (it.added_format ? '<span class="chg add"><b>+</b>' + esc(String(it.added_format).toUpperCase()) + " from " + esc(String(it.source_format).toUpperCase()) + "</span>" : "") +
         "</td></tr>").join("") + "</tbody></table></div>"
     : "";
@@ -114,6 +117,15 @@ function duplicateReview(r, library, calibreLink, contents) {
     (members.length > 1 ? '<details><summary>Compare source metadata and formats</summary><div class="scroll"><table><thead><tr><th>Field</th>' + members.map((m, i) => '<th>' + (i ? 'Duplicate ' : 'Keeper ') + esc(m.id) + '</th>').join('') + '</tr></thead><tbody>' + ['title','authors','pubdate','publisher','comments','series','languages','rating','tags','identifiers'].map(k => '<tr><th>' + esc(k) + '</th>' + members.map(m => '<td>' + esc(JSON.stringify(m.values[k] ?? '')) + '</td>').join('') + '</tr>').join('') + '<tr><th>formats</th>' + members.map(m => '<td>' + esc(Object.keys(m.formats).join(', ')) + '</td>').join('') + '</tr></tbody></table></div><p>The keeper’s populated fields take precedence. Missing descriptive fields and identifiers are copied from the first duplicate that has them.</p></details>' : '') + '</div>';
 }
 
+function coverReview(it, library, mode) {
+  const c = it.cover_found;
+  const img = (src, alt) => '<img src="' + esc(src) + '" alt="' + esc(alt) + '" loading="lazy" style="width:80px;max-height:120px;object-fit:contain;border:1px solid var(--border)">';
+  return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+    img("/api/books/" + encodeURIComponent(library + ":" + it.calibre_id) + "/cover", "Current cover") + " → " +
+    img("/api/admin/covers/" + c.sha256 + "." + c.ext, "Cover found") +
+    '<span>' + (mode === "preview" ? "Would set" : "Found") + ' the cover from the Open Textbook Library' + (c.page_url ? ' (<a href="' + esc(c.page_url) + '" target="_blank" rel="noopener">' + esc(c.label) + '</a>)' : "") + '</span></div>';
+}
+
 function uploadReview(r, library, calibreLink) {
   const fmts = (r.add_formats || []).join(', ') || r.source_format;
   const conv = r.convert_to && r.convert_to !== r.source_format ? ' (converted from ' + r.source_format + ' to ' + r.convert_to + ')' : '';
@@ -123,6 +135,7 @@ function uploadReview(r, library, calibreLink) {
   const tags = (r.plan.tags || []).map(t => '<span class="chg add"><b>+</b>' + esc(LABELS.get(t) || t) + '</span>').join('');
   return '<div><p>' + head + '</p><p>File: <code>' + esc(r.filename) + '</code> → ' + esc(fmts + conv) + '</p>' +
     (tags ? '<p>Tags: ' + tags + '</p>' : '') +
+    (r.plan.cover ? '<p>Cover: ' + (r.plan.cover.source === 'otl' ? 'from the Open Textbook Library (' + esc(r.plan.cover.label || '') + ')' : 'from ' + esc(r.plan.cover.label || 'an image in the intake folder')) + '</p>' : '') +
     (r.blockers || []).map(b => '<p class="status-failed">' + esc(b) + '</p>').join('') +
     '</div>';
 }

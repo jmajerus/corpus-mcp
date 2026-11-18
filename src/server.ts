@@ -13,7 +13,8 @@ import { type About, type Deployed, aboutSource } from "./about.js";
 import { duplicateGroups, dismissDuplicate, type DuplicateGroupSelection } from "./duplicates.js";
 import { DUPLICATES_HTML } from "./web/duplicates.js";
 import { listIntake, returnIntakeStaging, skipIntakeFiles, skipIntakeStaging, stageIntakeBatch, unskipIntakeFiles } from "./intake.js";
-import { MAX_UPLOAD_BYTES, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
+import { cachedCoverFile } from "./library-covers.js";
+import { MAX_UPLOAD_BYTES, stagedCoverFile, clearStagedUploads, listStagedUploads, removeStagedUpload, stageUpload, updateStagedUpload, type UploadSelection } from "./upload.js";
 import { INTAKE_HTML } from "./web/intake.js";
 import { HEALTH_HTML } from "./web/health.js";
 import { healthView, latestHealthReport } from "./health.js";
@@ -405,7 +406,7 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       "/admin/zotero": ZOTERO_HTML, "/admin/taxonomy": TAXONOMY_HTML, "/admin/about": ABOUT_HTML,
     };
     const bookPath = path.match(/^\/api\/books\/([^/]+)(\/categories|\/citekey|\/pages|\/quotes|\/metadata|\/metadata-preview|\/cover)?$/);
-    const uploadItemPath = path.match(/^\/api\/upload\/files\/([^/]+)(\/remove)?$/);
+    const uploadItemPath = path.match(/^\/api\/upload\/files\/([^/]+)(\/remove|\/cover)?$/);
     const anchorPath = path.match(/^\/api\/anchors\/(\d+)$/);
     if (req.method === "GET" && path === "/review") res.writeHead(302, { location: "/admin/proposals" }).end();
     else if (req.method === "GET" && pages[path]) html(pages[path]);
@@ -537,6 +538,11 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       } else {
         sendJson(res, 400, { error: "Send application/octet-stream with the x-upload-filename header." });
       }
+    }
+    else if (req.method === "GET" && uploadItemPath?.[2] === "/cover") {
+      const cover = stagedCoverFile(config, decodeURIComponent(uploadItemPath[1]));
+      if (cover && fs.existsSync(cover.file)) res.writeHead(200, { "content-type": cover.type, "cache-control": "private, max-age=60" }).end(fs.readFileSync(cover.file));
+      else sendJson(res, 404, { error: "No cover found for that file." });
     }
     else if (req.method === "POST" && uploadItemPath && !uploadItemPath[2]) {
       const by = await writer(); if (by === null) return;
@@ -676,6 +682,10 @@ async function serveWeb(web: Web, req: http.IncomingMessage, res: http.ServerRes
       sendJson(res, 200, await adminMetrics(c, config, VERSION));
     } else if (req.method === "GET" && path === "/api/admin/jobs") {
       sendJson(res, 200, { kinds: JOB_KINDS, ...runner.list(Math.min(Math.max(Number(url.searchParams.get("limit")) || 30, 1), 500)) });
+    } else if (req.method === "GET" && path.startsWith("/api/admin/covers/")) {
+      const cover = cachedCoverFile(config, path.slice("/api/admin/covers/".length));
+      if (cover) res.writeHead(200, { "content-type": cover.type, "cache-control": "private, max-age=3600" }).end(fs.readFileSync(cover.file));
+      else sendJson(res, 404, { error: "No such cover." });
     } else if (req.method === "GET" && /^\/api\/admin\/jobs\/\d+$/.test(path)) {
       sendJson(res, 200, runner.get(Number(path.split("/").at(-1))));
     } else if (req.method === "POST" && path === "/api/admin/jobs") {
