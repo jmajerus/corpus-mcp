@@ -10,6 +10,8 @@
  *   copyright    the copyright holder ("Copyright 2016 by Kelly Oliver", "© Kit Eason 2022"), not a publisher
  *   title_page   a name on its own line on the title page, which also orders the others. Found only there,
  *                it counts when its line holds one name, since "Rahul Sharma Vesa Kaihlavirta" is two.
+ *                Or the line right under the book's full title, on its title or copyright page, when every
+ *                name in it reads as one ("Nasser Kehtarnavaz, Fatemeh Saki, and Arian Azarang").
  */
 
 export type AuthorSource = "about" | "by" | "copyright" | "title_page";
@@ -33,7 +35,7 @@ export interface TitlePageScan {
 }
 
 /** Bump when scanTitlePage changes, so the indexer recomputes stored candidates (no re-extraction). */
-export const TITLE_PAGE_SCAN_VERSION = 5;
+export const TITLE_PAGE_SCAN_VERSION = 6;
 
 export interface ScanPage { page_index: number; section_path: string | null; text: string }
 
@@ -79,11 +81,11 @@ export function personName(raw: string): string | null {
 }
 
 /**
- * Splits "A, B and C" into names, keeping a ", Jr." with its name and a ", Inc." with its company, so
+ * Splits "A, B and C" (or "A, B, and C") into names, keeping a ", Jr." with its name and a ", Inc." with its company, so
  * "Alfred A. Knopf, Inc." stays whole and is seen to be a publisher.
  */
 function splitNames(list: string): string[] {
-  return list.split(/\s*(?:,(?!\s*(?:jr|sr|ii|iii|iv|inc|llc|ltd|co|corp|plc|gmbh|ag|s\.?a|pty|limited|incorporated)\b)|;|\s+and\s+|\s*&\s*)\s*/i)
+  return list.split(/\s*(?:,\s*(?:and|&)\s+|,(?!\s*(?:jr|sr|ii|iii|iv|inc|llc|ltd|co|corp|plc|gmbh|ag|s\.?a|pty|limited|incorporated)\b)|;|\s+and\s+|\s*&\s*)\s*/i)
     .map((s) => s.trim()).filter(Boolean);
 }
 
@@ -249,6 +251,37 @@ export function scanTitlePage(pages: ScanPage[], calibreTitle: string): TitlePag
   // chapter or a contents page, and its short lines are headings ("Key Points", "Covalent Bonds").
   if (lone.length > MAX_LONE_NAMES) {
     for (const k of lone) { found.delete(k); order.splice(order.indexOf(k), 1); }
+  }
+  // The line under the book's full title: on a title page that follows a series' list of its other books
+  // (Morgan & Claypool's), or on a copyright page that repeats title and authors. Every name in it must
+  // read as one, so an affiliation, or a name that lost letters to a ligature ("omas F. Schubert"), keeps
+  // the whole line out rather than giving half the authors. One name alone holds at most three words
+  // (as above), a "by" line is the by-line's, and a page the outline marks as the title page is the only
+  // one read when there is one.
+  const fullTitles = titles.filter((t) => t.length >= 10);
+  const marked = pages.filter((x) => titlePageRank(x) === 2);
+  for (const p of marked.length ? marked : pages.filter((x) => x.page_index < 20)) {
+    const lines = p.text.split("\n").map((l) => l.trim()).filter(Boolean);
+    for (let k = 0; k + 1 < lines.length; k++) {
+      let run = "";
+      let under = false;
+      for (let i = k; i >= Math.max(0, k - 5) && !under; i--) {
+        run = squash(lines[i]) + run;
+        under = fullTitles.includes(run);
+      }
+      if (!under) continue;
+      const next = lines[k + 1];
+      if (/^(?:written\s+|edited\s+)?by\b/i.test(next)) continue;
+      const parts = splitNames(next);
+      if (!parts.length || !parts.every((n) => personName(n))) continue;
+      if (parts.length === 1 && next.split(/\s+/).length > 3) continue;
+      for (const n of parts) {
+        add(n, "title_page", p, p.text.indexOf(lines[k + 1]));
+        const key = squash(personName(n)!.replace(/,.*$/, ""));
+        if (!found.get(key)!.sources.includes("title_page")) found.get(key)!.sources.push("title_page");
+        if (!order.includes(key)) order.push(key);
+      }
+    }
   }
   const authors = [...order.map((k) => found.get(k)!), ...[...found.entries()].filter(([k]) => !order.includes(k)).map(([, v]) => v)];
   return { authors, title };
