@@ -4,7 +4,9 @@
 Reads a batch upload plan on stdin:
 {"library": "main", "items": [{"id", "filename", "ext", "format", "target_formats", "primary_format",
 "converts_to", "sha256", "size", "action": "add_book" | "add_format", "target": {id, uuid, title} | null,
-"title", "authors", "year", "tags", "known_matches": [{id, uuid}], "data_base64": "..."}, ...]}.
+"title", "authors", "year", "tags", "known_matches": [{id, uuid}], "data_base64": "...",
+optionally "cover": {sha256, ext, source, label} with "cover_base64": "..."}, ...]}. A cover replaces the
+one Calibre would make from the file (corpus-mcp found it because the file's own is a plain title page).
 
 Preview inspects each file (running import plugins such as DeDRM on .kfx-zip when available, sniffing
 DRM and format validity) and checks the live Calibre library for exact file duplicates, unreviewed
@@ -35,6 +37,7 @@ MAX_BATCH_BYTES = 250 * 1024 * 1024
 MAX_UNCOMPRESSED_ZIP_BYTES = 250 * 1024 * 1024
 MAX_ZIP_ENTRIES = 10000
 ALLOWED_EXTS = {'epub', 'pdf', 'mobi', 'azw', 'azw3', 'prc', 'kfx', 'kfx-zip'}
+MAX_COVER_BYTES = 10 * 1024 * 1024
 
 
 class UploadReviewError(Exception):
@@ -211,7 +214,35 @@ def read_plan(stream):
             known = item.get('known_matches', [])
             if not isinstance(known, list) or not all(valid_ref(r) for r in known):
                 raise UploadReviewError('Invalid known_matches list.')
+            cover_bytes(item)
     return items
+
+
+def cover_bytes(item):
+    """The checked bytes of an item's replacement cover, or None when it has none."""
+    cover = item.get('cover')
+    if cover is None:
+        if 'cover_base64' in item:
+            raise UploadReviewError('A cover was sent without its description.')
+        return None
+    if (not isinstance(cover, dict) or cover.get('ext') not in ('jpg', 'png') or cover.get('source') not in ('intake', 'otl')
+            or not isinstance(cover.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', cover['sha256'])):
+        raise UploadReviewError('Invalid cover description.')
+    raw = item.get('cover_base64')
+    if not isinstance(raw, str) or not raw:
+        raise UploadReviewError(f'Missing cover for {item.get("filename")}.')
+    if len(raw) > MAX_COVER_BYTES * 4 // 3 + 4:
+        raise UploadReviewError('The cover is larger than 10 MB.')
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except ValueError as error:
+        raise UploadReviewError('The cover is not valid base64.') from error
+    if hashlib.sha256(data).hexdigest() != cover['sha256']:
+        raise UploadReviewError('The cover does not match its checksum.')
+    magic = (b'\xff\xd8',) if cover['ext'] == 'jpg' else (b'\x89PNG\r\n\x1a\n',)
+    if not data.startswith(magic):
+        raise UploadReviewError('The cover is not the image type it claims.')
+    return data
 
 
 def sniff_file(path, ext):
@@ -412,13 +443,13 @@ class UploadReview:
         else:
             self.add_formats = list(self.desired_formats)
 
-        plan_clean = {k: v for k, v in item.items() if k not in ('data_base64', 'reviewed')}
+        plan_clean = {k: v for k, v in item.items() if k not in ('data_base64', 'cover_base64', 'reviewed')}
         self.fingerprint = hashlib.sha256(
             json.dumps([plan_clean, self.source_format, self.convert_to, self.add_formats, self.target_state], sort_keys=True, default=str).encode()
         ).hexdigest()
 
     def summary(self):
-        plan_clean = {k: v for k, v in self.item.items() if k != 'data_base64'}
+        plan_clean = {k: v for k, v in self.item.items() if k not in ('data_base64', 'cover_base64')}
         plan_clean['reviewed'] = self.fingerprint
         return {
             'plan': plan_clean,
@@ -503,7 +534,7 @@ def apply_review(api, library, review, saved, backup):
     title = item['title'].strip()
     authors = [a.strip() for a in item['authors'] if a.strip()]
     mi = Metadata(title, authors)
-    cover_bytes = None
+    cover = None
     try:
         from calibre.ebooks.metadata.meta import get_metadata
         with review.effective_path.open('rb') as stream:
@@ -515,9 +546,11 @@ def apply_review(api, library, review, saved, backup):
         if getattr(ext_mi, 'identifiers', None):
             mi.set_identifiers(dict(ext_mi.identifiers))
         if getattr(ext_mi, 'cover_data', None) and ext_mi.cover_data[1]:
-            cover_bytes = ext_mi.cover_data[1]
+            cover = ext_mi.cover_data[1]
     except Exception:
         pass
+    # A cover corpus-mcp found replaces the plain title page Calibre made from the file.
+    cover = cover_bytes(item) or cover
 
     mi.title = title
     mi.authors = authors
@@ -544,9 +577,9 @@ def apply_review(api, library, review, saved, backup):
             added_fmts.append(fmt)
         if not added_fmts:
             raise UploadReviewError(f'No format could be added to new book {book_id}.')
-        if cover_bytes:
+        if cover:
             try:
-                api.set_cover({book_id: cover_bytes})
+                api.set_cover({book_id: cover})
             except Exception:
                 pass
         api.dump_metadata([book_id])
@@ -583,7 +616,7 @@ def main():
                         review = UploadReview(api, args.library, item, work_dir)
                     except UploadReviewError as error:
                         if not args.apply:
-                            plan_clean = {k: v for k, v in item.items() if k != 'data_base64'}
+                            plan_clean = {k: v for k, v in item.items() if k not in ('data_base64', 'cover_base64')}
                             event(calibre_id, None, title, upload_review={
                                 'plan': plan_clean, 'action': item['action'], 'filename': item['filename'],
                                 'source_format': item.get('format', ''), 'convert_to': item.get('converts_to'),

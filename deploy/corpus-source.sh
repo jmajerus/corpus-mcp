@@ -199,6 +199,11 @@ EOF
     fi
     exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-upload.py" -- "$LIBRARY"
     ;;
+  covers-apply)
+    require_unsplit
+    use_backups
+    exec /usr/bin/calibre-debug -e "$TOOLS_DIR/calibre-covers.py" -- "$LIBRARY" --apply
+    ;;
   metadata-preview)
     require_unsplit
     use_backups
@@ -223,7 +228,7 @@ EOF
     exec bash "$TOOLS_DIR/calibre-convert.sh" --apply "$LIBRARY"
     ;;
   *)
-    echo "corpus-source: only 'library', 'calibre-library', 'catalogue', read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview, duplicates-apply, upload-preview, upload-apply and health" >&2
+    echo "corpus-source: only 'library', 'calibre-library', 'catalogue', read-only rsync, 'shelves', and the tags-/convert- commands are allowed, plus metadata-preview, metadata-apply, duplicates-preview, duplicates-apply, upload-preview, upload-apply, covers-apply and health" >&2
     exit 1
     ;;
 esac

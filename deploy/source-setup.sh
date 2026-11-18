@@ -21,11 +21,12 @@ printf %s "${CORPUS_CONVERT_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-conv
 printf %s "${CORPUS_DUPLICATES_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-duplicates.py
 printf %s "${CORPUS_HEALTH_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-health.py
 printf %s "${CORPUS_UPLOAD_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-upload.py
+printf %s "${CORPUS_COVERS_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-covers.py
 printf %s "${CORPUS_METADATA_RECOVER_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-metadata-recover.py
 printf %s "${CORPUS_METADATA_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-metadata.py
 # For the library owner's bulk imports by hand; the forced command never runs it.
 printf %s "${CORPUS_IMPORT_SCRIPT:-}" | base64 -d > /usr/local/bin/calibre-import.sh
-chmod 0755 /usr/local/bin/calibre-duplicates.py /usr/local/bin/calibre-health.py /usr/local/bin/calibre-upload.py /usr/local/bin/calibre-metadata-recover.py /usr/local/bin/calibre-metadata.py /usr/local/bin/corpus-source /usr/local/bin/calibre-tags.sh /usr/local/bin/calibre-convert.sh /usr/local/bin/calibre-import.sh
+chmod 0755 /usr/local/bin/calibre-duplicates.py /usr/local/bin/calibre-health.py /usr/local/bin/calibre-upload.py /usr/local/bin/calibre-covers.py /usr/local/bin/calibre-metadata-recover.py /usr/local/bin/calibre-metadata.py /usr/local/bin/corpus-source /usr/local/bin/calibre-tags.sh /usr/local/bin/calibre-convert.sh /usr/local/bin/calibre-import.sh
 # /admin's Calibre commands write the library, so corpus-sync needs the group of each directory
 # Calibre-Web's settings name (metadata.db's and, in split mode, the book files').
 library_json=$(SSH_ORIGINAL_COMMAND=library /usr/local/bin/corpus-source)

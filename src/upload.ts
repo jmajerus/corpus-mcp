@@ -6,6 +6,7 @@ import { XMLParser } from "fast-xml-parser";
 import * as mupdf from "mupdf";
 import { DEFAULT_PRESET, proposeCitekey } from "./citekey.js";
 import type { Config } from "./config.js";
+import { type CoverQuery, coverSha256, findCover } from "./covers.js";
 import { type BookContents, type ContentProfile, contentFindings, contentProfile, isPending } from "./duplicate-contents.js";
 import { type DuplicateBook, GREYSCALE_COVER, candidateBooks, coverColour, doiKey, identifierKey, normal, normalAuthorsKey, sizeWarnings, unrelatedBooks } from "./duplicates.js";
 import { findPrintedIsbns, isbn13, ownPrintedIsbns, validIsbn } from "./isbn.js";
@@ -99,6 +100,29 @@ export interface StagedUploadDraft {
   action?: UploadAction;
   action_explicit?: boolean;
   target_book_id?: string | null;
+  /** False when the person unticked the cover found for this book (StagedCover). */
+  use_cover?: boolean;
+}
+
+/** Bump when cover finding changes, so staged files are looked at again. */
+const COVER_LOOKUP = 1;
+
+/**
+ * A cover found for a staged file whose own would be a plain title page (src/covers.ts), saved beside it
+ * as `<id>.cover.<ext>`. `key` is what it was looked up with; a new title or author list looks again.
+ */
+export interface StagedCover {
+  key: string;
+  checked_at: string;
+  /** Whether the file's own cover is a plain title page; null when not checked. */
+  plain: boolean | null;
+  source: "intake" | "otl" | null;
+  label: string | null;
+  page_url: string | null;
+  file: string | null;
+  sha256: string | null;
+  /** Why the lookup failed; it is tried again after a while. */
+  error?: string;
 }
 
 export interface StagedUploadRecord {
@@ -120,6 +144,9 @@ export interface StagedUploadRecord {
   problem: string | null;
   extracted: ExtractedUploadMetadata;
   draft: StagedUploadDraft;
+  /** The intake folder the file was staged from, where a cover image saved beside it is looked for. */
+  source_dir?: string;
+  cover?: StagedCover;
 }
 
 export function uploadDir(config: Pick<Config, "dataDbPath">): string {
@@ -606,6 +633,7 @@ function readStagedRecords(dir: string): StagedUploadRecord[] {
       }
       validFiles.add(entry);
       validFiles.add(binName);
+      if (rec.cover?.file) validFiles.add(rec.cover.file);
       records.push(rec);
     } catch {
       fs.rmSync(jsonPath, { force: true });
@@ -626,7 +654,70 @@ function saveStagedRecord(dir: string, rec: StagedUploadRecord): void {
   fs.renameSync(tmp, path.join(dir, `${rec.id}.json`));
 }
 
-export function stageUpload(c: Corpus, config: Config, filename: string, data: Buffer, actor?: string) {
+const coverLookups = new Map<string, Promise<void>>();
+/** A lookup that failed (the network, OTL) is tried again after this long. */
+const COVER_RETRY_MS = 10 * 60_000;
+
+/** What a staged file's cover lookup depends on: a new title, author list or intake folder looks again. */
+const coverKey = (rec: StagedUploadRecord) => JSON.stringify([COVER_LOOKUP, rec.draft.title, rec.draft.authors, rec.source_dir ?? null]);
+
+/**
+ * The cover found for a staged EPUB or PDF, "pending" while it is being looked for in the background, or
+ * null when there is nothing to look for (another format, a damaged file, or lookups off and no intake folder).
+ */
+function stagedCover(config: Config, rec: StagedUploadRecord): StagedCover | "pending" | null {
+  if (rec.problem || (rec.ext !== "pdf" && rec.ext !== "epub")) return null;
+  if (!config.coverLookup && !rec.source_dir) return null;
+  const key = coverKey(rec);
+  if (rec.cover?.key === key && !(rec.cover.error && Date.now() - Date.parse(rec.cover.checked_at) > COVER_RETRY_MS)) return rec.cover;
+  const job = `${rec.id}|${rec.sha256}|${key}`;
+  if (!coverLookups.has(job)) coverLookups.set(job, lookUpCover(config, rec, key).finally(() => coverLookups.delete(job)));
+  return "pending";
+}
+
+/** Waits for every cover lookup running now; for tests and the CLI. */
+export async function stagedCoversSettled(): Promise<void> {
+  while (coverLookups.size) await Promise.allSettled([...coverLookups.values()]);
+}
+
+async function lookUpCover(config: Config, rec: StagedUploadRecord, key: string): Promise<void> {
+  const dir = uploadDir(config);
+  const query: CoverQuery = {
+    title: rec.draft.title,
+    authors: rec.draft.authors,
+    isbns: [...Object.entries(rec.extracted.identifiers).filter(([k]) => k === "isbn").map(([, v]) => v), ...rec.extracted.printed_isbns],
+    current: { book: path.join(dir, `${rec.id}.${rec.ext}`), format: rec.ext as "pdf" | "epub" },
+    ...(rec.source_dir ? { intake: { dir: rec.source_dir, file: rec.filename } } : {}),
+  };
+  const checked_at = new Date().toISOString();
+  let found: Awaited<ReturnType<typeof findCover>> | null = null, error: string | undefined;
+  try {
+    found = await findCover(query, { dataDir: path.dirname(config.dataDbPath), online: !!config.coverLookup });
+  } catch (e) {
+    error = (e as Error).message;
+  }
+  // Read, write and save in one synchronous step: reading staged records deletes files no record names.
+  const current = readStagedRecords(dir).find(r => r.id === rec.id);
+  if (!current || current.sha256 !== rec.sha256 || coverKey(current) !== key) return;
+  const image = found?.cover ?? null;
+  const file = image ? `${rec.id}.cover.${image.ext}` : null;
+  if (current.cover?.file && current.cover.file !== file) fs.rmSync(path.join(dir, current.cover.file), { force: true });
+  if (image && file) fs.writeFileSync(path.join(dir, file), image.bytes, { mode: 0o600 });
+  current.cover = {
+    key, checked_at, plain: found?.plain ?? null, source: image?.source ?? null, label: image?.label ?? null,
+    page_url: image?.page_url ?? null, file, sha256: image ? coverSha256(image.bytes) : null, ...(error ? { error } : {}),
+  };
+  saveStagedRecord(dir, current);
+}
+
+/** A staged file's found cover, for the upload page. */
+export function stagedCoverFile(config: Config, id: string): { file: string; type: string } | null {
+  const rec = readStagedRecords(uploadDir(config)).find(r => r.id === id);
+  if (!rec?.cover?.file) return null;
+  return { file: path.join(uploadDir(config), rec.cover.file), type: rec.cover.file.endsWith(".png") ? "image/png" : "image/jpeg" };
+}
+
+export function stageUpload(c: Corpus, config: Config, filename: string, data: Buffer, actor?: string, opts: { sourceDir?: string } = {}) {
   const { cleanName, ext, format } = parseUploadExtension(filename);
   if (!data.length) throw new ToolError("The uploaded file is empty.");
   if (data.length > MAX_UPLOAD_BYTES) throw new ToolError("The uploaded file exceeds the 250 MB limit.");
@@ -668,6 +759,8 @@ export function stageUpload(c: Corpus, config: Config, filename: string, data: B
     seq: existing?.seq ?? Math.max(0, ...allStaged.map(r => r.seq ?? 0)) + 1,
     staged_by: actor ?? existing?.staged_by ?? null,
     problem: sniff.problem,
+    ...(opts.sourceDir ?? existing?.source_dir ? { source_dir: opts.sourceDir ?? existing?.source_dir } : {}),
+    ...(existing?.cover && existing.ext === ext ? { cover: existing.cover } : {}),
     extracted,
     draft: existing?.draft ?? {
       title: extracted.title,
@@ -687,6 +780,7 @@ export function updateStagedUpload(c: Corpus, config: Config, id: string, patch:
   tags?: unknown;
   action?: unknown;
   target_book_id?: unknown;
+  use_cover?: unknown;
 }) {
   const dir = uploadDir(config);
   const rec = readStagedRecords(dir).find(r => r.id === id);
@@ -731,6 +825,10 @@ export function updateStagedUpload(c: Corpus, config: Config, id: string, patch:
       throw new ToolError("Invalid target book id.");
     }
     rec.draft.target_book_id = patch.target_book_id;
+  }
+  if (patch.use_cover !== undefined) {
+    if (typeof patch.use_cover !== "boolean") throw new ToolError("Send use_cover as true or false.");
+    rec.draft.use_cover = patch.use_cover;
   }
   saveStagedRecord(dir, rec);
   return evaluateStagedUpload(c, config, rec, candidateBooks(c), readStagedRecords(dir));
@@ -1089,7 +1187,18 @@ export function evaluateStagedUpload(c: Corpus, config: Config, rec: StagedUploa
     suggested_action,
     suggested_target,
     allowed_actions,
+    cover: coverView(config, rec),
   };
+}
+
+/** What the upload page shows about a staged file's cover. */
+function coverView(config: Config, rec: StagedUploadRecord) {
+  const cover = stagedCover(config, rec);
+  if (cover === "pending") return { status: "pending" as const };
+  if (cover?.file) {
+    return { status: "found" as const, source: cover.source, label: cover.label, page_url: cover.page_url, url: `/api/upload/files/${encodeURIComponent(rec.id)}/cover`, use: rec.draft.use_cover !== false };
+  }
+  return { status: cover?.plain ? "plain" as const : "none" as const, error: cover?.error ?? null };
 }
 
 /** How much of the staging quota is already used, and which hashes are already staged. */
@@ -1146,6 +1255,8 @@ export interface UploadItemPlan {
   identifiers?: Record<string, string>;
   printed_isbns?: string[];
   known_matches: { id: number; uuid: string }[];
+  /** A cover to set instead of the one Calibre makes (StagedCover); its bytes travel as cover_base64. */
+  cover?: { sha256: string; ext: "jpg" | "png"; source: "intake" | "otl"; label: string | null };
   reviewed?: string;
 }
 
@@ -1199,6 +1310,9 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
     }
     if (evaluated.blockers.length) {
       throw new ToolError(`${rec.filename}: ${evaluated.blockers.join(" ")}`);
+    }
+    if (evaluated.cover.status === "pending") {
+      throw new ToolError(`A cover for ${rec.filename} is still being looked for. Wait until the upload page shows it, then preview again.`);
     }
 
     if (sel.action === "add_format") {
@@ -1288,6 +1402,9 @@ export function uploadBatchPlan(c: Corpus, config: Config, selections: UploadSel
       known_matches: [...evaluated.matches.map(m => m.book), ...evaluated.unrelated_matches]
         .filter(b => b.library === config.shelvesLibrary && b.uuid !== null)
         .map(b => ({ id: b.calibre_id, uuid: b.uuid! })),
+      ...(rec.cover?.file && rec.cover.sha256 && rec.cover.source && rec.draft.use_cover !== false
+        ? { cover: { sha256: rec.cover.sha256, ext: rec.cover.file.endsWith(".png") ? "png" as const : "jpg" as const, source: rec.cover.source, label: rec.cover.label } }
+        : {}),
     };
   });
 
@@ -1316,7 +1433,16 @@ export function attachUploadPayloads(config: Config, plan: UploadBatchPlan) {
       if (actualHash !== item.sha256) {
         throw new ToolError(`Staged file ${item.filename} changed since preview. Preview again.`);
       }
-      return { ...item, data_base64: data.toString("base64") };
+      let cover_base64: string | undefined;
+      if (item.cover) {
+        const coverPath = path.join(dir, `${item.id}.cover.${item.cover.ext}`);
+        const bytes = fs.existsSync(coverPath) ? fs.readFileSync(coverPath) : null;
+        if (!bytes || coverSha256(bytes) !== item.cover.sha256) {
+          throw new ToolError(`The cover found for ${item.filename} changed since preview. Preview again.`);
+        }
+        cover_base64 = bytes.toString("base64");
+      }
+      return { ...item, data_base64: data.toString("base64"), ...(cover_base64 ? { cover_base64 } : {}) };
     }),
   };
 }

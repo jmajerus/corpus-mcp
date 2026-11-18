@@ -12,6 +12,8 @@ export const UPLOAD_HTML = page({
 .item-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
 .compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 12px 0; }
 .cover { float: right; width: 70px; max-height: 110px; object-fit: contain; }
+.found-cover { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0; }
+.found-cover img { width: 90px; max-height: 140px; object-fit: contain; border: 1px solid var(--border); }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .warning { color: var(--warn); }
 .member { border-left: 3px solid var(--border); padding-left: 10px; }
@@ -51,7 +53,30 @@ export const UPLOAD_HTML = page({
   script: `
 let items = [], picked = {}, freshPick = {}, canWrite = false, calibreWebUrl = null, writableLibrary = null, refreshRunning = false, pendingTimer = null, batchLimit = 250 * 1024 * 1024;
 
-const pending = (it) => (it.contents_pending || []).length > 0;
+const coverPending = (it) => (it.cover || {}).status === "pending";
+const pending = (it) => (it.contents_pending || []).length > 0 || coverPending(it);
+function schedulePoll() {
+  clearTimeout(pendingTimer);
+  if (items.some(pending)) pendingTimer = setTimeout(() => { if (!document.hidden) load(); }, 3000);
+}
+
+/** The cover a new book will get: one found for it (with a box to untick), or a note that it will be plain. */
+function coverHtml(it, idx) {
+  const c = it.cover || {};
+  if (c.status === "found") {
+    const from = c.source === "otl"
+      ? 'from the Open Textbook Library' + (c.page_url ? ' (<a href="' + esc(c.page_url) + '" target="_blank" rel="noopener">' + esc(c.label || "book page") + "</a>)" : "")
+      : "from <code>" + esc(c.label || "an image") + "</code> beside it in the intake folder";
+    return '<div class="found-cover"><img src="' + esc(c.url) + '" alt="Cover found for ' + esc(it.draft.title) + '" loading="lazy">' +
+      '<div><label><input type="checkbox" data-cover="' + idx + '"' + (c.use ? " checked" : "") + (canWrite ? "" : " disabled") + "> Use this cover</label>" +
+      '<p class="note">Found ' + from + ". " + (c.source === "otl" ? "This file's own first page is a plain title page." : "") + "</p></div></div>";
+  }
+  if (c.status === "plain") {
+    return '<p class="note">Calibre will make a plain white cover from this file’s title page' + (c.error ? " (the Open Textbook Library couldn’t be reached: " + esc(c.error) + ")" : "; the Open Textbook Library doesn’t list it") +
+      ". To give it a cover, save an image whose name includes the title next to the file in the intake folder and stage it again.</p>";
+  }
+  return "";
+}
 const actionable = (it) => canWrite && !it.blockers.length && !pending(it) && (it.draft.action === "add_book" || it.draft.action === "add_format");
 
 function initItem(it) {
@@ -273,7 +298,8 @@ function render() {
         '<h2><label><input type="checkbox" data-pick="' + idx + '"' + (picked[it.id] && isReady ? " checked" : "") + (isReady ? "" : " disabled") + "> " + esc(it.filename) + "</label></h2>" +
         '<div>' + formatPlanBadge(it) + statusBadge(it) + '<span class="note">' + esc(bytes(it.size)) + " · " + esc(it.sha256.slice(0, 12)) + '…</span> <button type="button" data-remove="' + idx + '"' + (canWrite ? "" : " disabled") + ">Remove</button></div>" +
       "</div>" +
-      (pending(it) ? '<p class="note">Checking the ' + esc(it.contents_pending.join(" and ")) + " contents of this file in the background; this page updates when done.</p>" : "") +
+      ((it.contents_pending || []).length ? '<p class="note">Checking the ' + esc(it.contents_pending.join(" and ")) + " contents of this file in the background; this page updates when done.</p>" : "") +
+      (coverPending(it) ? '<p class="note">Looking for a cover in the background; this page updates when done.</p>' : "") +
       it.blockers.map((b) => '<p class="bad"><strong>' + esc(b) + "</strong></p>").join("") +
       uniqueWarnings.map((w) => '<p class="warning">' + esc(w) + "</p>").join("") +
       (it.content_notes || []).map((w) => '<p class="note">' + esc(w) + "</p>").join("") +
@@ -282,6 +308,7 @@ function render() {
       '<div class="choice">' + choices.join("") + "</div>" +
       targetPicker +
       metadataEditor +
+      (act === "add_book" ? coverHtml(it, idx) : "") +
       "</section>";
   }).join("");
   updateBatch();
@@ -298,8 +325,7 @@ async function load() {
     if (data.max_batch_bytes) batchLimit = data.max_batch_bytes;
     calibreWebUrl = data.calibre_web_url;
     writableLibrary = data.writable_library;
-    clearTimeout(pendingTimer);
-    if (items.some(pending)) pendingTimer = setTimeout(() => { if (!document.hidden) load(); }, 3000);
+    schedulePoll();
     items.forEach((it) => {
       if (prevPending.has(it.id) || pending(it)) it.was_pending = true;
       if (prevWaiting.has(it.id)) it.became_ready = true;
@@ -422,6 +448,7 @@ async function saveDraft(it, explicitAction = false) {
     // An edited title or author can make or break a match with another staged file, whose card changes too.
     if ((it.staged_matches || []).length || (updated.staged_matches || []).length) { await load(); return; }
     render();
+    schedulePoll();
   } catch (e) {
     toast(e.message);
   }
@@ -439,6 +466,11 @@ document.getElementById("items").addEventListener("change", (e) => {
     if (t.value === "add_format" && !it.draft.target_book_id) it.draft.target_book_id = it.suggested_target;
     picked[it.id] = t.value === "add_book" || t.value === "add_format";
     saveDraft(it, true);
+  } else if (d.cover !== undefined) {
+    const it = items[Number(d.cover)];
+    post("/api/upload/files/" + encodeURIComponent(it.id), { use_cover: t.checked })
+      .then((updated) => { const i = items.findIndex((x) => x.id === it.id); if (i >= 0) items[i] = updated; render(); })
+      .catch((err) => { t.checked = !t.checked; toast(err.message); });
   } else if (d.target !== undefined) {
     const it = items[Number(d.target)];
     it.draft.target_book_id = t.value;

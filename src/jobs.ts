@@ -4,6 +4,7 @@ import type { AdminConfig, Config } from "./config.js";
 import { type Change, type SyncBaseline, backupDataStore, pinnedByUuid, recordAlias, recordBaselines, recordChanges } from "./data.js";
 import { moveAnchors } from "./anchors.js";
 import { JobLogFilter } from "./joblog.js";
+import { type CoverFound, type CoverPlan, attachCoverPayloads, previewLibraryCovers } from "./library-covers.js";
 import { healthSummary, parseHealthOutput, saveHealthReport } from "./health.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicateBatchPlan, duplicateContents, assertDuplicateMovable, moveDuplicateFiling, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
@@ -20,7 +21,7 @@ import { type BookRow, type Corpus, getBook, ToolError, tagCleanupPlan } from ".
  * host as named commands of the sync key's forced command (deploy/corpus-source.sh), never as a shell.
  */
 
-export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "zotero" | "metadata" | "duplicates" | "upload" | "intake" | "health";
+export type JobKind = "refresh" | "backup" | "tags" | "cleanup" | "convert" | "covers" | "zotero" | "metadata" | "duplicates" | "upload" | "intake" | "health";
 export type JobMode = "preview" | "apply";
 
 interface JobSpec { title: string; calibre: boolean; previewable: boolean }
@@ -37,6 +38,8 @@ export const JOB_KINDS: Record<JobKind, JobSpec> = {
   tags: { title: "Apply approved tags to Calibre", calibre: true, previewable: true },
   cleanup: { title: "Remove non-subject tags from Calibre", calibre: true, previewable: true },
   convert: { title: "Convert books that have no EPUB or PDF", calibre: true, previewable: true },
+  // The preview looks covers up here (src/library-covers.ts); only the apply goes to the Calibre-Web host.
+  covers: { title: "Find covers for books with plain title-page covers", calibre: true, previewable: true },
   zotero: { title: "Sync from Zotero now", calibre: false, previewable: false },
 };
 
@@ -76,6 +79,10 @@ export interface JobItem {
   added_format?: string; source_format?: string; source_sha256?: string;
   /** A book the convert job cannot convert, and why (DRM-encrypted, unrecognized file). */
   convert_skipped?: string;
+  /** A cover the covers preview found; cover_set when the apply set it, cover_skipped when it didn't. */
+  cover_found?: CoverFound;
+  cover_set?: { source: string; label: string; backup: string };
+  cover_skipped?: string;
 }
 
 const MAX_LOG = 256 * 1024;
@@ -218,6 +225,11 @@ export class JobRunner {
         for (const g of groups) assertDuplicateMovable(this.c, library, g);
         params = { plan: { library, groups } };
       }
+      if (kind === "covers") {
+        const books = preview.items.flatMap(it => it.cover_found && it.uuid ? [{ calibre_id: it.calibre_id, uuid: it.uuid, title: it.title, cover: it.cover_found }] : []);
+        if (!books.length) throw new ToolError("That preview found no covers to set.");
+        params = { plan: { library: this.config.shelvesLibrary, books } satisfies CoverPlan };
+      }
       if (kind === "upload") {
         const items = preview.items.flatMap(it => it.upload_review && !it.upload_review.blockers.length && it.upload_review.plan.reviewed ? [it.upload_review.plan] : []);
         if (!items.length) throw new ToolError("Every file in that preview has blockers. Resolve them and preview again.");
@@ -358,6 +370,7 @@ export class JobRunner {
       }
       if (item.metadata) changes.push({ ...base, kind: "metadata_corrected", detail: JSON.stringify(item.metadata) });
       if (item.added_format) changes.push({ ...base, kind: "format_added", detail: `${item.source_format} → ${item.added_format}` });
+      if (item.cover_set) changes.push({ ...base, kind: "cover_set", detail: `${item.cover_set.source === "otl" ? "Open Textbook Library" : item.cover_set.source}: ${item.cover_set.label}` });
     }
     recordChanges(this.c.data, changes);
     recordBaselines(this.c.data, this.baselines(jobId, items));
@@ -427,6 +440,17 @@ export class JobRunner {
             applied();
             try { await this.commands.refresh(log); } catch (refreshError) { log(`Refresh also failed: ${String(refreshError)}\n`); }
           }
+          throw error;
+        }
+        break;
+      }
+      case "covers": {
+        if (mode === "preview") { await previewLibraryCovers(this.c, this.config, log); return; }
+        const payload = attachCoverPayloads(this.config, params.plan as CoverPlan);
+        try { await this.commands.calibre("covers-apply", JSON.stringify(payload), log); }
+        catch (error) {
+          applied();
+          try { await this.commands.refresh(log); } catch (refreshError) { log(`Refresh also failed: ${String(refreshError)}\n`); }
           throw error;
         }
         break;

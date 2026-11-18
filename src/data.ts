@@ -361,7 +361,7 @@ export const CHANGE_KINDS = [
   "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "proposal_moved", "filing_moved", "quotes_moved", "citekey_pinned",
   "duplicate_resolution_failed", "duplicate_reviewed", "duplicate_resolved", "metadata_corrected", "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
-  "zotero_linked",
+  "zotero_linked", "cover_set",
 ] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 export type ChangeSource = "admin-job" | "admin" | "cli" | "calibre" | "review" | "agent" | "zotero";
