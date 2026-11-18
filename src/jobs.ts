@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { AdminConfig, Config } from "./config.js";
 import { type Change, type SyncBaseline, backupDataStore, pinnedByUuid, recordAlias, recordBaselines, recordChanges } from "./data.js";
 import { moveAnchors } from "./anchors.js";
+import { JobLogFilter } from "./joblog.js";
 import { healthSummary, parseHealthOutput, saveHealthReport } from "./health.js";
 import { metadataRepairPlan, type MetadataCorrection, type MetadataValues } from "./metadata-repair.js";
 import { duplicateBatchPlan, duplicateContents, assertDuplicateMovable, moveDuplicateFiling, type DuplicateBatchPlan, type DuplicateGroupSelection } from "./duplicates.js";
@@ -262,6 +263,7 @@ export class JobRunner {
     let partial = "";
     const items: JobItem[] = [];
     let dirty = false;
+    const filter = new JobLogFilter();
     // Output arrives in arbitrary chunks; "@@change" lines become items, everything else is the log.
     const append = (text: string) => {
       const lines = (partial + text).split("\n");
@@ -273,7 +275,10 @@ export class JobRunner {
           } catch {
             log += `${line}\n`;
           }
-        } else log += `${line}\n`;
+        } else {
+          const shown = filter.line(line);
+          if (shown !== null) log += `${shown}\n`;
+        }
       }
       if (log.length > MAX_LOG) log = `[earlier output trimmed]\n${log.slice(-MAX_LOG)}`;
       dirty = true;
@@ -328,6 +333,8 @@ export class JobRunner {
     } finally {
       clearInterval(flusher);
       if (partial) append("\n");
+      const hidden = filter.summary();
+      if (hidden) append(`${hidden}\n`);
       record();
       this.c.data.prepare("UPDATE jobs SET log = ?, items = ?, status = ?, finished_at = ? WHERE id = ?")
         .run(log, JSON.stringify(items), status, new Date().toISOString(), id);
