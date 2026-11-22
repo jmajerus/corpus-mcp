@@ -66,6 +66,7 @@ const KINDS = {
   proposal_rejected: ["Proposal rejected", "×", "bad"], proposal_reopened: ["Proposal reopened", "↺", ""], proposal_moved: ["Proposal moved from a duplicate", "→", ""], filing_moved: ["Citekey or Zotero link moved from a duplicate", "→", ""], quotes_moved: ["Quotes moved from a duplicate", "→", ""], citekey_pinned: ["Citekey pinned", "#", ""],
   categories_edited: ["Categories set", "✎", ""], citekey_unpinned: ["Citekey unpinned", "−", "bad"],
   cover_set: ["Cover set", "+", "good"],
+  page_labels_pinned: ["Page numbering pinned", "#", ""], page_labels_applied: ["Page numbering applied", "↻", ""],
 };
 const SOURCES = { "admin-job": "Admin job", admin: "Admin page", cli: "Command line", calibre: "Seen in Calibre", review: "Review", agent: "Agent" };
 const form = document.getElementById("filters");

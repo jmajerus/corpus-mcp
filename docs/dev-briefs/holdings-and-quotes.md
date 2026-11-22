@@ -98,6 +98,25 @@ where to look first; `page`, its old name, is still accepted) returns either
 - `{ "match": false, "closest": [ … ] }`, the closest passages, as
   `save_quote` returns now.
 
+Where a PDF's text lost letters to ligature glyphs ("Te" for "The", "afer" for
+"after"), the words are also matched across the missing letters (2026-11-22,
+Zero Spaces review finding 1). Then `text` is the printed reading, the book's
+wording with the letters put back from the request, and the answer adds
+`restored: { kind: "dropped-ligatures", letters, stored_text, note }`;
+`anchor.text` stays the stored wording, which `POST /api/anchors` checks, so the
+anchor is posted back unchanged as before. The anchor also carries the reading
+(`anchor.reading`), which corpus-mcp keeps with it: `POST /api/anchors` accepts
+it only as the text with ligature letters restored. When the book's file or
+extraction changes, an anchor is looked for by its stored wording, then by its
+reading, so a clean text finds it. Found by the reading, the new anchor's `text`
+is the reading and `reading` is gone: an ordinary `reanchored` change, with no
+separate signal that the restoration is no longer needed. Anchors stored before
+this have no reading.
+
+A book's `page_label`s can change without its file changing, when a person pins
+its printed numbering (`pin_page_labels`). The refresh then updates the labels of
+its anchors, each a `reanchored` change.
+
 Then the anchors become corpus-mcp's only quote data:
 
 - **`anchors`** table: today's anchor columns plus `quote_id` (quote-mcp's

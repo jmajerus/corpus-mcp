@@ -8,6 +8,7 @@ import { openDatabase } from "./db.js";
 import { scanLibraries } from "./indexer.js";
 import { reanchorAnchors } from "./anchors.js";
 import { reanchorQuotes } from "./quotes.js";
+import { applyPageLabelPins } from "./printed-pages.js";
 
 const USAGE = `Usage:
   corpus-mcp index [--force]   Scan the libraries and update the index
@@ -35,6 +36,10 @@ async function main(argv: string[]): Promise<void> {
       // Changes the scan sees in Calibre go to the change log, unless an admin job already logged them.
       const record = (changes: Parameters<typeof notYetLogged>[1]) => recordChanges(data, notYetLogged(data, changes));
       const summary = scanLibraries(config, db, { force: flags.includes("--force"), log: (m) => console.error(m), record });
+      // Pinned page numberings (pin_page_labels) into the index, and quote-mcp's anchors on those books.
+      const labels = applyPageLabelPins(db, data, config.booksRoot);
+      if (labels.books || labels.anchors) console.error(`page labels: ${labels.pages} page(s) on ${labels.books} book(s) relabelled, ${labels.anchors} anchor(s) updated`);
+      if (labels.stale.length) console.error(`page labels: pinned for another file, not applied: ${labels.stale.join(", ")}`);
       // Quotes whose book file changed are found again by their text, or marked orphaned.
       const quotes = reanchorQuotes(db, data);
       if (quotes.reanchored || quotes.orphaned) console.error(`quotes: ${quotes.reanchored} re-anchored, ${quotes.orphaned} orphaned`);

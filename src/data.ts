@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 15;
+export const DATA_SCHEMA_VERSION = 17;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS anchors (
   prefix TEXT NOT NULL,
   suffix TEXT NOT NULL,
   text TEXT NOT NULL,
+  reading TEXT,                      -- the printed reading, when text lost letters to ligatures (verify's restored)
   status TEXT NOT NULL CHECK (status IN ('verified', 'orphaned')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -226,6 +227,18 @@ CREATE TABLE IF NOT EXISTS health_reports (
   at TEXT NOT NULL,
   report TEXT NOT NULL               -- JSON, as the script printed it
 );
+-- A book's printed page numbering, pinned by a person or agent (pin_page_labels) for a PDF whose page-label
+-- metadata is missing or wrong. The refresh writes it into the index (src/printed-pages.ts); sha256 is the
+-- file it was pinned against, and a pin with no ranges is a clear, which the refresh undoes and then drops.
+CREATE TABLE IF NOT EXISTS page_label_pins (
+  calibre_uuid TEXT PRIMARY KEY COLLATE NOCASE,
+  book_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  ranges TEXT NOT NULL,              -- JSON [{ file_page, page_label }], each running to the next
+  sha256 TEXT,
+  pinned_at TEXT NOT NULL,
+  pinned_by TEXT
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(
   text, note, labels, content='quotes', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
 );
@@ -260,6 +273,8 @@ export function openDataStore(dbPath: string): DataStore {
   const jobColumns = new Set((db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
   if (!jobColumns.has("items")) db.exec("ALTER TABLE jobs ADD COLUMN items TEXT");
   const quoteColumns = new Set((db.prepare("PRAGMA table_info(quotes)").all() as { name: string }[]).map((c) => c.name));
+  const anchorColumns = new Set((db.prepare("PRAGMA table_info(anchors)").all() as { name: string }[]).map((c) => c.name));
+  if (!anchorColumns.has("reading")) db.exec("ALTER TABLE anchors ADD COLUMN reading TEXT");
   const zoteroColumns = new Set((db.prepare("PRAGMA table_info(zotero_items)").all() as { name: string }[]).map((c) => c.name));
   if (!zoteroColumns.has("replaces")) {
     // Mirrors from before merges were followed: add the column and fetch everything again to fill it.
@@ -361,7 +376,7 @@ export const CHANGE_KINDS = [
   "tag_proposed", "proposal_approved", "proposal_rejected", "proposal_reopened", "proposal_moved", "filing_moved", "quotes_moved", "citekey_pinned",
   "duplicate_resolution_failed", "duplicate_reviewed", "duplicate_resolved", "metadata_corrected", "categories_edited", "citekey_unpinned",
   "quote_saved", "quote_edited", "quote_deleted", "quote_reanchored", "quote_orphaned",
-  "zotero_linked", "cover_set",
+  "zotero_linked", "cover_set", "page_labels_pinned", "page_labels_applied",
 ] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 export type ChangeSource = "admin-job" | "admin" | "cli" | "calibre" | "review" | "agent" | "zotero";

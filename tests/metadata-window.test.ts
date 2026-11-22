@@ -4,7 +4,7 @@ import { refreshDerivedMetadata } from "../src/indexer.js";
 import { metadataPages, METADATA_FRONT_CHARS, METADATA_BACK_CHARS } from "../src/metadata-window.js";
 import { TITLE_PAGE_SCAN_VERSION } from "../src/titlepage.js";
 import { findPrintedIsbns } from "../src/isbn.js";
-import { findPrintedYears, printedYear } from "../src/years.js";
+import { YEAR_SCAN_VERSION, findPrintedYears, printedYear } from "../src/years.js";
 
 const db = openDatabase(":memory:");
 afterAll(() => db.close());
@@ -78,8 +78,8 @@ it("invalidates prior Pandoc window caches once while leaving legacy caches unch
   book("logical", 3, [{ text: "Copyright 2016. ISBN 978-0-306-40615-7" }]);
   book("legacy", 1, [{ text: "Copyright 2012" }]);
   db.prepare(`UPDATE books SET year=2000, text_chars=10, printed_isbns='[]', printed_isbns_version=2,
-    printed_years='[]', printed_years_version=2, printed_year=1999,
-    title_page='{"authors":[],"title":null,"for_title":"Example Book"}',title_page_version=?`).run(TITLE_PAGE_SCAN_VERSION);
+    printed_years='[]', printed_years_version=?, printed_year=1999,
+    title_page='{"authors":[],"title":null,"for_title":"Example Book"}',title_page_version=?`).run(YEAR_SCAN_VERSION, TITLE_PAGE_SCAN_VERSION);
   const legacy = db.prepare("SELECT * FROM books WHERE id='legacy'").get();
   refreshDerivedMetadata(db, "author-year-word");
   expect(db.prepare("SELECT printed_year FROM books WHERE id='logical'").pluck().get()).toBe(2016);

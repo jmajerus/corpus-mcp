@@ -93,6 +93,12 @@ warns that it should be confirmed and added in Calibre. `status` lists
 these books under `printed_years`, and the admin book page shows every year
 found.
 
+The year is read for every book, so it also checks Calibre's: when Calibre has a
+year and the book prints another, `cite_passage` adds `printed_year` (the year,
+page, and line) and a warning to check which edition the file is. A later year in
+Calibre can be right (a reprint or a later edition), so nothing is changed. A
+ResearchGate cover sheet's "Book · December 2014" counts as a publication year.
+
 Authors and titles are read the same way, for books whose Calibre metadata has
 no author, several people in one author record, or a file name for a title
 ("awscloudprojects", "Book-layout1.indd"). The index looks for an "About the
