@@ -146,7 +146,7 @@ it("serves the tools over Streamable HTTP", async () => {
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual([
     "add_provisional_term", "cite_passage", "get_book_outline", "get_tag_vocabulary", "list_books", "list_shelves",
-    "list_tags", "pin_citekey", "propose_tags", "read_book", "render_page", "search_corpus", "status", "tagging_worklist", "vocabulary_report",
+    "list_tags", "pin_citekey", "pin_page_labels", "propose_tags", "read_book", "render_page", "search_corpus", "status", "tagging_worklist", "vocabulary_report",
   ]);
   const search = await client.callTool({ name: "search_corpus", arguments: { query: "novel information" } });
   expect(JSON.parse((search.content as { text: string }[])[0].text).results[0]).toMatchObject({ book_id: "main:1", page: 1 });

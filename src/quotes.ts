@@ -82,10 +82,61 @@ export function reflow(text: string): string {
     /[.!?:;"'”’)\]]/.test(all[at - 1] ?? "") && !/\p{Ll}/u.test(all[at + brk.length] ?? "") ? "\n\n" : " ");
 }
 
-export interface QuoteAnchor { start_page: number; start_offset: number; end_page: number; end_offset: number; text: string; prefix: string; suffix: string }
+export interface QuoteAnchor {
+  start_page: number; start_offset: number; end_page: number; end_offset: number; text: string; prefix: string; suffix: string;
+  /**
+   * Set only by a ligature-tolerant match: the book's wording with the letters its PDF text dropped put
+   * back from the quote ("This" where the stored text has "Tis"), and how many letters were put back.
+   * `text` stays the stored wording, which is what the offsets and the anchor check refer to.
+   */
+  reading?: string; restored?: number;
+}
+
+/**
+ * Letter runs a PDF font may set as one ligature glyph. When the font maps such a glyph to too few
+ * characters, the extracted text loses letters: "Te" for "The", "afer" for "after", or the whole run
+ * ("dierent", "rst"). Longest first, so "ffi" is tried before "ff" and "fi".
+ */
+const LIGATURES = ["ffi", "ffl", "ff", "fi", "fl", "ft", "th"];
+/** A ligature-tolerant match needs this much of a quote, so a short one can't match a different word by losing letters. */
+const LIGATURE_MIN_CHARS = 12;
+export const HAS_LIGATURE = /ff|fi|fl|ft|th/i;
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A pattern for a normalized quote in which each ligature run may have lost its tail ("th", "t", or
+ * nothing): every run is a capture group, so a match says which letters the book's text is missing.
+ * Null when the quote has no ligature runs (or is too short to try).
+ */
+function ligaturePattern(want: string): { pattern: RegExp; sites: string[] } | null {
+  if (want.length < LIGATURE_MIN_CHARS) return null;
+  let source = "";
+  const sites: string[] = [];
+  for (let i = 0; i < want.length;) {
+    const run = LIGATURES.find((l) => want.slice(i, i + l.length).toLowerCase() === l);
+    if (run) {
+      const seq = want.slice(i, i + run.length);
+      const prefixes = Array.from({ length: seq.length + 1 }, (_, n) => escapeRegExp(seq.slice(0, seq.length - n)));
+      source += `(${prefixes.join("|")})`;
+      sites.push(seq);
+      i += run.length;
+    } else {
+      const ch = String.fromCodePoint(want.codePointAt(i)!);
+      source += escapeRegExp(ch);
+      i += ch.length;
+    }
+  }
+  return sites.length ? { pattern: new RegExp(source, "diu"), sites } : null;
+}
+
+export interface LocateOptions {
+  /** Also match where the book's text lost letters to ligature glyphs, giving the restored reading. */
+  ligatures?: boolean;
+}
 
 /** Finds `needle` across consecutive pages; offsets are into each page's stored text. */
-export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
+export function locate(pages: PageText[], needle: string, options: LocateOptions = {}): QuoteAnchor | null {
   const want = normalizeQuote(needle);
   if (!want) return null;
   let hay = "";
@@ -100,21 +151,56 @@ export function locate(pages: PageText[], needle: string): QuoteAnchor | null {
     map.forEach((offset, i) => where.push({ page: n, offset, end: ends[i] }));
   });
   let at = hay.indexOf(want);
+  let length = want.length;
   if (at < 0) at = lowerSameLength(hay).indexOf(lowerSameLength(want));
+  // Letters the book's text lost to ligatures, as (page, offset) places to put them back.
+  const inserts: { page: number; offset: number; letters: string }[] = [];
+  if (at < 0 && options.ligatures) {
+    const lig = ligaturePattern(want);
+    const m = lig?.pattern.exec(hay);
+    if (!lig || !m?.indices) return null;
+    at = m.index;
+    length = m[0].length;
+    lig.sites.forEach((seq, k) => {
+      const [from, to] = m.indices![k + 1]!;
+      const missing = seq.slice(to - from);
+      if (!missing) return;
+      // After the last character kept before the gap, or where the match starts when nothing comes before it.
+      const place = to > at ? { page: where[to - 1].page, offset: where[to - 1].end } : { page: where[to].page, offset: where[to].offset };
+      inserts.push({ ...place, letters: missing });
+    });
+    if (!inserts.length) return null;
+  }
   if (at < 0) return null;
   const first = where[at];
-  const last = where[at + want.length - 1];
+  const last = where[at + length - 1];
   const start = { page: first.page, offset: first.offset };
   const end = { page: last.page, offset: last.end };
   const startText = pages[start.page].text;
   const endText = pages[end.page].text;
-  return {
+  const range = pages.slice(start.page, end.page + 1);
+  const anchor: QuoteAnchor = {
     start_page: pages[start.page].page_index, start_offset: start.offset,
     end_page: pages[end.page].page_index, end_offset: end.offset,
-    text: joinedPageText(pages.slice(start.page, end.page + 1), start.offset, end.offset).trim(),
+    text: joinedPageText(range, start.offset, end.offset).trim(),
     prefix: startText.slice(Math.max(0, start.offset - CONTEXT), start.offset),
     suffix: endText.slice(end.offset, end.offset + CONTEXT),
   };
+  if (!inserts.length) return anchor;
+  // The same assembly as joinedPageText, with the missing letters spliced in.
+  const reading = range.map((p, i) => {
+    const page = start.page + i;
+    const from = i === 0 ? start.offset : 0;
+    const to = i === range.length - 1 ? end.offset : p.text.length;
+    let text = "";
+    let cursor = from;
+    for (const ins of inserts.filter((x) => x.page === page).sort((a, b) => a.offset - b.offset)) {
+      text += p.text.slice(cursor, ins.offset) + ins.letters;
+      cursor = ins.offset;
+    }
+    return (i ? p.separator_before ?? "\n" : "") + text + p.text.slice(cursor, to);
+  }).join("").trim();
+  return { ...anchor, reading, restored: inserts.reduce((n, x) => n + x.letters.length, 0) };
 }
 
 export function pagesOf(db: DB, bookId: string, from: number, to: number): PageText[] {
@@ -127,14 +213,14 @@ export function pagesOf(db: DB, bookId: string, from: number, to: number): PageT
  * side (a quote crossing a page break), then two pages either side, then pages the full-text index
  * suggests anywhere in the book.
  */
-export function find(db: DB, book: BookRow, page: number | undefined, text: string): QuoteAnchor | null {
+export function find(db: DB, book: BookRow, page: number | undefined, text: string, options: LocateOptions = {}): QuoteAnchor | null {
   const tried = new Set<string>();
   const attempt = (from: number, to: number) => {
     const key = `${from}-${to}`;
     if (tried.has(key)) return null;
     tried.add(key);
     const pages = pagesOf(db, book.id, from, to);
-    return pages.length ? locate(pages, text) : null;
+    return pages.length ? locate(pages, text, options) : null;
   };
   if (page !== undefined) {
     for (const [from, to] of [[page, page], [page, page + 1], [page - 1, page], [page - 2, page + 2]]) {
@@ -142,8 +228,11 @@ export function find(db: DB, book: BookRow, page: number | undefined, text: stri
       if (hit) return hit;
     }
   }
-  const words = [...new Set(normalizeQuote(text).split(/[^\p{L}\p{N}']+/u).filter((w) => w.length > 3))]
-    .sort((a, b) => b.length - a.length).slice(0, 4);
+  let words = [...new Set(normalizeQuote(text).split(/[^\p{L}\p{N}']+/u).filter((w) => w.length > 3))];
+  // In a book whose text lost letters to ligatures, "craftsmanship" is indexed as "crafsmanship", and the
+  // words are ANDed, so only words without ligature runs are looked up, when the quote has any.
+  if (options.ligatures && words.some((w) => !HAS_LIGATURE.test(w))) words = words.filter((w) => !HAS_LIGATURE.test(w));
+  words = words.sort((a, b) => b.length - a.length).slice(0, 4);
   if (!words.length) return null;
   const candidates = db.prepare(`
     SELECT DISTINCT x.page_index FROM passages_fts JOIN passages x ON x.id = passages_fts.rowid

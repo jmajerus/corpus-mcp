@@ -20,7 +20,7 @@ export interface YearCandidate {
 }
 
 /** Bump when findPrintedYears or printedYear changes, so the indexer recomputes stored years (no re-extraction). */
-export const YEAR_SCAN_VERSION = 2;
+export const YEAR_SCAN_VERSION = 3;
 
 /**
  * Words that say what the year after them is. Each year takes the marker that ends closest before it;
@@ -32,7 +32,8 @@ const MARKERS: [YearKind, RegExp][] = [
   ["first_published", /\bfirst (?:published|edition|printed|appeared|issued)\b|\boriginally published\b/gi],
   ["edition", /\b(?:this|second|third|fourth|fifth|sixth|revised|new|updated|expanded|paperback|\d+(?:st|nd|rd|th)) edition\b(?: (?:first )?published)?|\bthis (?:paperback )?(?:edition|translation) (?:first )?published\b|\btranslation (?:©|copyright)/gi],
   ["copyright", /\bcopyright\b|©|\(c\)(?=\s*\d)|\bcopr\./gi],
-  ["published", /\bpublished\b/gi],
+  // "published", and a ResearchGate cover sheet's "Book · December 2014" (its record of the publication date).
+  ["published", /\bpublished\b|\b(?:Book|Chapter|Article|Thesis|Conference Paper|Preprint|Technical Report)\s*·\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?(?=\d{4}\b)/gi],
 ];
 
 /** A year on its own: not part of an ISBN, a DOI, a phone number, or a longer number. */

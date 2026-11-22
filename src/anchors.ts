@@ -100,7 +100,7 @@ const NUMBERING = /^\s*(?:(?:chapter|part|section|book)\s+)?(?:\d+|[ivxlcdm]+)?\
  * "Particle". Its paragraph's start, and where the title ends (the next search starts there, so two headings
  * with one title find two places); null when it isn't found.
  */
-function titleOffset(text: string, title: string, from: number): { start: number; end: number } | null {
+export function titleOffset(text: string, title: string, from: number): { start: number; end: number } | null {
   const variants = [title, title.replace(/^.*?:\s+/, ""), title.replace(/^(?:(?:chapter|part|section|book)\s+)?(?:\d+|[ivxlcdm]+)\b[.:)]?\s+/i, "")];
   for (const variant of [...new Set(variants)]) {
     const words = variant.match(/[\p{L}\p{N}]+/gu);
@@ -202,7 +202,7 @@ export function verifyPassage(c: Corpus, o: AnchorOptions, body: unknown): ApiAn
   const named: HoldingsBook = holdingsBook(c, book, o.zoteroLibrary);
   if (book.status !== "indexed" || !book.uuid) return { status: 404, body: { error: "no-text", book: named } };
 
-  const found = find(c.db, book, page, wanted);
+  const found = find(c.db, book, page, wanted, { ligatures: true });
   if (!found) {
     // A book with too little text to judge by can't say the passage isn't there.
     if (!hasText(book)) return { status: 404, body: { error: "no-text", book: named } };
@@ -214,10 +214,19 @@ export function verifyPassage(c: Corpus, o: AnchorOptions, body: unknown): ApiAn
     return { status: 200, body: { match: false, closest, book: named } };
   }
   const anchor = anchorOf(c, book, found);
+  // Where the book's PDF text lost letters to ligatures, the quote's letters fill them back in: text is that
+  // restored reading, and anchor.text stays the stored wording, which storing the anchor checks.
+  const text = found.reading ?? anchor.text;
+  const restored = found.reading ? {
+    restored: {
+      kind: "dropped-ligatures", letters: found.restored, stored_text: anchor.text,
+      note: "The book's PDF text drops letters set as ligatures (\"Te\" for \"The\", \"afer\" for \"after\"). text is the book's wording with them put back from the quote; stored_text is the extracted text as it is.",
+    },
+  } : {};
   return {
     status: 200,
     body: {
-      match: true, exact: wanted === anchor.text, text: anchor.text, locator: locator(anchor.page_label, anchor.end_page_label),
+      match: true, exact: wanted === text, text, ...restored, locator: locator(anchor.page_label, anchor.end_page_label),
       file_page: anchor.start_page + 1, end_file_page: anchor.end_page + 1, page_label: anchor.page_label, end_page_label: anchor.end_page_label,
       section: anchor.section, anchor, book: named,
     },
@@ -233,7 +242,7 @@ function logId(data: DataStore): string {
   return data.prepare("SELECT value FROM meta WHERE key = 'anchor_log'").pluck().get() as string;
 }
 
-function recordChange(data: DataStore, quoteId: number, kind: ChangeKind, status: string | null, anchor: Anchor | null, at: string): void {
+export function recordChange(data: DataStore, quoteId: number, kind: ChangeKind, status: string | null, anchor: Anchor | null, at: string): void {
   logId(data);
   data.prepare("INSERT INTO anchor_changes (quote_id, kind, status, anchor, at) VALUES (?, ?, ?, ?, ?)")
     .run(quoteId, kind, status, anchor ? JSON.stringify(anchor) : null, at);

@@ -52,17 +52,19 @@ import { coverFile, coversDir } from "./public/covers.js";
 import { etagMatches, holdingsBooksResponse } from "./holdings.js";
 import { usePdfWorkers } from "./pdf-runner.js";
 import { anchorChanges, cslAnswer, deleteAnchor, storeAnchor, verifyPassage } from "./anchors.js";
+import { bookOutline, pinPageLabels } from "./printed-pages.js";
+import { timed, watchStalls } from "./stalls.js";
 import { type PublicStore, snapshotReader } from "./public/store.js";
 import { ZoteroSync, commitPin, linkZotero, zoteroCiteInfo, zoteroReport } from "./zotero.js";
 import {
-  type BookRow, type Corpus, ToolError, citePassage, corpusStatus, getBookOutline, listBooks, listShelves, listTags, pinCitekey, readBook, renderPageAsync,
+  type BookRow, type Corpus, ToolError, citePassage, corpusStatus, listBooks, listShelves, listTags, pinCitekey, readBook, renderPageAsync,
   getBook, searchCorpus, tagCleanupPlan, unpinCitekey,
 } from "./tools.js";
 
 const VERSION = "0.2.0";
 
 const INSTRUCTIONS = `Search, read, and cite books in the Calibre libraries (books that are not Zotero attachments; use the Zotero server for those).
-Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). A page has two names: file_page is its 1-based position in the file, and page_label is the number printed on a PDF page, the one to cite. Never pass a printed number as file_page; cite_passage takes page_label too. For EPUB and MOBI, file_page is a stable reading location with no printed number; cite those by chapter (the section path). page, the old name for file_page, still works for one release.
+Book ids look like "main:42"; any tool that takes a book id also takes the book's citekey (e.g. "nye2011future"). A page has two names: file_page is its 1-based position in the file, and page_label is the number printed on a PDF page, the one to cite. Never pass a printed number as file_page; cite_passage takes page_label too. A PDF with no page-label metadata has its file positions as page_label, which can differ from the printed numbers: get_book_outline's page_labels says where page_label comes from and suggests the pin that fixes it (pin_page_labels). For EPUB and MOBI, file_page is a stable reading location with no printed number; cite those by chapter (the section path). page, the old name for file_page, still works for one release.
 Typical flow: search_corpus → read_book around a hit → cite_passage for a CSL JSON item and locator. cite_passage also returns filing data for a reference manager (a BibTeX entry, a valid ISBN, or printed ISBN candidates); once the book is filed there, record the citekey it was given with pin_citekey, which then checks Zotero and says whether the book is matched there.
 Quotes are kept in quote-mcp: save one with its add_quote (work = a book id or citekey from here), which checks the words against the book here, and cite it with its cite_quote. This server has no quote tools.`;
 
@@ -111,6 +113,10 @@ function withZotero<T extends { warnings: string[] }>(c: Corpus, bookId: string,
 
 export function createServer(c: Corpus, options: ServerOptions = {}): McpServer {
   const server = new McpServer({ name: "corpus-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
+  // Every tool call is timed (src/stalls.ts), so a slow one shows in the journal with its arguments.
+  const register = server.registerTool.bind(server) as (name: string, config: unknown, handler: (...a: unknown[]) => unknown) => unknown;
+  (server as unknown as { registerTool: typeof register }).registerTool = (name, config, handler) =>
+    register(name, config, (...a: unknown[]) => timed(name, a[0], () => handler(...a)));
 
   server.registerTool("search_corpus", {
     title: "Search book text",
@@ -223,10 +229,10 @@ export function createServer(c: Corpus, options: ServerOptions = {}): McpServer 
 
   server.registerTool("get_book_outline", {
     title: "Get book outline",
-    description: "Metadata and table of contents with where each section starts: file_page (the position in the file, for read_book) and, for PDFs, page_label (the printed number). page repeats file_page under its old name, for one release. Read this before reading a long book.",
+    description: "Metadata and table of contents with where each section starts: file_page (the position in the file, for read_book) and, for PDFs, page_label (the printed number). page repeats file_page under its old name, for one release. For a PDF it also says how far its pages can be trusted: page_labels (where page_label comes from: the PDF's labels, its file positions when it has none, or a pinned numbering; with the printed numbering inferred from the book's contents and folios, and the pin that would apply it) and text_quality (letters the text drops to ligatures, characters with no text). A PDF with no outline gets printed_contents instead, read from the contents it prints, with the file_page each heading starts on. Read this before reading or quoting a long book.",
     inputSchema: { book_id: bookId },
     annotations: { title: "Get book outline", ...readOnly },
-  }, ({ book_id }) => run(() => json(getBookOutline(c, book_id))));
+  }, ({ book_id }) => run(() => json(bookOutline(c, book_id))));
 
   server.registerTool("read_book", {
     title: "Read book text",
@@ -239,6 +245,7 @@ export function createServer(c: Corpus, options: ServerOptions = {}): McpServer 
       end_page: deprecatedPage("end_file_page"),
       section: z.string().optional().describe("Outline section title to read instead of a page range"),
       max_chars: z.number().int().min(500).max(40000).optional().describe("Default 12000"),
+      skim: z.boolean().optional().describe("Only each page's headings and the first sentence of each paragraph: a long range for a fraction of the characters, to plan what to read in full"),
     },
     annotations: { title: "Read book text", ...readOnly },
   }, (args) => run(() => ({ content: [{ type: "text", text: readBook(c, args) }] })));
@@ -288,6 +295,22 @@ export function createServer(c: Corpus, options: ServerOptions = {}): McpServer 
     },
     annotations: { title: "Pin a book's citekey", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, (args, extra) => runAsync(async () => json(await commitPin(c, args, options.zotero, accessEmail(extra)))));
+
+  server.registerTool("pin_page_labels", {
+    title: "Pin a PDF's page numbering",
+    description: "Record a PDF's printed page numbering when its page_label is wrong: a PDF with no page-label metadata gets its file positions as labels (get_book_outline's page_labels says so, and suggests the pin from the book's contents and folios). Give the file_page and the number printed on it (check with render_page); the numbering counts on from there, in arabic or roman as given. Pages before the first range get no label; pass ranges for roman front matter and an arabic body. Stored by Calibre UUID and the file it was checked on; the next refresh (within about ten minutes) applies it to every page_label and to the quotes saved from the book, which quote-mcp then follows. clear: true goes back to the PDF's own labels.",
+    inputSchema: {
+      book_id: bookId,
+      file_page: z.number().int().min(1).optional().describe("A file page whose printed number you have checked (with file_page from read_book or render_page)"),
+      page_label: z.string().min(1).optional().describe("The number printed on that page: \"15\", or roman \"xii\""),
+      ranges: z.array(z.object({
+        file_page: z.number().int().min(1).describe("Where this numbering starts"),
+        page_label: z.string().min(1).describe("The number printed there"),
+      })).optional().describe("Several numberings, each running to the next (roman front matter, then arabic), instead of file_page and page_label"),
+      clear: z.boolean().optional().describe("Remove the pinned numbering"),
+    },
+    annotations: { title: "Pin a PDF's page numbering", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, (args, extra) => run(() => json(pinPageLabels(c, args, accessEmail(extra)))));
 
   server.registerTool("status", {
     title: "Corpus status",
@@ -861,6 +884,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   };
   if (zotero && options.zoteroTimer !== false) zotero.start();
   const stopHealth = options.healthTimer !== false && !options.jobCommands ? startHealthChecks(corpus, web.runner) : () => {};
+  const stopStallWatch = watchStalls();
   if (corpus.terminology && options.terminologyTimer !== false) corpus.terminology.start();
   const publicOn = fullConfig.public && fullConfig.public.level !== "none";
   const readPublic = publicOn ? snapshotReader(fullConfig.public!.file) : () => null;
@@ -956,6 +980,7 @@ export async function serveHttp(config: Config, options: WebOptions = {}): Promi
   httpServer.on("close", () => {
     stopPublishing();
     stopHealth();
+    stopStallWatch();
     zotero?.stop();
     corpus.terminology?.stop();
     publicServer?.close();

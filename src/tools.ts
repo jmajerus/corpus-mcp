@@ -404,6 +404,8 @@ export function listTags(c: Corpus, args: ListTagsArgs = {}) {
 
 export interface ReadArgs {
   book_id: string; file_page?: number; end_file_page?: number; section?: string; max_chars?: number;
+  /** Each page's headings and the first sentence of each paragraph, to survey a long range cheaply. */
+  skim?: boolean;
   /** Deprecated names for file_page and end_file_page, for one release. */
   start_page?: number; end_page?: number;
 }
@@ -447,7 +449,7 @@ export function readBook(c: Corpus, args: ReadArgs) {
       ? `file_page ${page.page_index + 1} (reading location)`
       : `file_page ${page.page_index + 1}${page.label ? ` · page_label ${page.label}` : ""}`;
     const header = `--- ${where}${page.section_path ? ` · ${page.section_path}` : ""} ---`;
-    const block = `${header}\n${page.text}`;
+    const block = `${header}\n${args.skim ? skimPage(page.text) : page.text}`;
     if (used + block.length > maxChars && parts.length) {
       truncated = true;
       break;
@@ -459,10 +461,26 @@ export function readBook(c: Corpus, args: ReadArgs) {
   const continuation = truncated || lastRead < end
     ? `\n\n[Read file pages ${start}–${lastRead} of ${start}–${end}. Continue with file_page ${lastRead + 1}.]`
     : "";
-  const note = book.reflowable
+  const note = (book.reflowable
     ? `\n[${book.format?.toUpperCase()}: file_page numbers here are reading locations, not page numbers; cite this book by chapter.]`
-    : "\n[file_page is the position in the PDF; page_label is the printed number to cite.]";
+    : "\n[file_page is the position in the PDF; page_label is the printed number to cite.]")
+    + (args.skim ? "\n[Skim: short lines in full (likely headings), then the first sentence of each paragraph. Read the pages in full before quoting.]" : "");
   return `${book.title} (${book.id})${note}\n\n${parts.join("\n\n")}${continuation}`;
+}
+
+/** Most of a sentence a skim keeps. */
+const SKIM_SENTENCE = 220;
+
+/**
+ * A page for skimming: each paragraph short enough to be a heading (or a folio) in full, and of the others
+ * the first sentence, cut at SKIM_SENTENCE characters.
+ */
+export function skimPage(text: string): string {
+  return text.split(/\n{2,}/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean).map((p) => {
+    if (p.length <= 90 && !/[.!?]["'”’)]?$/.test(p)) return p;
+    const sentence = p.match(/^.{15,}?[.!?]["'”’)]?(?=\s+["'“‘(]?\p{Lu}|$)/u)?.[0] ?? p;
+    return `· ${sentence.length > SKIM_SENTENCE ? `${sentence.slice(0, SKIM_SENTENCE).replace(/\s+\S*$/, "")}…` : sentence}`;
+  }).join("\n");
 }
 
 export interface RenderArgs {
@@ -696,11 +714,17 @@ export function citePassage(c: Corpus, args: CiteArgs) {
   const isbn = book.isbn ? validIsbn(book.isbn) : null;
   // Candidates only: copyright pages often list several editions, and the right one is the edition held.
   const isbnCandidates = isbn ? [] : printedIsbns(book);
+  const printedOther = yearSource === "calibre" && book.printed_year && book.printed_year !== year
+    ? printedYears(book).find((y) => y.year === book.printed_year && y.kind !== "reprint") : undefined;
   const printed = yearSource === "printed" ? printedYears(book).find((y) => y.year === year && y.kind !== "reprint") : undefined;
   const result = {
     csl, locator, position, ...keys, bibtex, isbn, isbn_candidates: isbnCandidates, year_source: yearSource,
+    ...(printedOther ? { printed_year: { year: printedOther.year, file_page: printedOther.page, page_label: printedOther.page_label, context: printedOther.context } } : {}),
     ...(printed ? { year_evidence: { file_page: printed.page, page_label: printed.page_label, context: printed.context, page: printed.page } } : {}), citation,
   };
+  if (printedOther) {
+    warnings.push(`Calibre gives ${year}, but the book prints ${printedOther.year} (${printedOther.position === "back" ? "back " : ""}file_page ${printedOther.page}${printedOther.page_label ? `, page_label ${printedOther.page_label}` : ""}: "${printedOther.context}"). A later year in Calibre can be a reprint or a later edition's; check which edition this file is, and correct Calibre (or the Zotero item) if it is wrong.`);
+  }
   if (printed) {
     warnings.push(`Calibre has no publication year; ${year} is from the book's own text (${printed.position === "back" ? "back " : ""}file_page ${printed.page}${printed.page_label ? `, page_label ${printed.page_label}` : ""}: "${printed.context}"). Check it, and add it in Calibre.`);
   }
