@@ -22,13 +22,21 @@ export function relocatedAnchorPlanner(before: PageText[], after: PageText[]): (
       }
       searchable = { text, starts };
     }
-    const want = normalizeQuote(old.text), at = searchable.text.indexOf(want);
+    // The stored wording; then, for a quote whose text had lost ligature letters, its printed reading, which
+    // a clean extraction has. Found by the reading, the new text is the reading, and the reading is dropped.
+    let needle = old.text, want = normalizeQuote(needle), at = want ? searchable.text.indexOf(want) : -1;
+    if (at < 0 && old.reading) {
+      needle = old.reading;
+      want = normalizeQuote(needle);
+      at = want ? searchable.text.indexOf(want) : -1;
+    }
     if (!want || at < 0) return review("wording-not-found");
     if (searchable.text.indexOf(want, at + 1) >= 0) return review("ambiguous-wording");
     const first = searchable.starts.findLastIndex((start) => start <= at);
     const last = searchable.starts.findLastIndex((start) => start <= at + want.length - 1);
-    const anchor = locate(after.slice(first, last + 1), old.text);
-    if (!anchor || normalizeQuote(anchor.text) !== want) return review("mapped-wording-changed");
+    const found = locate(after.slice(first, last + 1), needle);
+    if (!found || normalizeQuote(found.text) !== want) return review("mapped-wording-changed");
+    const anchor: QuoteAnchor = needle === old.text && old.reading ? { ...found, reading: old.reading } : found;
     return { status: (Object.keys(anchor) as (keyof QuoteAnchor)[]).every((key) => anchor[key] === old[key]) ? "unchanged" : "remapped", anchor };
   };
 }
@@ -67,6 +75,7 @@ export function planAnchorMigration(before: PageText[], after: PageText[], old: 
   const anchor: QuoteAnchor = {
     start_page: old.start_page, end_page: old.end_page, start_offset: start, end_offset: end, text,
     prefix: next[0].text.slice(Math.max(0, start - CONTEXT), start), suffix: next.at(-1)!.text.slice(end, end + CONTEXT),
+    ...(old.reading ? { reading: old.reading } : {}),
   };
   return { status: (Object.keys(anchor) as (keyof QuoteAnchor)[]).every((key) => anchor[key] === old[key]) ? "unchanged" : "remapped", anchor };
 }

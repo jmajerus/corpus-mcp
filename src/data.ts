@@ -6,7 +6,7 @@ import path from "node:path";
  * data.db: primary data that cannot be rebuilt from the books (pinned citekeys now, quotes next).
  * Unlike the index it is never deleted or regenerated, and `corpus-mcp backup` copies it nightly.
  */
-export const DATA_SCHEMA_VERSION = 16;
+export const DATA_SCHEMA_VERSION = 17;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS anchors (
   prefix TEXT NOT NULL,
   suffix TEXT NOT NULL,
   text TEXT NOT NULL,
+  reading TEXT,                      -- the printed reading, when text lost letters to ligatures (verify's restored)
   status TEXT NOT NULL CHECK (status IN ('verified', 'orphaned')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -272,6 +273,8 @@ export function openDataStore(dbPath: string): DataStore {
   const jobColumns = new Set((db.prepare("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
   if (!jobColumns.has("items")) db.exec("ALTER TABLE jobs ADD COLUMN items TEXT");
   const quoteColumns = new Set((db.prepare("PRAGMA table_info(quotes)").all() as { name: string }[]).map((c) => c.name));
+  const anchorColumns = new Set((db.prepare("PRAGMA table_info(anchors)").all() as { name: string }[]).map((c) => c.name));
+  if (!anchorColumns.has("reading")) db.exec("ALTER TABLE anchors ADD COLUMN reading TEXT");
   const zoteroColumns = new Set((db.prepare("PRAGMA table_info(zotero_items)").all() as { name: string }[]).map((c) => c.name));
   if (!zoteroColumns.has("replaces")) {
     // Mirrors from before merges were followed: add the column and fetch everything again to fill it.

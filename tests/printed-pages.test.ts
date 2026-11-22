@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type Anchor, storeAnchor, verifyPassage } from "../src/anchors.js";
+import { type Anchor, reanchorAnchors, storeAnchor, verifyPassage } from "../src/anchors.js";
+import { relocatedAnchorPlanner } from "../src/anchor-migration.js";
 import type { Config } from "../src/config.js";
 import { openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
@@ -49,6 +50,20 @@ describe("ligature-tolerant matching", () => {
   it("matches a run lost whole (\"dierent\" for \"different\")", () => {
     expect(locate([page(0, "A dierent kind of eect entirely.")], "A different kind of effect entirely.", { ligatures: true })?.reading)
       .toBe("A different kind of effect entirely.");
+  });
+});
+
+describe("re-extraction with a reading", () => {
+  const damaged = [page(0, "Intro."), page(1, "Tis non-tangible space came afer all.")];
+  const clean = [page(0, "Intro."), page(1, "This non-tangible space came after all.")];
+  const old = { ...locate(damaged, "This non-tangible space came after all.", { ligatures: true })! };
+
+  it("finds the quote in a clean extraction by its reading, and keeps the reading while the text is still damaged", () => {
+    const toClean = relocatedAnchorPlanner(damaged, clean)(old);
+    expect(toClean).toMatchObject({ status: "remapped", anchor: { text: "This non-tangible space came after all." } });
+    expect(toClean.status !== "review" && toClean.anchor.reading).toBeFalsy();
+    const same = relocatedAnchorPlanner(damaged, damaged)(old);
+    expect(same).toMatchObject({ status: "unchanged", anchor: { reading: "This non-tangible space came after all." } });
   });
 });
 
@@ -157,8 +172,12 @@ describe("pinning page labels", () => {
     const answer = verifyPassage(c, o, { book: "main:14", text: "The subject of craftsmanship is often overlooked." });
     const body = answer.body as { match: boolean; exact: boolean; text: string; restored: { letters: number; stored_text: string }; anchor: Anchor };
     expect(body).toMatchObject({ match: true, exact: true, text: "The subject of craftsmanship is often overlooked.", restored: { kind: "dropped-ligatures", letters: 3 } });
-    expect(body.anchor.text).toBe("Te subject of crafsmanship is ofen overlooked.");
+    expect(body.anchor).toMatchObject({ text: "Te subject of crafsmanship is ofen overlooked.", reading: "The subject of craftsmanship is often overlooked." });
     expect(storeAnchor(c, o, { quote_id: 875, anchor: body.anchor }).status).toBe(201);
+    expect(c.data.prepare("SELECT reading FROM anchors WHERE quote_id = 875").pluck().get()).toBe("The subject of craftsmanship is often overlooked.");
+    // Posting it again is a no-op; a reading that isn't the text restored is refused.
+    expect(storeAnchor(c, o, { quote_id: 875, anchor: body.anchor }).status).toBe(200);
+    expect(storeAnchor(c, o, { quote_id: 876, anchor: { ...body.anchor, reading: "The subject of witchcraft is often overlooked." } }).status).toBe(400);
   });
 
   it("finds a damaged passage with no page hint when every looked-up word has ligature runs", () => {
@@ -208,6 +227,19 @@ describe("pinning page labels", () => {
     expect(c.db.prepare("SELECT label FROM pages WHERE book_id = 'main:14' AND page_index = 3").pluck().get()).toBe("4");
     expect(c.data.prepare("SELECT COUNT(*) FROM page_label_pins").pluck().get()).toBe(0);
     db.close();
+  });
+
+  it("finds a restored quote again in a clean file by its reading, and drops the reading", () => {
+    // A new file for the book, whose text has the ligatures intact.
+    const clean = "3\n\nIntroduction\n\nThe subject of craftsmanship is often overlooked.";
+    c.db.prepare("UPDATE pages SET text = ? WHERE book_id = 'main:14' AND page_index = 3").run(clean);
+    c.data.prepare("UPDATE anchors SET sha256 = 'the-old-file' WHERE quote_id = 875").run();
+    expect(reanchorAnchors(c.db, c.data)).toMatchObject({ reanchored: 1, orphaned: 0 });
+    const row = c.data.prepare("SELECT text, reading, status FROM anchors WHERE quote_id = 875").get();
+    expect(row).toEqual({ text: "The subject of craftsmanship is often overlooked.", reading: null, status: "verified" });
+    const change = JSON.parse(c.data.prepare("SELECT anchor FROM anchor_changes ORDER BY seq DESC LIMIT 1").pluck().get() as string);
+    expect(change.text).toBe("The subject of craftsmanship is often overlooked.");
+    expect(change).not.toHaveProperty("reading");
   });
 
   it("refuses what it can't pin", () => {

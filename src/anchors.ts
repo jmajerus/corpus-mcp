@@ -21,13 +21,19 @@ export interface Anchor {
   start_page: number; start_offset: number; end_page: number; end_offset: number;
   page_label: string | null; end_page_label: string | null; section: string | null;
   prefix: string; suffix: string; text: string;
+  /**
+   * The printed reading, when the stored text lost letters to ligatures ("This" where text has "Tis"): what
+   * verify returned as text. Posted back with the anchor, it lets the anchor be found again in a file or
+   * extraction whose text is clean; there the new anchor's text is the reading, and reading goes away.
+   */
+  reading?: string;
 }
 
 interface AnchorRow {
   quote_id: number; calibre_uuid: string; book_id: string; sha256: string | null;
   start_page: number; start_offset: number; end_page: number; end_offset: number;
   page_label: string | null; end_page_label: string | null; section_path: string | null;
-  prefix: string; suffix: string; text: string; status: "verified" | "orphaned"; created_at: string; updated_at: string;
+  prefix: string; suffix: string; text: string; reading: string | null; status: "verified" | "orphaned"; created_at: string; updated_at: string;
 }
 
 type ChangeKind = "stored" | "replaced" | "reanchored" | "orphaned" | "found" | "deleted";
@@ -158,13 +164,14 @@ function anchorOf(c: Corpus, book: BookRow, a: QuoteAnchor): Anchor {
     start_page: a.start_page, start_offset: a.start_offset, end_page: a.end_page, end_offset: a.end_offset,
     page_label: s?.label ?? null, end_page_label: e?.label ?? null, section: s ? sectionAt(c.db, book.id, a.start_page, a.start_offset) : null,
     prefix: a.prefix, suffix: a.suffix, text: a.text,
+    ...(a.reading && a.reading !== a.text ? { reading: a.reading } : {}),
   };
 }
 
 const fromRow = (r: AnchorRow): Anchor => ({
   calibre_uuid: r.calibre_uuid, sha256: r.sha256, start_page: r.start_page, start_offset: r.start_offset, end_page: r.end_page,
   end_offset: r.end_offset, page_label: r.page_label, end_page_label: r.end_page_label, section: r.section_path,
-  prefix: r.prefix, suffix: r.suffix, text: r.text,
+  prefix: r.prefix, suffix: r.suffix, text: r.text, ...(r.reading ? { reading: r.reading } : {}),
 });
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -251,17 +258,18 @@ export function recordChange(data: DataStore, quoteId: number, kind: ChangeKind,
 function writeAnchor(data: DataStore, quoteId: number, book: BookRow, a: Anchor, status: "verified" | "orphaned", at: string): void {
   data.prepare(`
     INSERT INTO anchors (quote_id, calibre_uuid, book_id, sha256, start_page, start_offset, end_page, end_offset, page_label, end_page_label,
-      section_path, prefix, suffix, text, status, created_at, updated_at)
+      section_path, prefix, suffix, text, reading, status, created_at, updated_at)
     VALUES (@quote_id, @calibre_uuid, @book_id, @sha256, @start_page, @start_offset, @end_page, @end_offset, @page_label, @end_page_label,
-      @section, @prefix, @suffix, @text, @status, @at, @at)
+      @section, @prefix, @suffix, @text, @reading, @status, @at, @at)
     ON CONFLICT (quote_id) DO UPDATE SET calibre_uuid = excluded.calibre_uuid, book_id = excluded.book_id, sha256 = excluded.sha256,
       start_page = excluded.start_page, start_offset = excluded.start_offset, end_page = excluded.end_page, end_offset = excluded.end_offset,
       page_label = excluded.page_label, end_page_label = excluded.end_page_label, section_path = excluded.section_path,
-      prefix = excluded.prefix, suffix = excluded.suffix, text = excluded.text, status = excluded.status, updated_at = excluded.updated_at`)
-    .run({ quote_id: quoteId, book_id: book.id, ...a, status, at });
+      prefix = excluded.prefix, suffix = excluded.suffix, text = excluded.text, reading = excluded.reading, status = excluded.status,
+      updated_at = excluded.updated_at`)
+    .run({ quote_id: quoteId, book_id: book.id, ...a, reading: a.reading ?? null, status, at });
 }
 
-const sameAnchor = (a: Anchor, b: Anchor) => (Object.keys(a) as (keyof Anchor)[]).every((k) => a[k] === b[k]);
+const sameAnchor = (a: Anchor, b: Anchor) => [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) => a[k as keyof Anchor] === b[k as keyof Anchor]);
 
 /**
  * POST /api/anchors: stores the anchor a verify returned, for a quote-mcp quote. It is checked against the
@@ -290,9 +298,18 @@ export function storeAnchor(c: Corpus, o: AnchorOptions, body: unknown): ApiAnsw
   if (pages.length !== to - from + 1 || start > pages[0].text.length || end > pages[pages.length - 1].text.length) return stale;
   const text = joinedPageText(pages, start, end).trim();
   if (text !== a.text) return stale;
+  // A reading must be the text with lost ligature letters put back, as verify gives it, and nothing else.
+  let reading: string | undefined;
+  if (a.reading !== undefined && a.reading !== null && a.reading !== text) {
+    if (typeof a.reading !== "string" || a.reading.length > MAX_QUOTE) return bad("The anchor's reading is malformed: post the anchor back as /api/verify returned it.");
+    const restored = locate([{ page_index: 0, label: null, section_path: null, text }], a.reading, { ligatures: true });
+    if (!restored?.reading || restored.text !== text) return bad("The anchor's reading isn't its text with ligature letters restored: post the anchor back as /api/verify returned it.");
+    reading = a.reading;
+  }
   const again: QuoteAnchor = {
     start_page: from, start_offset: start, end_page: to, end_offset: end, text,
     prefix: pages[0].text.slice(Math.max(0, start - CONTEXT), start), suffix: pages[pages.length - 1].text.slice(end, end + CONTEXT),
+    ...(reading ? { reading } : {}),
   };
 
   const anchor = anchorOf(c, book, again);
@@ -359,11 +376,15 @@ export function reanchorAnchors(db: DB, data: DataStore): { reanchored: number; 
       continue;
     }
     if (!book && r.status === "orphaned") continue;
-    // Its own pages first, so words the book repeats keep the place they had; then nearby, then anywhere.
-    const hit = book
+    // Its own pages first, so words the book repeats keep the place they had; then nearby, then anywhere. The
+    // stored wording first; then, for a quote whose text had lost ligature letters, its printed reading, which a
+    // clean file or extraction has: found that way, the new text is the reading, and the reading is dropped.
+    const search = (needle: string) => book
       ? [[r.start_page, r.end_page], [r.start_page - 10, r.end_page + 10], [0, book.page_count ?? 0]]
-        .reduce<QuoteAnchor | null>((found, [from, to]) => found ?? locate(pagesOf(db, book.id, from, to), r.text), null)
+        .reduce<QuoteAnchor | null>((found, [from, to]) => found ?? locate(pagesOf(db, book.id, from, to), needle), null)
       : null;
+    const byText = search(r.text);
+    const hit = byText ? { ...byText, ...(r.reading ? { reading: r.reading } : {}) } : r.reading ? search(r.reading) : null;
     const at = new Date().toISOString();
     data.transaction(() => {
       if (hit && book) {
@@ -411,7 +432,8 @@ export function planAnchorMoves(c: Corpus, fromUuid: string, keeper: BookRow): A
     if (r.status === "orphaned") { plan.orphaned.push(r.quote_id); continue; }
     if (!from || keeper.status !== "indexed") { plan.review.push({ quote_id: r.quote_id, reason: from ? "keeper-not-indexed" : "duplicate-not-indexed", text: r.text }); continue; }
     planner ??= relocatedAnchorPlanner(all(from), all(keeper));
-    const result = planner({ start_page: r.start_page, start_offset: r.start_offset, end_page: r.end_page, end_offset: r.end_offset, text: r.text, prefix: r.prefix, suffix: r.suffix });
+    const result = planner({ start_page: r.start_page, start_offset: r.start_offset, end_page: r.end_page, end_offset: r.end_offset, text: r.text, prefix: r.prefix, suffix: r.suffix,
+      ...(r.reading ? { reading: r.reading } : {}) });
     if (result.status === "review") plan.review.push({ quote_id: r.quote_id, reason: result.reason, text: r.text });
     else plan.moves.push({ quote_id: r.quote_id, anchor: result.anchor });
   }

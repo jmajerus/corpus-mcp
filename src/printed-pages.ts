@@ -342,7 +342,7 @@ function relabelAnchors(db: DB, data: DataStore, book: PinnedBook): number {
   const label = db.prepare<[string, number], string | null>("SELECT label FROM pages WHERE book_id = ? AND page_index = ?").pluck();
   const rows = data.prepare("SELECT * FROM anchors WHERE calibre_uuid = ? COLLATE NOCASE AND status = 'verified' AND sha256 IS ?").all(book.uuid, book.sha256) as
     { quote_id: number; calibre_uuid: string; sha256: string | null; start_page: number; start_offset: number; end_page: number; end_offset: number;
-      page_label: string | null; end_page_label: string | null; section_path: string | null; prefix: string; suffix: string; text: string }[];
+      page_label: string | null; end_page_label: string | null; section_path: string | null; prefix: string; suffix: string; text: string; reading: string | null }[];
   let n = 0;
   for (const r of rows) {
     const start = label.get(book.id, r.start_page) ?? null;
@@ -352,6 +352,7 @@ function relabelAnchors(db: DB, data: DataStore, book: PinnedBook): number {
     const anchor = {
       calibre_uuid: r.calibre_uuid, sha256: r.sha256, start_page: r.start_page, start_offset: r.start_offset, end_page: r.end_page, end_offset: r.end_offset,
       page_label: start, end_page_label: end, section: r.section_path, prefix: r.prefix, suffix: r.suffix, text: r.text,
+      ...(r.reading ? { reading: r.reading } : {}),
     };
     data.transaction(() => {
       data.prepare("UPDATE anchors SET page_label = ?, end_page_label = ?, updated_at = ? WHERE quote_id = ?").run(start, end, at, r.quote_id);
