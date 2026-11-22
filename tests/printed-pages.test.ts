@@ -7,7 +7,7 @@ import { openDataStore } from "../src/data.js";
 import { openDatabase } from "../src/db.js";
 import { scanLibraries } from "../src/indexer.js";
 import { applyPageLabelPins, bookOutline, inferNumbering, pinPageLabels, pinnedLabels, printedContents, textQuality } from "../src/printed-pages.js";
-import { locate } from "../src/quotes.js";
+import { damagedSpellings, locate } from "../src/quotes.js";
 import { type Corpus, citePassage, readBook, skimPage } from "../src/tools.js";
 import { Vocabulary } from "../src/vocabulary.js";
 import { findPrintedYears, printedYear } from "../src/years.js";
@@ -39,6 +39,11 @@ describe("ligature-tolerant matching", () => {
     expect(locate([page(0, "This non-tangible space came")], "Tis non-tangible space came", { ligatures: true })).toBeNull();
     // An exact match is still exact, with no reading.
     expect(locate(pages, "Te next page begins", { ligatures: true })).not.toHaveProperty("reading");
+  });
+
+  it("finds a quote whose every word has ligature runs, with no page given, by looking up damaged spellings", () => {
+    expect(damagedSpellings("different")).toEqual(["diferent", "dierent"]);
+    expect(damagedSpellings("plain")).toEqual([]);
   });
 
   it("matches a run lost whole (\"dierent\" for \"different\")", () => {
@@ -94,6 +99,11 @@ describe("printed numbering", () => {
 });
 
 describe("skim", () => {
+  it("ends a short first sentence, but not at an abbreviation or an initial", () => {
+    expect(skimPage("Hi. This is the rest of a long paragraph that goes on and on past any heading length.")).toBe("· Hi.");
+    expect(skimPage("Mr. Smith met J. R. Jones at noon. Then they left together for the long walk home again.")).toBe("· Mr. Smith met J. R. Jones at noon.");
+  });
+
   it("keeps headings whole and each paragraph's first sentence", () => {
     expect(skimPage("15\n\n1. Introduction\n\nIn the case of the mind, it seems. Hence your complaints.\n\nShort final line.")).toBe(
       "15\n1. Introduction\n· In the case of the mind, it seems.\n· Short final line.");
@@ -123,6 +133,7 @@ describe("pinning page labels", () => {
     body[3] = ["3", "Introduction", "Te subject of crafsmanship is ofen overlooked."];
     body[6] = ["Second Chapter", "It begins here."];
     body[9] = ["Third Chapter", "It begins here too."];
+    body[12] = ["Te dierent eects of crafsmanship are many."];
     makeLibrary(root, "main", [
       { id: 14, title: "Zero Spaces", authors: ["Gabrielle Collet"], pubdate: "2018-01-01", files: { pdf: makePdf({ pages: body }) } },
     ]);
@@ -150,13 +161,18 @@ describe("pinning page labels", () => {
     expect(storeAnchor(c, o, { quote_id: 875, anchor: body.anchor }).status).toBe(201);
   });
 
+  it("finds a damaged passage with no page hint when every looked-up word has ligature runs", () => {
+    const body = verifyPassage(c, o, { book: "main:14", text: "The different effects of craftsmanship" }).body as { match: boolean; text: string };
+    expect(body).toMatchObject({ match: true, text: "The different effects of craftsmanship" });
+  });
+
   it("reports the file-position labels, the inferred numbering, the contents, and the text quality in the outline", () => {
     const outline = bookOutline(c, "main:14") as ReturnType<typeof bookOutline> & Record<string, any>;
     expect(outline.page_labels).toMatchObject({ source: "file_position", inferred: { offset: 1, suggested_pin: { file_page: 2, page_label: "1" } } });
     expect(outline.page_labels.note).toMatch(/pin_page_labels with file_page 2 and page_label "1"/);
     expect(outline.printed_contents.map((e: { title: string; file_page: number; found: boolean }) => [e.title, e.file_page, e.found]))
       .toEqual([["Introduction", 4, true], ["Second Chapter", 7, true], ["Third Chapter", 10, true]]);
-    expect(outline.text_quality.dropped_ligatures).toEqual([]);
+    expect(outline.text_quality.dropped_ligatures).toMatchObject([{ ligature: "ft", words_intact: 0 }]);
   });
 
   it("flags a Calibre year the book contradicts", () => {

@@ -471,6 +471,19 @@ export function readBook(c: Corpus, args: ReadArgs) {
 /** Most of a sentence a skim keeps. */
 const SKIM_SENTENCE = 220;
 
+/** Words a period follows without ending a sentence. */
+const ABBREVIATION = /(?:^|[\s(])(?:mr|mrs|ms|dr|prof|st|jr|sr|vs|cf|ca|no|vol|ch|pp?|fig|eds?|trans|e\.g|i\.e|etc|\p{Lu})$/iu;
+
+/** A paragraph's first sentence: up to the first . ! or ? before a capital (or the end) that doesn't close an abbreviation or an initial. */
+export function firstSentence(paragraph: string): string {
+  for (const m of paragraph.matchAll(/[.!?]["'”’)]?(?=\s+["'“‘(]?\p{Lu}|$)/gu)) {
+    const before = paragraph.slice(0, m.index);
+    if (m[0][0] === "." && ABBREVIATION.test(before)) continue;
+    return paragraph.slice(0, m.index! + m[0].length);
+  }
+  return paragraph;
+}
+
 /**
  * A page for skimming: each paragraph short enough to be a heading (or a folio) in full, and of the others
  * the first sentence, cut at SKIM_SENTENCE characters.
@@ -478,7 +491,7 @@ const SKIM_SENTENCE = 220;
 export function skimPage(text: string): string {
   return text.split(/\n{2,}/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean).map((p) => {
     if (p.length <= 90 && !/[.!?]["'”’)]?$/.test(p)) return p;
-    const sentence = p.match(/^.{15,}?[.!?]["'”’)]?(?=\s+["'“‘(]?\p{Lu}|$)/u)?.[0] ?? p;
+    const sentence = firstSentence(p);
     return `· ${sentence.length > SKIM_SENTENCE ? `${sentence.slice(0, SKIM_SENTENCE).replace(/\s+\S*$/, "")}…` : sentence}`;
   }).join("\n");
 }

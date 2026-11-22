@@ -130,6 +130,17 @@ function ligaturePattern(want: string): { pattern: RegExp; sites: string[] } | n
   return sites.length ? { pattern: new RegExp(source, "diu"), sites } : null;
 }
 
+/**
+ * How a word may be spelled in a text that lost letters to ligatures: each run cut to its first letter
+ * ("afer", "Te"), or lost whole ("dierent"). A damaged text loses them the same way throughout, so these two
+ * cover it without trying every mix. Empty when the word has no ligature runs.
+ */
+export function damagedSpellings(word: string): string[] {
+  if (!HAS_LIGATURE.test(word)) return [];
+  const runs = new RegExp(LIGATURES.join("|"), "gi");
+  return [...new Set([word.replace(runs, (run) => run[0]), word.replace(runs, "")])].filter((v) => v && v !== word);
+}
+
 export interface LocateOptions {
   /** Also match where the book's text lost letters to ligature glyphs, giving the restored reading. */
   ligatures?: boolean;
@@ -228,15 +239,21 @@ export function find(db: DB, book: BookRow, page: number | undefined, text: stri
       if (hit) return hit;
     }
   }
-  let words = [...new Set(normalizeQuote(text).split(/[^\p{L}\p{N}']+/u).filter((w) => w.length > 3))];
-  // In a book whose text lost letters to ligatures, "craftsmanship" is indexed as "crafsmanship", and the
-  // words are ANDed, so only words without ligature runs are looked up, when the quote has any.
-  if (options.ligatures && words.some((w) => !HAS_LIGATURE.test(w))) words = words.filter((w) => !HAS_LIGATURE.test(w));
-  words = words.sort((a, b) => b.length - a.length).slice(0, 4);
+  // Words without ligature runs first, when the text may have lost letters to ligatures: they are indexed as written.
+  const words = [...new Set(normalizeQuote(text).split(/[^\p{L}\p{N}']+/u).filter((w) => w.length > 3))]
+    .sort((a, b) => (options.ligatures ? Number(HAS_LIGATURE.test(a)) - Number(HAS_LIGATURE.test(b)) : 0) || b.length - a.length).slice(0, 4);
   if (!words.length) return null;
+  // The words are ANDed. A word with ligature runs may be indexed damaged ("craftsmanship" as "crafsmanship",
+  // "different" as "dierent"), so it is looked up as any of its spellings.
+  const query = options.ligatures
+    ? words.map((w) => {
+      const spellings = [...new Set([w, ...damagedSpellings(w)])].map((v) => `"${v.replace(/"/g, '""')}"`);
+      return spellings.length > 1 ? `(${spellings.join(" OR ")})` : spellings[0];
+    }).join(" AND ")
+    : toFtsQuery(words.join(" "));
   const candidates = db.prepare(`
     SELECT DISTINCT x.page_index FROM passages_fts JOIN passages x ON x.id = passages_fts.rowid
-    WHERE passages_fts MATCH ? AND x.book_id = ? ORDER BY bm25(passages_fts) LIMIT 6`).pluck().all(toFtsQuery(words.join(" ")), book.id) as number[];
+    WHERE passages_fts MATCH ? AND x.book_id = ? ORDER BY bm25(passages_fts) LIMIT 6`).pluck().all(query, book.id) as number[];
   for (const q of candidates) {
     const hit = attempt(q - 1, q + 1);
     if (hit) return hit;
